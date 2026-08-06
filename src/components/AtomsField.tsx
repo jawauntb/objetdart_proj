@@ -73,7 +73,10 @@ import {
   covalentPair,
   elementFromSeed,
   elementOf,
+  emissionHex,
+  emissionWavelengthNm,
   excitedRing,
+  ionisationResistance,
   fuseProduct,
   fusionEnergy,
   hashSeed,
@@ -107,6 +110,15 @@ type AtomEnt = {
   precessBoost: number;
   /** Ionization dimming, 0..1, decays. */
   dim: number;
+  /**
+   * How the cloud is deformed by whatever is nearest: unit direction toward
+   * the neighbour and 0..1 for how hard. An electron cloud is not a rigid
+   * ball — it is the shape the other clouds leave it, which is the whole
+   * reason chemistry has shapes at all.
+   */
+  defX: number;
+  defY: number;
+  defK: number;
   /** Nuclear strain tremor (the iron wall), 0..1, decays. */
   shudder: number;
   /** Kinetic velocity, px/s — the fusion channel (flick throws, hard drags). */
@@ -133,6 +145,12 @@ type CovBond = {
 };
 type Blast = { x: number; y: number; born: number; maxR: number; mag: number };
 type Hint = { aId: string; bId: string; since: number; alpha: number };
+/**
+ * An electron with no atom. Knocked loose by an ionisation and free until it
+ * finds a cloud short of one — which it will, because a positive ion pulls on
+ * it and nothing else in the room does.
+ */
+type FreeE = { id: number; x: number; y: number; vx: number; vy: number; born: number; trail: number[] };
 type Mote = { x: number; y: number; vx: number; vy: number };
 type Speck = { x: number; y: number; vx: number; vy: number; born: number; life: number; r: number; color: string; streak?: boolean };
 type PendingNote = { at: number; midi: number; ms: number };
@@ -178,6 +196,9 @@ function makeAtom(seed: number, nx: number, ny: number, growth: number): AtomEnt
     charge: 0,
     precessBoost: 0,
     dim: 0,
+    defX: 0,
+    defY: 0,
+    defK: 0,
     shudder: 0,
     kvx: 0,
     kvy: 0,
@@ -240,6 +261,14 @@ export default function AtomsField() {
     // ————— state —————
     let atoms: AtomEnt[] = [];
     let bonds: CovBond[] = [];
+    const frees: FreeE[] = [];
+    let freeId = 0;
+    /** Which incoming visitor the tier-3 train brings next. */
+    let arrivalCycle = 0;
+    /** The highest rung this tap train has already fired; 0 between trains. */
+    let trainRung = 0;
+    /** The next seeded moment something happens with no hand on the field. */
+    let nextAmbientAt = performance.now() + 9000;
     let seedCount = 0;
     const motes: Mote[] = [];
     const specks: Speck[] = [];
@@ -616,6 +645,245 @@ export default function AtomsField() {
       useField.getState().recordTape("ripple", 0.4 + intensity * 0.4, "atoms/excite");
     };
 
+    /**
+     * THE FALL. An excited electron does not drop back in one step — it
+     * cascades, ring by ring, and every step gives up a photon of its own
+     * exact wavelength. That is what a spectrum IS: not one colour per
+     * element, a LADDER of them, and the room now paints each rung the
+     * colour the Rydberg formula says it is (src/lib/atomics.ts). Hydrogen's
+     * last step, 3→2, comes out at 656 nm — the red line every spectroscope
+     * opens with — while the outer hops are infrared and read as heat.
+     */
+    const fallHome = (a: AtomEnt, fromRing: number) => {
+      const el = elementOf(a.morph.z);
+      if (!el) return;
+      const floor = a.morph.shells;
+      let voice = midiOf(a.morph);
+      for (let r = fromRing; r > floor; r--) {
+        const nm = emissionWavelengthNm(el, r, r - 1);
+        const hex = emissionHex(el, r, r - 1);
+        const ang = twinkleHash(a.seed + r * 31 + Math.floor(performance.now() / 100)) * Math.PI * 2;
+        // a bluer line carries more energy and leaves faster
+        photonStreak(a, ang, 120 + (900 / Math.max(120, Math.min(2400, nm))) * 260, hex);
+        // and it sounds where it sits: the shorter the wave, the higher
+        voice = midiOf(a.morph) + Math.round(clamp01(1 - Math.min(1600, nm) / 1600) * 24);
+        noteLater((fromRing - r) * 110, voice, 190);
+      }
+      try { haptics.tap(); } catch { /* noop */ }
+    };
+
+    /**
+     * IONISATION. The outermost electron is knocked clean off, and it does
+     * not vanish — it becomes a thing in the room with its own motion, and
+     * the atom it left is now a positive ion that will pull it (or any other
+     * loose electron) back. What the element does about it is read from the
+     * table's own electronegativity column: fluorine holds hardest, the
+     * nobles do not let go at all.
+     */
+    const ionise = (a: AtomEnt, intensity: number): boolean => {
+      if (!a.closed || a.retiringAt) return false;
+      const el = elementOf(a.morph.z);
+      if (!el) return false;
+      const hold = ionisationResistance(el);
+      if (intensity < hold * 0.55) {
+        // it held: the cloud only rings, and says so
+        a.shudder = Math.min(1, a.shudder + 0.4);
+        try { audio().refuse(); } catch { /* noop */ }
+        note(midiOf(a.morph) - 7, 200);
+        return false;
+      }
+      const ang = twinkleHash(a.seed + Math.floor(performance.now() / 60)) * Math.PI * 2;
+      const speed = 90 + (1 - hold) * 220 + intensity * 180;
+      frees.push({
+        id: freeId++,
+        x: a.sx + Math.cos(ang) * a.sr * 0.9,
+        y: a.sy + Math.sin(ang) * a.sr * 0.9,
+        vx: Math.cos(ang) * speed,
+        vy: Math.sin(ang) * speed,
+        born: performance.now(),
+        trail: [],
+      });
+      if (frees.length > 14) frees.splice(0, frees.length - 14);
+      a.dim = Math.min(1, a.dim + 0.55 + intensity * 0.35);
+      photonStreak(a, ang, 200 + intensity * 180, ATOM_FAMILIES[a.morph.family][5]);
+      note(midiOf(a.morph) + 12, 90);
+      try { haptics.detent(); } catch { /* noop */ }
+      useField.getState().recordTape("ripple", clamp01(0.5 + intensity * 0.3), "atoms/ionize");
+      return true;
+    };
+
+    /**
+     * RECOMBINATION — the physics between an ion and a loose electron, and
+     * the third thing it makes. The electron falls into the highest empty
+     * ring and then cascades home, so what comes out of a recombination is
+     * neither the ion nor the electron: it is LIGHT, at the element's own
+     * wavelengths. Every emission nebula in the sky is this, at scale.
+     */
+    const recombine = (a: AtomEnt, f: FreeE) => {
+      const idx = frees.indexOf(f);
+      if (idx >= 0) frees.splice(idx, 1);
+      a.dim = Math.max(0, a.dim - 0.7);
+      a.excite = { ring: Math.min(MAX_RING, a.morph.shells + 2), born: performance.now(), decayed: true };
+      fallHome(a, Math.min(MAX_RING, a.morph.shells + 2));
+      const el = elementOf(a.morph.z);
+      burst(
+        a.sx, a.sy,
+        [el ? emissionHex(el, a.morph.shells + 1, a.morph.shells) : "#F2C56B", "#F2EEE6"],
+        8, 34,
+      );
+      try { audio().chime(); } catch { /* noop */ }
+      try { haptics.bloom(); } catch { /* noop */ }
+      useField.getState().recordTape("object", 0.6, "atoms/recombine");
+    };
+
+    /**
+     * What the sky sends, in a fixed cycle so a train of taps on the open
+     * field keeps being answered differently. Seeded, never random. Each of
+     * the three does something to the atoms already standing there, which is
+     * the point — an arrival that only decorates would be a decal.
+     */
+    const arrival = (x: number, y: number, intensity: number, deepen: number) => {
+      const which = arrivalCycle % 3;
+      arrivalCycle += 1;
+      const md = Math.min(width, height);
+      const seed = hashSeed(Math.round(x), Math.round(y), arrivalCycle, 0xa771);
+      const k = 0.6 + intensity * 0.7 + deepen * 0.7;
+      const near = atoms.filter((q) => !q.retiringAt && q.closed && Math.hypot(q.sx - x, q.sy - y) < md * (0.3 + k * 0.14));
+      if (which === 0) {
+        // A PHOTON of exactly the right energy. An atom can only absorb what
+        // fits a gap between its own rings — that is why absorption spectra
+        // are lines and not a smear — so what it does when the light arrives
+        // is jump the gap that fits, and give it straight back.
+        const ang = twinkleHash(seed) * Math.PI * 2;
+        for (let i = 0; i < 10; i++) {
+          const u = i / 10;
+          const px = x + Math.cos(ang + Math.PI) * md * 0.5 * (1 - u);
+          const py = y + Math.sin(ang + Math.PI) * md * 0.5 * (1 - u);
+          specks.push({
+            x: px, y: py,
+            vx: Math.cos(ang) * 420, vy: Math.sin(ang) * 420,
+            born: performance.now(),
+            life: 460 + i * 26,
+            r: 1.3,
+            color: "#F2C56B", streak: true,
+          });
+        }
+        for (const q of near) excite(q, clamp01(0.4 + k * 0.4));
+        try { audio().chime(); } catch { /* noop */ }
+        note(84, 140);
+        try { haptics.ripple(0.35 + deepen * 0.3); } catch { /* noop */ }
+        useField.getState().recordTape("ripple", clamp01(0.45 + deepen * 0.35), "atoms/photon-in");
+        return;
+      }
+      if (which === 1) {
+        // A COSMIC RAY: too much energy to be absorbed by anything, so it is
+        // not absorbed — it tears electrons off whatever it passes, in a
+        // straight line, and keeps going. An ionisation TRACK, which is
+        // exactly what a cloud chamber was built to photograph.
+        const ang = twinkleHash(seed * 1.9) * Math.PI * 2;
+        const ux = Math.cos(ang);
+        const uy = Math.sin(ang);
+        for (let i = 0; i < 16; i++) {
+          const u = (i / 16 - 0.5) * 2;
+          burst(x + ux * md * 0.55 * u, y + uy * md * 0.55 * u, ["#F7F3EA", "#9DC0C9"], 2, 40);
+        }
+        for (const q of atoms) {
+          if (q.retiringAt || !q.closed) continue;
+          // distance from the track, not from the tap: the ray is a line
+          const across = Math.abs(-(q.sx - x) * uy + (q.sy - y) * ux);
+          if (across > md * 0.09) continue;
+          ionise(q, clamp01(0.6 + k * 0.4));
+        }
+        try { audio().spark(); } catch { /* noop */ }
+        note(96, 80);
+        noteLater(110, 84, 160);
+        try { haptics.chop(); } catch { /* noop */ }
+        useField.getState().recordTape("ripple", clamp01(0.6 + deepen * 0.4), "atoms/cosmic-ray");
+        return;
+      }
+      // A FREE ELECTRON drifting in from the edge, looking for somewhere to
+      // be. It will find the emptiest cloud in the room, because that is the
+      // only thing pulling on it, and the light it makes landing is that
+      // element's own line.
+      const ang = twinkleHash(seed * 2.7) * Math.PI * 2;
+      const fx = width * 0.5 + Math.cos(ang) * width * 0.62;
+      const fy = height * 0.5 + Math.sin(ang) * height * 0.62;
+      const toward = Math.atan2(y - fy, x - fx);
+      frees.push({
+        id: freeId++,
+        x: fx, y: fy,
+        vx: Math.cos(toward) * (140 + k * 120),
+        vy: Math.sin(toward) * (140 + k * 120),
+        born: performance.now(),
+        trail: [],
+      });
+      if (frees.length > 14) frees.splice(0, frees.length - 14);
+      try { audio().buzz(); } catch { /* noop */ }
+      note(70, 200);
+      try { haptics.ripple(0.3 + deepen * 0.3); } catch { /* noop */ }
+      useField.getState().recordTape("object", clamp01(0.4 + deepen * 0.3), "atoms/free-electron");
+    };
+
+    /**
+     * THE IONISATION CASCADE — the room's largest, rarest event. One atom
+     * stripped throws an electron; that electron, moving fast, strips the
+     * next one it passes; and the avalanche runs outward through the field
+     * until it runs out of atoms or out of energy. It is what a spark IS,
+     * and a lightning channel, and the inside of a fluorescent tube.
+     *
+     * The wave leaves the field a plasma of ions and loose electrons — and
+     * then, over the seconds that follow, every one of them recombines, each
+     * emitting its own element's own wavelengths, with nobody touching
+     * anything. That afterglow is the point.
+     */
+    const ionisationCascade = (x: number, y: number, intensity: number, deepen: number) => {
+      const md = Math.min(width, height);
+      const k = 0.5 + intensity * 0.7 + deepen * 0.8;
+      const reach = md * (0.4 + k * 0.3);
+      const struck = atoms
+        .filter((q) => !q.retiringAt && q.closed && Math.hypot(q.sx - x, q.sy - y) < reach)
+        .sort((p, q) => Math.hypot(p.sx - x, p.sy - y) - Math.hypot(q.sx - x, q.sy - y));
+      // the wave, in order of distance: the avalanche is a front, not a flash
+      struck.forEach((q, i) => {
+        window.setTimeout(() => {
+          if (!atoms.includes(q) || q.retiringAt) return;
+          if (!ionise(q, clamp01(0.75 + k * 0.35))) excite(q, 1);
+          // and every bond in its path lets go — photolysis is the same event
+          const mine = bonds.filter((b) => b.aId === q.id || b.bId === q.id);
+          if (mine.length > 0) {
+            bonds = bonds.filter((b) => b.aId !== q.id && b.bId !== q.id);
+            const byId = new Map(atoms.map((z) => [z.id, z]));
+            for (const b of mine) {
+              const o = byId.get(b.aId === q.id ? b.bId : b.aId);
+              if (!o) continue;
+              const dx = o.sx - q.sx;
+              const dy = o.sy - q.sy;
+              const dd = Math.max(1, Math.hypot(dx, dy));
+              const kick = 34 + deepen * 26;
+              o.pushX += (dx / dd) * kick;
+              o.pushY += (dy / dd) * kick;
+              q.pushX -= (dx / dd) * kick;
+              q.pushY -= (dy / dd) * kick;
+              o.shudder = Math.min(1, o.shudder + 0.4);
+            }
+          }
+        }, i * 90);
+      });
+      blasts.push({ x, y, born: performance.now(), maxR: reach, mag: clamp01(0.4 + k * 0.4) });
+      if (blasts.length > 4) blasts.shift();
+      burst(x, y, ["#F7F3EA", "#F2C56B", "#9DC0C9"], 22, 180);
+      stirOmega = clamp(stirOmega + 0.8 + deepen, -4, 4);
+      tuttiPulse = Math.max(tuttiPulse, 0.9);
+      try { audio().thud(); } catch { /* noop */ }
+      try { audio().bell(); } catch { /* noop */ }
+      note(28, 620);
+      noteLater(200, 40, 460);
+      noteLater(440, 52, 380);
+      try { haptics.storm(); } catch { /* noop */ }
+      useField.getState().recordTape("sigil", clamp01(0.85 + deepen * 0.15), "atoms/cascade");
+      save();
+    };
+
     // the covalence law refuses: nobles (and spent appetites) rebuff softly —
     // an elastic push apart, a low refuse tone, never silence
     const rebuff = (a: AtomEnt, b: AtomEnt) => {
@@ -892,77 +1160,66 @@ export default function AtomsField() {
         if (e.fingers !== 1) return; // anything else is gently absorbed
         const { x, y } = toLocal(e.x, e.y);
         const a = nearestAtom(x, y);
-        // rapid-tap ladder 1 / 3 / 5 / n — counts between tiers deepen intensity
+        // The site-wide tap ladder (gesture/core.ts: 1 / 3 / 5 / n) read in
+        // this material. One tap lifts an electron and lets it fall, and the
+        // colour it falls with is the element's own line. Three knock one
+        // clean off — an ion and a loose electron, both real things — or, on
+        // the open field, bring in whatever the sky is sending. Five open the
+        // AVALANCHE. Past seven it keeps widening for as long as it is asked.
         const trainTier = tapTrainTier(e.count);
         const trainBase = trainTier === "n" ? 7 : trainTier;
         const deepen = Math.min(1, (e.count - trainBase) * 0.5);
         const amp = clamp01(e.intensity * (0.75 + deepen * 0.55));
+        if (e.count <= 1) trainRung = 0;
         if (trainTier === 1) {
+          trainRung = 1;
           if (a) excite(a, amp);
           return;
         }
         if (trainTier === 3) {
-          // three sharp taps IONIZE: the outermost electron is knocked clean
-          // off — it streaks away, the cloud dims, and after a beat the
-          // falling-home note says it was only borrowed. On open vacuum the
-          // taps condense an atom instead.
+          if (trainRung >= 3) {
+            if (a) ionise(a, amp);
+            else stirOmega = clamp(stirOmega + 0.2 + deepen * 0.3, -4, 4);
+            return;
+          }
+          trainRung = 3;
           if (a) {
-            const ang = twinkleHash(a.seed + e.count) * Math.PI * 2;
-            photonStreak(a, ang, 200 + amp * 180, ATOM_FAMILIES[a.morph.family][5]);
-            a.dim = Math.min(1, a.dim + 0.5 + deepen * 0.3);
-            note(midiOf(a.morph) + 12, 90);
-            noteLater(650, midiOf(a.morph) + 3, 220);
-            try { haptics.detent(); } catch { /* noop */ }
-            useField.getState().recordTape("ripple", 0.5 + deepen * 0.3, "atoms/ionize");
+            // IONISE: the outermost electron comes clean off and stays in the
+            // room as a thing — the ion it left behind will pull it home, and
+            // when it lands the light that comes out is the element's own.
+            if (!ionise(a, amp)) excite(a, amp);
           } else {
-            condense(x, y);
+            arrival(x, y, e.intensity, deepen);
           }
           return;
         }
         if (trainTier === 5) {
-          // five taps are PHOTOLYSIS: every bond the ceremony joined on this
-          // atom lets go at once, the partners thrown back with the elastic
-          // recoil of the share they lose. An unbonded cloud takes the whole
-          // charge as stirred orbitals instead.
-          if (!a) return;
-          const mine = bonds.filter((b) => b.aId === a.id || b.bId === a.id);
-          if (mine.length > 0) {
-            bonds = bonds.filter((b) => b.aId !== a.id && b.bId !== a.id);
-            const byId = new Map(atoms.map((q) => [q.id, q]));
-            for (const b of mine) {
-              const o = byId.get(b.aId === a.id ? b.bId : b.aId);
-              if (!o) continue;
-              const dx = o.sx - a.sx;
-              const dy = o.sy - a.sy;
-              const dd = Math.max(1, Math.hypot(dx, dy));
-              const kick = 30 + deepen * 24;
-              o.pushX += (dx / dd) * kick;
-              o.pushY += (dy / dd) * kick;
-              a.pushX -= (dx / dd) * kick;
-              a.pushY -= (dy / dd) * kick;
-              o.shudder = Math.min(1, o.shudder + 0.4);
-            }
-            a.shudder = 1;
-            burst(a.sx, a.sy, [ATOM_FAMILIES[a.morph.family][5], "#F2EEE6"], 12, 46);
-            try { audio().thud(); } catch { /* noop */ }
-            note(midiOf(a.morph) - 7, 260);
+          if (trainRung >= 5) {
+            // the same avalanche, pushed wider
+            stirOmega = clamp(stirOmega + 0.4 + deepen * 0.6, -4, 4);
+            const more = atoms.filter((q) => !q.retiringAt && q.closed && q.dim < 0.6);
+            for (const q of more) ionise(q, amp);
             try { haptics.chop(); } catch { /* noop */ }
-            save();
-          } else {
-            excite(a, 1);
-            a.precessBoost = clamp(a.precessBoost + 0.8 + deepen * 0.8, -3, 3);
-            try { haptics.chop(); } catch { /* noop */ }
+            return;
           }
+          trainRung = 5;
+          ionisationCascade(x, y, e.intensity, deepen);
           return;
         }
-        // n: the CASCADE — every cloud in reach jumps in sequence, a spectral
-        // avalanche that widens and brightens as the train runs on
-        const reach = Math.min(width, height) * (0.4 + deepen * 0.25);
+        // n: the sustained train. The avalanche does not stop at a step — it
+        // keeps widening, taking more of the field with every further tap,
+        // and everything it strips comes home in its own colours.
+        trainRung = 7;
+        const reach = Math.min(width, height) * (0.4 + deepen * 0.35);
         const near = atoms.filter(
           (q) => !q.retiringAt && q.closed && Math.hypot(q.sx - x, q.sy - y) < reach,
         );
         near.forEach((q, i) => {
-          window.setTimeout(() => excite(q, 0.5 + deepen * 0.5), i * 70);
+          window.setTimeout(() => {
+            if (!atoms.includes(q) || q.retiringAt) return;
+            if (deepen > 0.4) ionise(q, 0.6 + deepen * 0.4);
+            else excite(q, 0.5 + deepen * 0.5);
+          }, i * 70);
         });
         stirOmega = clamp(stirOmega + 0.6 + deepen, -4, 4);
         try { audio().bell(); } catch { /* noop */ }
@@ -1405,6 +1662,19 @@ export default function AtomsField() {
         cx + (tremor ? Math.sin(performance.now() * 0.09 + a.precessPhase) * tremor : 0),
         cy + (tremor ? Math.cos(performance.now() * 0.11 + a.precessPhase) * tremor : 0),
       );
+      // THE CLOUD DEFORMS. A neighbour's charge presses this one's aside, so
+      // the envelope stretches along the line between them and thins across
+      // it — the polarisation you can see before there is any bond, and the
+      // reason two approaching atoms never look like two circles.
+      if (a.defK > 0.02) {
+        const dAng = Math.atan2(a.defY, a.defX);
+        const k = a.defK * 0.3;
+        ctx.rotate(dAng);
+        ctx.scale(1 + k, 1 - k * 0.72);
+        ctx.rotate(-dAng);
+        // and the charge pools on the near side rather than staying centred
+        ctx.translate(a.defX * R * a.defK * 0.14, a.defY * R * a.defK * 0.14);
+      }
 
       // the covalence ceremony: a warm halo tightens as lobes reach
       if (a.charge > 0) {
@@ -1749,14 +2019,12 @@ export default function AtomsField() {
         if (!hold.atomId || hold.atomId !== a.id) {
           if (kbAtomId !== a.id && hold.partnerId !== a.id) a.charge = Math.max(0, a.charge - dt * 1.6);
         }
-        // excitation decays back after a beat: falling note + photon streak
+        // the excitation falls back after a beat — ring by ring, and every
+        // step gives up a photon of its own real wavelength (atomics.ts).
+        // What comes out is the element's own spectrum, not a house colour.
         if (a.excite && !a.excite.decayed && now - a.excite.born >= EXCITE_MS * 0.72) {
           a.excite.decayed = true;
-          const jump = a.excite.ring - a.morph.shells;
-          note(midiOf(a.morph) - 2, 200);
-          const ang = twinkleHash(a.seed + Math.floor(now / 100)) * Math.PI * 2;
-          photonStreak(a, ang, 150 + jump * 60, "#F2C56B");
-          try { haptics.tap(); } catch { /* noop */ }
+          fallHome(a, a.excite.ring);
         }
         if (a.excite && now - a.excite.born > EXCITE_MS) a.excite = null;
         if (!reduce) {
@@ -1769,6 +2037,122 @@ export default function AtomsField() {
           a.ny = clamp(a.ny + vy * dt * timeScale, 0.09, 0.92);
           a.pushX *= Math.exp(-dt * 2.2);
           a.pushY *= Math.exp(-dt * 2.2);
+        }
+      }
+
+      // ——— the physics BETWEEN clouds: deformation, and polarity ———
+      //
+      // An electron cloud is not a rigid ball. Two of them approaching push
+      // each other's charge aside, and the shape that leaves is why chemistry
+      // has shapes at all. Which way the charge slides is not arbitrary: it
+      // slides toward whichever atom pulls harder, and how much harder is the
+      // ELECTRONEGATIVITY gap, straight off the table (bondPolarity). Two
+      // carbons deform symmetrically and lean on nothing; sodium beside
+      // chlorine leans hard one way, which is what an ionic bond looks like
+      // before it is a bond.
+      for (const q of atoms) {
+        q.defK *= Math.exp(-dt * 3.2);
+      }
+      for (let i = 0; i < atoms.length; i++) {
+        const p = atoms[i];
+        if (p.retiringAt || !p.closed || p.sr <= 0) continue;
+        const ep = elementOf(p.morph.z);
+        for (let j = i + 1; j < atoms.length; j++) {
+          const q = atoms[j];
+          if (q.retiringAt || !q.closed || q.sr <= 0) continue;
+          const dx = q.sx - p.sx;
+          const dy = q.sy - p.sy;
+          const d = Math.hypot(dx, dy);
+          const touch = p.sr + q.sr;
+          if (d < 1 || d > touch * 2.1) continue;
+          const k = clamp01(1 - (d - touch * 0.5) / (touch * 1.6));
+          const ux = dx / d;
+          const uy = dy / d;
+          // each cloud is pressed on the side facing the other
+          if (k > p.defK) { p.defK = k; p.defX = ux; p.defY = uy; }
+          if (k > q.defK) { q.defK = k; q.defX = -ux; q.defY = -uy; }
+          const eq = elementOf(q.morph.z);
+          if (!ep || !eq || areBonded(p, q)) continue;
+          // the polarity force: a wide gap is a real attraction (that is what
+          // makes salt), an even one is nearly nothing, and two nobles feel
+          // no reason to approach at all
+          const pol = bondPolarity(ep, eq);
+          const pull = Math.abs(pol) * k * 46;
+          if (pull > 0.4) {
+            p.pushX += ux * pull * dt;
+            p.pushY += uy * pull * dt;
+            q.pushX -= ux * pull * dt;
+            q.pushY -= uy * pull * dt;
+          } else if (ep.valence <= 0 || eq.valence <= 0) {
+            // a sealed shell has nothing to share and keeps its distance
+            p.pushX -= ux * k * 22 * dt;
+            p.pushY -= uy * k * 22 * dt;
+            q.pushX += ux * k * 22 * dt;
+            q.pushY += uy * k * 22 * dt;
+          }
+        }
+      }
+
+      // ——— loose electrons, and the ions that want them back ———
+      //
+      // A stripped electron is a thing in the room, not a particle effect: it
+      // drifts, it is pushed away by other loose electrons (they are all
+      // negative), and it is pulled hard by any cloud short of one. When it
+      // lands, the light that comes out is neither the ion nor the electron —
+      // it is the element's own spectrum, which is what an emission nebula is.
+      for (let i = frees.length - 1; i >= 0; i--) {
+        const f = frees[i];
+        let best: AtomEnt | null = null;
+        let bestD = Infinity;
+        for (const q of atoms) {
+          if (q.retiringAt || !q.closed || q.sr <= 0 || q.dim < 0.12) continue;
+          const d = Math.hypot(f.x - q.sx, f.y - q.sy);
+          if (d < bestD) { bestD = d; best = q; }
+        }
+        if (best && bestD > 1) {
+          const pull = (240 + best.dim * 560) / Math.max(40, bestD);
+          f.vx += ((best.sx - f.x) / bestD) * pull * dt * 8;
+          f.vy += ((best.sy - f.y) / bestD) * pull * dt * 8;
+        }
+        for (const g of frees) {
+          if (g === f) continue;
+          const dx = f.x - g.x;
+          const dy = f.y - g.y;
+          const d2 = dx * dx + dy * dy;
+          if (d2 > 90 * 90 || d2 < 1) continue;
+          const push = 2600 / d2;
+          f.vx += dx * push * dt;
+          f.vy += dy * push * dt;
+        }
+        f.vx += tiltLeanX * 30 * dt * 60;
+        f.vy += tiltLeanY * 30 * dt * 60;
+        f.vx *= Math.exp(-dt * 0.5);
+        f.vy *= Math.exp(-dt * 0.5);
+        f.x += f.vx * dt * timeScale;
+        f.y += f.vy * dt * timeScale;
+        f.trail.push(f.x, f.y);
+        if (f.trail.length > 12) f.trail.splice(0, f.trail.length - 12);
+        if (f.x < -60 || f.x > width + 60 || f.y < -60 || f.y > height + 60) {
+          frees.splice(i, 1);
+          continue;
+        }
+        if (best && bestD < best.sr * 0.7) recombine(best, f);
+      }
+
+      // ——— the field's own life, with no hand on it ———
+      //
+      // A room that is still when untouched has failed. On its own seeded
+      // clock the field does what a warm gas does: a cloud somewhere is
+      // knocked up a level by the ambient light and falls back in its own
+      // colours, and now and then a loose electron wanders in from the edge.
+      if (!reduce && now >= nextAmbientAt) {
+        const k = twinkleHash(Math.round(now / 997) * 3.3);
+        nextAmbientAt = now + 6000 + k * 9000;
+        const live = atoms.filter((q) => !q.retiringAt && q.closed);
+        if (live.length > 0 && k < 0.72) {
+          excite(live[Math.floor(k * 1.4 * live.length) % live.length], 0.25 + k * 0.4);
+        } else if (frees.length < 4) {
+          arrival(width * (0.25 + k * 0.5), height * (0.25 + k * 0.5), 0.3, 0);
         }
       }
 
@@ -1912,6 +2296,28 @@ export default function AtomsField() {
       }
       const sorted = [...atoms].sort((a, b) => a.morph.radius - b.morph.radius);
       for (const a of sorted) drawAtom(a, localT, breath);
+
+      // loose electrons: a cold bright point and the track it is drawing.
+      // Nothing else in this room is this small or this fast, which is the
+      // whole reason a stripped electron reads as an event and not a mote.
+      if (frees.length > 0 && lens < 0.95) {
+        const eAlpha = 1 - lens;
+        for (const f of frees) {
+          if (f.trail.length >= 4) {
+            ctx.strokeStyle = colorAlpha("#9DC0C9", 0.28 * eAlpha);
+            ctx.lineWidth = 0.9;
+            ctx.beginPath();
+            ctx.moveTo(f.trail[0], f.trail[1]);
+            for (let i = 2; i < f.trail.length; i += 2) ctx.lineTo(f.trail[i], f.trail[i + 1]);
+            ctx.stroke();
+          }
+          stamp(HALO_SPRITE, f.x, f.y, 7, 0.3 * eAlpha);
+          ctx.fillStyle = colorAlpha("#F2EEE6", 0.9 * eAlpha);
+          ctx.beginPath();
+          ctx.arc(f.x, f.y, 1.7, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
 
       // tutti: one soft ring around every cloud, fading together
       if (tuttiPulse > 0.03) {

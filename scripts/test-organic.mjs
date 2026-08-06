@@ -229,6 +229,89 @@ assert.equal(O.recognize({ C: 3, H: 3, N: 0, O: 0 }), null, "nonsense counts nam
   assert.deepEqual(O.settlePopulation([1, 2]), [1, 2], "a small field is left alone");
 }
 
+// —— polarity decides who reaches for whom ————————————————————————————
+// The bug this catches: a "polarity" that is really just chain length, so
+// hexane would drift toward glycine and the room's oil-and-water law would
+// be a decoration. Hexane must be exactly indifferent.
+{
+  const hexane = O.chainFromTarget("hexane", 3);
+  const glycine = O.chainFromTarget("glycine", 3);
+  const glucose = O.chainFromTarget("glucose", 3);
+  assert.equal(O.polarity(hexane), 0, "a pure hydrocarbon has no dipole at all");
+  assert.ok(O.polarity(glycine) > 0.4, "an amino acid is polar");
+  assert.ok(O.polarity(glucose) > O.polarity(glycine), "and a sugar, hung with hydroxyls, more so");
+  // no attraction between two nonpolar chains, at any distance
+  for (const d of [0.5, 1, 3, 8]) {
+    assert.equal(O.dipoleAttraction(hexane, hexane, d), 0, `hexane ignores hexane at ${d}`);
+  }
+  // dipole–dipole falls off as 1/d³ and is cut cleanly at range
+  const near = O.dipoleAttraction(glycine, glucose, 2);
+  const far = O.dipoleAttraction(glycine, glucose, 4);
+  assert.ok(near > far, "the pull weakens with distance");
+  assert.ok(Math.abs(near / far - 8) < 1e-9, "and weakens as the cube of it");
+  assert.equal(O.dipoleAttraction(glycine, glucose, O.DIPOLE_RANGE + 0.001), 0, "past range, nothing");
+  assert.equal(O.hbondStrength(hexane, hexane), 0, "two hydrocarbons never hydrogen-bond");
+  assert.ok(O.hbondStrength(glycine, glycine) > 0.5, "two amino acids do");
+}
+
+// —— ligation makes a third thing, and invents no atoms ————————————————
+// The bug this catches: a "merge" that concatenates atom lists without
+// paying the water — the product would carry two extra hydrogens and one
+// extra oxygen, and the room would be manufacturing matter every join.
+{
+  const a = O.chainFromTarget("glycine", 11);
+  const b = O.chainFromTarget("glycine", 22);
+  const joined = O.ligateChains(a, b);
+  assert.ok(joined, "an acid end and an amine end can be joined");
+  assert.deepEqual(
+    O.addFormula(O.chainFormula(joined.chain), joined.water),
+    O.addFormula(O.chainFormula(a), O.chainFormula(b)),
+    "ligation conserves every atom: product + water = the two parents",
+  );
+  const named = O.recognize(O.chainFormula(joined.chain));
+  assert.ok(named && named.key === "glycylglycine", "and the product is a compound with a name");
+  assert.notEqual(named.key, "glycine", "the third thing is neither parent");
+  // ...and every valence in the product still closes: a join that forgets to
+  // spend the hydroxyl leaves a carbon holding five bonds.
+  const n = joined.chain.atoms.length;
+  for (let i = 0; i < n; i++) {
+    assert.equal(
+      O.freeValence(joined.chain.atoms[i], O.neighborsAt(n, i)),
+      0,
+      `the ligated chain's atom ${i} is exactly satisfied`,
+    );
+  }
+  assert.equal(O.ligateChains(O.chainFromTarget("hexane", 1), b), null, "hexane has no acid to give");
+  assert.equal(O.ligateChains(a, O.chainFromTarget("hexane", 1)), null, "and none to receive with");
+  // the backbone cap is real: nothing ligates past what the room can hold
+  const long = { ...a, atoms: new Array(O.MAX_BACKBONE - 1).fill(a.atoms[0]) };
+  assert.equal(O.ligateChains(long, b), null, "a product past MAX_BACKBONE refuses");
+}
+
+// —— hydrolysis is ligation run backwards ——————————————————————————————
+{
+  const a = O.chainFromTarget("glycine", 11);
+  const b = O.chainFromTarget("glycine", 22);
+  const joined = O.ligateChains(a, b).chain;
+  const sites = O.peptideSites(joined);
+  assert.deepEqual(sites, [3], "glycylglycine has exactly one peptide bond, after the carbonyl");
+  const parts = O.hydrolyseChain(joined, sites[0]);
+  assert.ok(parts, "water goes back in at the bond");
+  assert.deepEqual(
+    O.addFormula(O.chainFormula(parts[0]), O.chainFormula(parts[1])),
+    O.addFormula(O.chainFormula(joined), O.WATER),
+    "hydrolysis pays the water back exactly",
+  );
+  assert.deepEqual(O.chainFormula(parts[0]), O.chainFormula(a), "and the halves are the parents again");
+  assert.deepEqual(O.chainFormula(parts[1]), O.chainFormula(b));
+  assert.equal(O.hydrolyseChain(joined, 0), null, "there is no bond before the first atom");
+  assert.equal(
+    O.peptideSites(O.chainFromTarget("hexane", 5)).length,
+    0,
+    "a hydrocarbon has no peptide bond to cut",
+  );
+}
+
 console.log(
-  "organic ok: 4 real structures matching their formulas with every valence closed, relaxation monotone downhill under any timestep, strain↔beat a round trip, the fold a duration, and the peptide bond conserving every atom",
+  "organic ok: 4 real structures matching their formulas with every valence closed, relaxation monotone downhill under any timestep, strain↔beat a round trip, the fold a duration, the peptide bond conserving every atom, hexane exactly indifferent, and ligation/hydrolysis an atom-for-atom round trip",
 );

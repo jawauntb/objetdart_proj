@@ -60,10 +60,13 @@ import {
   molecularWeight,
   moleculeFromSeed,
   reactionProductSeed,
+  modeForStrength,
+  vibrationPitchHz,
+  vibrationalModes,
   settlePopulation,
   type MoleculeMorph,
 } from "@/lib/chemistry";
-import { reactionForPair, resolveReaction } from "@/lib/stoichiometry";
+import { cascade, reactionForPair, resolveReaction } from "@/lib/stoichiometry";
 
 const STORE_KEY = "objetdart:molecules:v1";
 const MOTE_COUNT = 80;
@@ -87,6 +90,12 @@ type Mol = {
   spin: number;
   /** Thermal excitement from taps, 0..~2, decays. */
   heat: number;
+  /**
+   * A real normal mode, running. `wavenumber` is where it absorbs infrared
+   * (cm⁻¹, from src/lib/chemistry.ts), `kind` is what the skeleton is doing,
+   * `amp` how far, and `until` when it has shed the energy again.
+   */
+  vib: { wavenumber: number; kind: string; amp: number; until: number } | null;
   /** Kick response ∝ 1/√(molecular weight) — the light fly, the heavy sit. */
   massK: number;
   birth: number;
@@ -150,6 +159,7 @@ function makeMol(seed: number, nx: number, ny: number, built: number): Mol {
     rot: (hashSeed(seed, 53) / 4294967296) * Math.PI * 2,
     spin: 0,
     heat: 0,
+    vib: null,
     massK,
     birth: performance.now(),
     retiringAt: 0,
@@ -207,6 +217,25 @@ export default function MoleculesField() {
     // ————— state (all refs of the effect closure) —————
     let mols: Mol[] = [];
     let seedCount = 0;
+    /** Which change of conditions the tier-3 train brings next. */
+    let conditionCycle = 0;
+    /** The highest rung this tap train has already fired; 0 between trains. */
+    let trainRung = 0;
+    /**
+     * A catalyst standing in the solution: it lowers the activation barrier
+     * every collision has to clear and is never consumed doing it, which is
+     * the entire definition. Decays only because it eventually drifts out.
+     */
+    let catalyst = 0;
+    /**
+     * How polar the solvent is, −1 (oily) .. +1 (watery). Like dissolves
+     * like: a polar solvent pulls the polar species together and pushes the
+     * oily ones out, and an oily one does exactly the reverse.
+     */
+    let solvent = 0;
+    let solventTarget = 0;
+    /** When the solution may next react without anybody touching it. */
+    let nextCollisionAt = 0;
     const motes: Mote[] = [];
     const wavefronts: Wavefront[] = [];
     const indraws: Indraw[] = []; // the endothermic equation drawing light in
@@ -637,6 +666,223 @@ export default function MoleculesField() {
       save();
     };
 
+    /**
+     * SET A REAL MODE GOING. A molecule struck does not simply "shake": it
+     * has a fixed, countable set of ways it is allowed to move — 3N−6 of
+     * them, or 3N−5 if it is a straight line — and which one answers depends
+     * on how hard it was struck (src/lib/chemistry.ts). Water's bend at
+     * 1595 cm⁻¹ is the floppiest thing it can do; its stretches sit above
+     * 3600 and take a firmer hand. The pitch is the wavenumber carried down
+     * into the audible register, so a stiffer bond is literally a higher
+     * note — you can hear which mode you woke.
+     */
+    const setVibrating = (m: Mol, strength: number, deepen: number) => {
+      const compound = compoundByKey(m.morph.compound);
+      if (!compound) return;
+      const mode = modeForStrength(compound, clamp01(strength));
+      if (!mode) return;
+      m.vib = {
+        wavenumber: mode.wavenumber,
+        kind: mode.kind,
+        amp: clamp01(0.4 + strength * 0.5 + deepen * 0.4),
+        until: performance.now() + 900 + strength * 900 + deepen * 700,
+      };
+      m.heat = Math.min(2, m.heat + 0.3 + strength * 0.35);
+      // a rotation goes with it: the same blow that stretches a bond also
+      // turns the whole body, which is why every band is really a band
+      m.spin += (twinkleHash(m.seed + mode.wavenumber) - 0.5) * (2 + strength * 3);
+      const hz = vibrationPitchHz(mode.wavenumber);
+      try { audio().playTone(hz, 0.35 + strength * 0.3); } catch { /* noop */ }
+      // an infrared-dark mode is felt and not heard — a symmetric stretch
+      // changes no dipole, so nothing radiates, and the room says so by
+      // answering in touch alone
+      const modes = vibrationalModes(compound);
+      const dark = modes.find((q) => q.wavenumber === mode.wavenumber && !q.irActive);
+      try { (dark ? haptics.tap : haptics.ripple)(0.3 + strength * 0.4); } catch { /* noop */ }
+      if (!dark) note(midiOf(m.morph) + Math.round(clamp01(mode.wavenumber / 4000) * 18), 200);
+      burst(m.sx, m.sy, [MOLECULE_FAMILIES[m.morph.family][5], "#E7AC52"], 6, 24);
+      useField.getState().recordTape("ripple", clamp01(0.4 + strength * 0.4), `molecules/${mode.kind}`);
+    };
+
+    /**
+     * The conditions the bench can be put under, in a fixed cycle so a train
+     * of taps on the open solution keeps being answered differently. Seeded,
+     * never random — and every one of them changes what the population DOES,
+     * not merely how it looks.
+     */
+    const changeConditions = (x: number, y: number, intensity: number, deepen: number) => {
+      const which = conditionCycle % 4;
+      conditionCycle += 1;
+      const k = 0.6 + intensity * 0.7 + deepen * 0.7;
+      if (which === 0) {
+        // NUCLEATION: a molecule condenses out of solution under the hand
+        const m = condense(x, y);
+        if (m) m.heat = Math.min(2, 0.6 + deepen * 0.5);
+        return;
+      }
+      if (which === 1) {
+        // A CATALYST. It lowers the barrier every collision has to clear and
+        // is not consumed doing it — so the same solution, at the same
+        // temperature, suddenly starts reacting. That is the whole trick, and
+        // it is why a catalyst is not a reactant.
+        catalyst = Math.min(1, catalyst + 0.45 + k * 0.35);
+        vortices.push({ x, y, omega: 0.8 * k, born: performance.now() });
+        if (vortices.length > 4) vortices.shift();
+        for (let i = 0; i < 14; i++) {
+          const a = (i / 14) * Math.PI * 2;
+          specks.push({
+            x: x + Math.cos(a) * 40, y: y + Math.sin(a) * 40,
+            vx: -Math.cos(a) * 26, vy: -Math.sin(a) * 26,
+            born: performance.now(), life: 1400, r: 1.1, color: "#B8A87F",
+          });
+        }
+        try { audio().chime(); } catch { /* noop */ }
+        note(58, 320);
+        noteLater(180, 65, 260);
+        try { haptics.detent(); } catch { /* noop */ }
+        useField.getState().recordTape("region", clamp01(0.5 + deepen * 0.3), "molecules/catalyst");
+        return;
+      }
+      if (which === 2) {
+        // A SOLVENT SHIFT. Like dissolves like: swing the bench from watery
+        // to oily and the polar species stop finding each other and the
+        // nonpolar ones start. Nothing is added and nothing reacts — the same
+        // population simply arranges itself the other way round.
+        solventTarget = solventTarget >= 0 ? -1 : 1;
+        for (const m of mols) {
+          if (m.retiringAt) continue;
+          m.spin += (twinkleHash(m.seed) - 0.5) * 1.4;
+        }
+        indraws.push({ x: width * 0.5, y: height * 0.5, born: performance.now(), maxR: Math.min(width, height) * 0.42 });
+        if (indraws.length > 3) indraws.shift();
+        try { audio().thud(); } catch { /* noop */ }
+        note(solventTarget > 0 ? 48 : 36, 460);
+        try { haptics.roll(); } catch { /* noop */ }
+        useField.getState().recordTape("region", clamp01(0.45 + deepen * 0.3), "molecules/solvent");
+        return;
+      }
+      // A TEMPERATURE SPIKE. More heat is more collisions, harder — which is
+      // the only reason a reaction that was not running starts running.
+      thermalStorm = Math.min(1, thermalStorm + 0.45 + k * 0.4);
+      for (const m of mols) {
+        if (m.retiringAt) continue;
+        m.heat = Math.min(2, m.heat + 0.5 + k * 0.5);
+        const a = twinkleHash(m.seed + conditionCycle) * Math.PI * 2;
+        m.pushX += Math.cos(a) * 40 * k * m.massK;
+        m.pushY += Math.sin(a) * 40 * k * m.massK;
+      }
+      wavefronts.push({ x, y, born: performance.now(), maxR: Math.min(width, height) * (0.3 + k * 0.2), strength: 0.7 });
+      if (wavefronts.length > 8) wavefronts.shift();
+      try { audio().spark(); } catch { /* noop */ }
+      note(74, 180);
+      try { haptics.storm(); } catch { /* noop */ }
+      useField.getState().recordTape("region", clamp01(0.6 + deepen * 0.35), "molecules/heat-spike");
+    };
+
+    /**
+     * THE CASCADE — the room's largest, rarest event. Not one reaction: the
+     * whole standing population resolved at once, equation after equation,
+     * with each round's products fed back in as the next round's reactants
+     * (`cascade` in src/lib/stoichiometry.ts). Exothermic equations run
+     * first, because a reaction that releases energy is what lights the next
+     * one — that is what a fire IS, and it is why it does not stop when you
+     * take the match away.
+     *
+     * Nothing half-fires: an equation whose reactants are not all standing
+     * there does not run, so what the visitor gets depends entirely on what
+     * they had assembled when they asked.
+     */
+    const reactionCascade = (x: number, y: number, intensity: number, deepen: number) => {
+      const standing = mols.filter((m) => !m.retiringAt && m.closed);
+      const census: Record<string, number> = {};
+      for (const m of standing) census[m.morph.compound] = (census[m.morph.compound] ?? 0) + 1;
+      const run = cascade(REACTIONS, census, 6);
+      if (run.steps.length === 0) {
+        // nothing the solution holds can pay for anything: it only warms,
+        // and says so — the refusal is an answer, never silence
+        thermalStorm = Math.min(1, thermalStorm + 0.4);
+        for (const m of standing) m.heat = Math.min(2, m.heat + 0.6);
+        try { audio().refuse(); } catch { /* noop */ }
+        note(30, 420);
+        try { haptics.chop(); } catch { /* noop */ }
+        return;
+      }
+      const pool = [...standing];
+      const now0 = performance.now();
+      let born = 0;
+      run.steps.forEach((step, si) => {
+        // take the real individuals the equation names, nearest the hand
+        const consumed: Mol[] = [];
+        for (const term of step.consumed) {
+          for (let n = 0; n < term.n; n++) {
+            let bestI = -1;
+            let bestD = Infinity;
+            for (let i = 0; i < pool.length; i++) {
+              if (pool[i].morph.compound !== term.key) continue;
+              const d = Math.hypot(pool[i].sx - x, pool[i].sy - y);
+              if (d < bestD) { bestD = d; bestI = i; }
+            }
+            if (bestI < 0) continue;
+            consumed.push(pool[bestI]);
+            pool.splice(bestI, 1);
+          }
+        }
+        if (consumed.length === 0) return;
+        let mx = 0;
+        let my = 0;
+        for (const m of consumed) { mx += m.sx; my += m.sy; }
+        mx /= consumed.length;
+        my /= consumed.length;
+        window.setTimeout(() => {
+          for (const m of consumed) {
+            if (m.retiringAt) continue;
+            m.retiringAt = performance.now();
+            const d = Math.max(1, Math.hypot(mx - m.sx, my - m.sy));
+            m.pushX += ((mx - m.sx) / d) * 30;
+            m.pushY += ((my - m.sy) / d) * 30;
+          }
+          let pi = 0;
+          for (const term of step.produced) {
+            for (let n = 0; n < term.n; n++) {
+              const seed = seedForCompound(
+                consumed[0].seed,
+                consumed[consumed.length - 1].seed,
+                term.key,
+                si * 16 + pi,
+              );
+              if (seed == null) continue;
+              const ang = (pi / Math.max(1, term.n)) * Math.PI * 2 + si;
+              const rad = Math.min(width, height) * 0.05;
+              const p = makeMol(
+                seed,
+                clamp01((mx + Math.cos(ang) * rad) / Math.max(1, width)),
+                clamp((my + Math.sin(ang) * rad) / Math.max(1, height), 0.08, 0.95),
+                Math.max(1, Math.floor(moleculeFromSeed(seed).bonds.length * 0.55)),
+              );
+              p.closed = false;
+              p.heat = step.energy > 0 ? 1.5 : 0.2;
+              mols.push(p);
+              pi += 1;
+              born += 1;
+            }
+          }
+          retireOldest();
+          if (step.energy > 0) exothermicShiver(mx, my, step.energy);
+          else endothermicDraw(mx, my);
+        }, si * 260);
+      });
+      void born;
+      void now0;
+      thermalStorm = Math.min(1, thermalStorm + 0.5 + deepen * 0.4);
+      try { audio().bell(); } catch { /* noop */ }
+      note(30, 560);
+      noteLater(220, 42, 460);
+      noteLater(470, 54, 400);
+      try { haptics.storm(); } catch { /* noop */ }
+      useField.getState().recordTape("sigil", clamp01(0.85 + deepen * 0.15), "molecules/cascade");
+      save();
+    };
+
     const thermalKick = (x: number, y: number, intensity: number) => {
       const maxR = Math.min(width, height) * (0.12 + intensity * 0.3);
       wavefronts.push({ x, y, born: performance.now(), maxR, strength: 0.4 + intensity * 0.6 });
@@ -713,62 +959,57 @@ export default function MoleculesField() {
         if (e.fingers === 3) { tutti(clamp01(0.35 + e.intensity * 0.65)); return; }
         if (e.fingers !== 1) return; // anything else is gently absorbed
         const { x, y } = toLocal(e.x, e.y);
-        // rapid-tap ladder 1 / 3 / 5 / n — counts between tiers deepen intensity
+        // The site-wide tap ladder (gesture/core.ts: 1 / 3 / 5 / n) read in
+        // this material. One tap is a thermal kick. Three set a real normal
+        // mode going in the molecule under the hand — or, on the open bench,
+        // change the conditions the whole solution is standing in. Five run
+        // the CASCADE. Past seven it keeps running, round after round, for as
+        // long as the solution can pay for it.
         const tier = tapTrainTier(e.count);
         const base = tier === "n" ? 7 : tier;
         const deepen = Math.min(1, (e.count - base) * 0.5);
         const amp = e.intensity * (0.75 + deepen * 0.55);
+        if (e.count <= 1) trainRung = 0;
         if (tier === 1) {
+          trainRung = 1;
           thermalKick(x, y, amp);
           return;
         }
         if (tier === 3) {
-          // spawn: condense a molecule under the hand (or warm one already there)
           const hit = molAt(x, y);
-          if (hit && !hit.retiringAt) {
-            hit.heat = Math.min(2, hit.heat + 0.55 + deepen * 0.5);
-            note(midiOf(hit.morph), 160 + deepen * 80);
-            try { haptics.detent(); } catch { /* noop */ }
-            burst(hit.sx, hit.sy, [MOLECULE_FAMILIES[hit.morph.family][5], "#E7AC52"], 8, 28);
-          } else {
-            const m = condense(x, y);
-            if (m) m.heat = Math.min(2, 0.6 + deepen * 0.5);
+          if (trainRung >= 3) {
+            // the same rung, pressed harder: the mode climbs rather than
+            // restarting, so the axis stays continuous
+            if (hit && !hit.retiringAt) setVibrating(hit, clamp01(amp + deepen * 0.3), deepen);
+            else thermalKick(x, y, amp * 0.7);
+            return;
           }
+          trainRung = 3;
+          if (hit && !hit.retiringAt) setVibrating(hit, clamp01(amp), deepen);
+          else changeConditions(x, y, e.intensity, deepen);
           return;
         }
         if (tier === 5) {
-          // rupture: the nearest molecule dissolves
-          const m = molAt(x, y) ?? mols.find((q) => !q.retiringAt) ?? null;
-          if (m && !m.retiringAt) {
-            m.retiringAt = performance.now();
-            note(midiOf(m.morph) - 12, 280 + deepen * 120);
-            try { audio().thud(); } catch { /* noop */ }
-            try { haptics.roll(); } catch { /* noop */ }
-            burst(m.sx, m.sy, [MOLECULE_FAMILIES[m.morph.family][3], "#DDD3BE"], 10, 34);
-            save();
-          } else {
-            thermalKick(x, y, amp * 1.35);
-          }
-          return;
-        }
-        // n: rewrite — fire a reaction with a docked partner, or a heat storm
-        const m = molAt(x, y) ?? mols.find((q) => !q.retiringAt && q.closed) ?? null;
-        if (m && !m.retiringAt && m.closed) {
-          const partner = dockPartner(m);
-          if (partner) {
-            react(m, partner);
+          if (trainRung >= 5) {
+            // the same fire, fed: another round through whatever is left
+            reactionCascade(x, y, e.intensity, deepen);
             return;
           }
+          trainRung = 5;
+          reactionCascade(x, y, e.intensity, deepen);
+          return;
         }
-        thermalKick(x, y, 0.85 + deepen * 0.5);
-        for (const q of mols) {
-          if (q.retiringAt) continue;
-          if (Math.hypot(q.sx - x, q.sy - y) < Math.min(width, height) * 0.35) {
-            q.heat = Math.min(2, q.heat + 0.7 + deepen * 0.4);
-          }
+        // n: the sustained train. The bench is driven hotter and hotter and
+        // the cascade keeps finding what it can still pay for — there is no
+        // last step, only a solution that eventually has nothing left to burn.
+        trainRung = 7;
+        thermalStorm = Math.min(1, thermalStorm + 0.3 + deepen * 0.5);
+        catalyst = Math.min(1, catalyst + 0.15 + deepen * 0.2);
+        for (const m of mols) {
+          if (m.retiringAt) continue;
+          m.heat = Math.min(2, m.heat + 0.4 + deepen * 0.5);
         }
-        try { audio().bell(); } catch { /* noop */ }
-        try { haptics.bloom(); } catch { /* noop */ }
+        reactionCascade(x, y, e.intensity, deepen);
       },
       hold: (e) => {
         lastInteractionAt = performance.now();
@@ -1163,10 +1404,35 @@ export default function MoleculesField() {
       const flex = reduce ? 0 : Math.sin(t * Math.PI * 2 * morph.flex.rateHz + morph.flex.phase) * morph.flex.amp;
       const cosR = Math.cos(m.rot);
       const sinR = Math.sin(m.rot);
+      // A REAL MODE, running. The mode's own wavenumber sets both how fast it
+      // goes and how the skeleton moves: a STRETCH drives the atoms radially,
+      // in and out along their bonds; a BEND drives them across, so the angle
+      // opens and closes while the lengths hold; a RING BREATHES as a whole.
+      // Nothing here is a generic wobble — the shape of the motion is the
+      // name of the mode.
+      const vib = m.vib && !reduce ? m.vib : null;
+      const vRate = vib ? 0.9 + (vib.wavenumber / 4000) * 5.5 : 0;
+      const vPhase = vib ? Math.sin(t * Math.PI * 2 * vRate) * vib.amp : 0;
       return morph.atoms.map((a, i) => {
         const stretch = 1 + flex * Math.sin(morph.modes[i]);
-        const px = a.x * stretch;
-        const py = a.y * stretch;
+        let px = a.x * stretch;
+        let py = a.y * stretch;
+        if (vib) {
+          const r = Math.hypot(px, py) || 1e-6;
+          if (vib.kind === "stretch" || vib.kind === "breathe") {
+            // along the bond: the frame swells and closes on itself
+            const s = 1 + vPhase * 0.16 * (vib.kind === "breathe" ? 1 : (i === 0 ? -0.4 : 1));
+            px *= s;
+            py *= s;
+          } else {
+            // across it: the angle opens and closes, the lengths do not
+            const across = vPhase * 0.2 * (i % 2 === 0 ? 1 : -1);
+            const nx2 = px - (py / r) * across * r;
+            const ny2 = py + (px / r) * across * r;
+            px = nx2;
+            py = ny2;
+          }
+        }
         const jx = jAmp * Math.sin(t * Math.PI * 2 * jRate + morph.modes[i]);
         const jy = jAmp * Math.cos(t * Math.PI * 2 * jRate * 0.93 + morph.modes[i] * 1.7);
         return {
@@ -1368,6 +1634,25 @@ export default function MoleculesField() {
       streamTargetY *= Math.exp(-dt * 0.5);
       lens += (lensTarget - lens) * Math.min(1, dt * 6);
       thermalStorm *= Math.exp(-dt * 0.9);
+      // a catalyst is not consumed by the reactions it enables — it only ever
+      // drifts out of the neighbourhood, which is far slower
+      catalyst = Math.max(0, catalyst - dt * 0.045);
+      solvent += (solventTarget - solvent) * Math.min(1, dt * 1.2);
+
+      // ——— the solution's own life, with no hand on it ———
+      //
+      // A room that is still when untouched has failed. Brownian motion is
+      // real motion: molecules that touch keep touching, and now and then one
+      // of those meetings arrives with enough energy to clear its barrier and
+      // the reaction simply happens. On the same seeded clock the bench also
+      // warms and cools a little, which is what changes how often that is.
+      if (!reduce && now - lastInteractionAt > 4000) {
+        const phase = Math.sin(now * 0.00013) * 0.5 + 0.5;
+        for (const m of mols) {
+          if (m.retiringAt || !m.closed) continue;
+          m.heat = Math.min(2, m.heat + dt * 0.22 * (0.4 + phase));
+        }
+      }
       tuttiPulse *= Math.exp(-dt * 2.4);
       night += (nightTarget - night) * Math.min(1, dt * (nightTarget > night ? 1.6 : 2.8));
       // two-finger pan: the frame eases toward the hand's nudge, then home
@@ -1396,6 +1681,15 @@ export default function MoleculesField() {
       // the felt tells: one behavioral word per compound, subtle — CO₂
       // warms the field, flammables shiver near heat, the inert airs stay
       // serene, and water finds water (the anomaly as a slow lean)
+      const reactable = (ka: string, kb: string): boolean => {
+        const ck = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+        let v = reactPairCache.get(ck);
+        if (v === undefined) {
+          v = reactionForPair(REACTIONS, ka, kb) != null;
+          reactPairCache.set(ck, v);
+        }
+        return v;
+      };
       const tellMols = mols.filter((m) => !m.retiringAt && m.closed && m.sr > 0);
       let greenhouseCount = 0;
       for (const m of tellMols) if (m.morph.felt === "greenhouse") greenhouseCount += 1;
@@ -1420,20 +1714,68 @@ export default function MoleculesField() {
             o.pushX += ((m.sx - o.sx) / d) * k;
             o.pushY += ((m.sy - o.sy) / d) * k;
           }
+
+          // ——— the force between molecules: LIKE DISSOLVES LIKE ———
+          //
+          // Every molecule here carries a polarity, and two of them feel each
+          // other through it: charge finds charge and oil finds oil, while a
+          // polar one and an oily one push apart — which is the whole reason
+          // vinegar and oil sit in two layers and why a cell has a membrane.
+          // The solvent the bench is set to tips the balance, so a solvent
+          // shift visibly re-sorts the same population without changing it.
+          if (!reduce) {
+            const pol = (q: Mol) =>
+              q.morph.felt === "polar" || q.morph.felt === "anomalous" || q.morph.felt === "ionic"
+                ? 1
+                : q.morph.felt === "nonpolar" || q.morph.felt === "inert"
+                  ? -1
+                  : 0;
+            const pm = pol(m);
+            const po = pol(o);
+            // alike attract, unlike repel; the solvent leans on whichever
+            // family it is like, exactly as a real one does
+            const like = pm * po;
+            const lean = like * 26 + solvent * (pm + po) * 9;
+            if (Math.abs(lean) > 0.3) {
+              const k = lean * dt * (1 + m.heat * 0.2);
+              m.pushX += ((o.sx - m.sx) / d) * k * m.massK;
+              m.pushY += ((o.sy - m.sy) / d) * k * m.massK;
+              o.pushX += ((m.sx - o.sx) / d) * k * o.massK;
+              o.pushY += ((m.sy - o.sy) / d) * k * o.massK;
+            }
+          }
+
+          // ——— and the collision that actually reacts ———
+          //
+          // Two molecules touching is not a reaction. A reaction is a
+          // collision that arrives with enough energy to clear the barrier
+          // between the reactants and the products — that is Arrhenius, and
+          // it is why a mixture can sit stable for years and then go off all
+          // at once when it is warmed. Heat IS the collision rate here: the
+          // hotter the pair, the more of their meetings clear it. A catalyst
+          // lowers the barrier and is never consumed doing it, which is the
+          // only reason it deserves the name.
+          if (d < (m.sr + o.sr) * 0.82 && now >= nextCollisionAt && reactable(m.morph.compound, o.morph.compound)) {
+            const energy = (m.heat + o.heat) * 0.5 + thermalStorm * 0.6;
+            const barrier = 0.62 * (1 - catalyst * 0.72);
+            if (energy >= barrier) {
+              nextCollisionAt = now + 420;
+              react(m, o);
+              i = tellMols.length;
+              break;
+            }
+            // it met and did not clear: the bounce is felt, not silent
+            const k = 34 * dt;
+            m.pushX += ((m.sx - o.sx) / d) * k;
+            m.pushY += ((m.sy - o.sy) / d) * k;
+            o.pushX += ((o.sx - m.sx) / d) * k;
+            o.pushY += ((o.sy - m.sy) / d) * k;
+          }
         }
       }
 
       // the bond-hint: reactable neighbors get a dashed arc after a beat —
       // the room proposing the ceremony, never text
-      const reactable = (ka: string, kb: string): boolean => {
-        const ck = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
-        let v = reactPairCache.get(ck);
-        if (v === undefined) {
-          v = reactionForPair(REACTIONS, ka, kb) != null;
-          reactPairCache.set(ck, v);
-        }
-        return v;
-      };
       const hintSeen = new Set<string>();
       for (let i = 0; i < tellMols.length; i++) {
         const m = tellMols[i];
@@ -1461,6 +1803,10 @@ export default function MoleculesField() {
         const m = mols[i];
         if (m.retiringAt && now - m.retiringAt > RETIRE_MS) { mols.splice(i, 1); dirty = true; continue; }
         if (!m.closed) buildMol(m, dt * 0.9); // a condensing molecule finishes on its own
+        // a mode does not run forever: the energy is radiated away, and what
+        // radiates it is the dipole changing, which is why it stops
+        if (m.vib && now >= m.vib.until) m.vib = null;
+        else if (m.vib) m.vib.amp *= Math.exp(-dt * 0.55);
         m.heat *= Math.exp(-dt * 0.7);
         m.spin *= Math.exp(-dt * 1.1);
         if (m.morph.felt === "inert") {

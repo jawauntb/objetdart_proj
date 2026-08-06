@@ -87,3 +87,65 @@ export function resolveReaction(
     energy: reaction.energy,
   };
 }
+
+/**
+ * Whether a census can afford one whole unit of an equation. The half-met
+ * equation never half-fires: this is the same demand `resolveReaction`
+ * makes, factored out so the cascade can ask it of every equation in turn.
+ */
+export function affordable(
+  reaction: StoichReaction,
+  available: Readonly<Record<string, number>>,
+): boolean {
+  for (const term of reaction.reactants) {
+    if ((available[term.key] ?? 0) < term.n) return false;
+  }
+  return true;
+}
+
+export type CascadeStep = {
+  reaction: StoichReaction;
+  consumed: ReadonlyArray<StoichTerm>;
+  produced: ReadonlyArray<StoichTerm>;
+  energy: number;
+};
+
+/**
+ * THE CASCADE. Fire everything a population can actually pay for, one
+ * equation at a time, feeding each round's products back into the census so
+ * a product can go on to be a reactant — which is what a chain reaction IS.
+ * Exothermic equations go first: a reaction that releases energy is what
+ * lights the next one, and an endothermic step only runs on what is left
+ * over. Within equal energy, the order is the reaction set's own, so the
+ * whole cascade is deterministic in (reactions, census).
+ *
+ * The census is never left owing: every step subtracts exactly what it
+ * consumes and adds exactly what it produces, so the atom count going in
+ * equals the atom count coming out (the equations are balanced by the
+ * curator; this file only refuses to run one it cannot pay for). Stops at
+ * `maxSteps`, or as soon as nothing standing can afford anything.
+ */
+export function cascade(
+  reactions: ReadonlyArray<StoichReaction>,
+  census: Readonly<Record<string, number>>,
+  maxSteps = 12,
+): { steps: CascadeStep[]; remaining: Record<string, number>; energy: number } {
+  const remaining: Record<string, number> = { ...census };
+  const order = [...reactions].sort((a, b) => b.energy - a.energy);
+  const steps: CascadeStep[] = [];
+  let energy = 0;
+  for (let i = 0; i < maxSteps; i++) {
+    const next = order.find((r) => affordable(r, remaining));
+    if (!next) break;
+    for (const t of next.reactants) remaining[t.key] = (remaining[t.key] ?? 0) - t.n;
+    for (const t of next.products) remaining[t.key] = (remaining[t.key] ?? 0) + t.n;
+    steps.push({
+      reaction: next,
+      consumed: next.reactants.map((t) => ({ key: t.key, n: t.n })),
+      produced: next.products.map((t) => ({ key: t.key, n: t.n })),
+      energy: next.energy,
+    });
+    energy += next.energy;
+  }
+  return { steps, remaining, energy };
+}

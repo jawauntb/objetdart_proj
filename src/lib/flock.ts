@@ -90,10 +90,22 @@ export type FlockParams = {
   lurePull?: number;
   /** Rotation about the world's vertical, through the lure or the centre. */
   swirl?: number;
+  /** A hunter's position — a real repulsion field, not a scripted dodge. */
+  predator?: Vec3;
+  /** How hard the predator's presence repels birds inside PREDATOR_REACH. */
+  predatorStrength?: number;
+  /** An updraft's column (x,z matter; y ignored). */
+  thermal?: Vec3;
+  /** Lift + spiral strength for birds inside THERMAL_REACH of the thermal. */
+  thermalStrength?: number;
 };
 
 /** How far a held finger reaches into the sky. */
 export const LURE_RADIUS = 18;
+/** How far a predator's presence is felt — the radius of visible evasion. */
+export const PREDATOR_REACH = 13;
+/** How wide an updraft column is. */
+export const THERMAL_REACH = 9;
 
 /**
  * The aviary catalog — thirteen kinds the meadow holds. Colors in 0..1,
@@ -729,6 +741,28 @@ export function roostNearest(state: FlockState, at: Vec3): number {
   return best;
 }
 
+/** Settle the nearest `count` birds onto perches at once — a roost call. */
+export function roostSeveral(state: FlockState, at: Vec3, count: number): number[] {
+  const order: { i: number; d: number }[] = [];
+  for (let i = 0; i < state.n; i++) {
+    const dx = state.pos[i * 3] - at.x;
+    const dy = state.pos[i * 3 + 1] - at.y;
+    const dz = state.pos[i * 3 + 2] - at.z;
+    order.push({ i, d: dx * dx + dy * dy + dz * dz });
+  }
+  order.sort((a, b) => a.d - b.d);
+  const n = Math.max(0, Math.min(Math.floor(count), order.length));
+  const landed: number[] = [];
+  for (let k = 0; k < n; k++) {
+    landed.push(roostNearest(state, {
+      x: state.pos[order[k].i * 3],
+      y: state.pos[order[k].i * 3 + 1],
+      z: state.pos[order[k].i * 3 + 2],
+    }));
+  }
+  return landed;
+}
+
 /** Flick-launch the nearest bird into a swoop / flight. */
 export function launchNearest(state: FlockState, at: Vec3, dir: Vec3, speed: number): number {
   let best = 0;
@@ -976,6 +1010,45 @@ export function stepFlock(state: FlockState, params: FlockParams, dt: number): v
           ax += lz * t;
           az += -lx * t;
         }
+      }
+    }
+
+    // the hunter: a real repulsion field. Every bird inside PREDATOR_REACH
+    // pushes away along the line from the predator to itself, falling off
+    // linearly to nothing at the edge — the flock's swerve around it is the
+    // separation/cohesion rules fighting the field, not a scripted dodge.
+    const predatorStrength = params.predatorStrength ?? 0;
+    if (predatorStrength > 0 && params.predator) {
+      const dxp = px - params.predator.x;
+      const dyp = py - params.predator.y;
+      const dzp = pz - params.predator.z;
+      const d2p = dxp * dxp + dyp * dyp + dzp * dzp;
+      // a bird standing in for the predator itself (its position IS the
+      // field's centre) must not feel its own field — that is a divide
+      // toward zero, not evasion.
+      if (d2p > 1e-6 && d2p < PREDATOR_REACH * PREDATOR_REACH) {
+        const dp = Math.sqrt(d2p) + 1e-3;
+        const w = ((1 - dp / PREDATOR_REACH) / dp) * predatorStrength;
+        ax += dxp * w;
+        ay += dyp * w * 0.45;
+        az += dzp * w;
+      }
+    }
+
+    // an updraft: lift plus a gentle spiral, the way a soaring bird rides a
+    // real thermal instead of just floating upward.
+    const thermalStrength = params.thermalStrength ?? 0;
+    if (thermalStrength > 0 && params.thermal) {
+      const dxt = px - params.thermal.x;
+      const dzt = pz - params.thermal.z;
+      const r2t = dxt * dxt + dzt * dzt;
+      if (r2t < THERMAL_REACH * THERMAL_REACH) {
+        const rt = Math.sqrt(r2t) + 1e-3;
+        const fall = 1 - rt / THERMAL_REACH;
+        ay += thermalStrength * fall;
+        const tw = (thermalStrength * 0.55 * fall) / rt;
+        ax += -dzt * tw;
+        az += dxt * tw;
       }
     }
 

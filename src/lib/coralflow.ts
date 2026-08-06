@@ -145,6 +145,13 @@ export const CURRENT_MAX = 1.0;
 export const DISLODGE_THRESHOLD = 0.45;
 export const KNOCK_KAPPA = 0.7;
 
+/** How far a polyp's footprint reaches at MAX_SIZE, normalised to the frame. */
+export const POLYP_REACH = 0.05;
+/** How much a neighbour's crowding can cut a polyp's growth rate. */
+export const CROWD_C = 0.75;
+/** How much a dominant neighbour's deep overlap can cut a polyp's ceiling. */
+export const OVERGROWTH_C = 0.55;
+
 // ——— the sky's rates ————————————————————————————————————————————
 
 /**
@@ -220,7 +227,49 @@ export function effectiveGrowthRate(
 ): number {
   const illumMul = illuminationAt(polyp.y, illuminationRate(climate) * state.illum);
   const shearMul = Math.max(0, 1 - SHEAR_C * Math.abs(state.current));
-  return R_BASE * illumMul * shearMul;
+  const crowdMul = Math.max(0.15, 1 - CROWD_C * crowdingAt(state, polyp));
+  return R_BASE * illumMul * shearMul * crowdMul;
+}
+
+/**
+ * Local crowding pressure on a polyp: neighbours of equal or greater size
+ * whose footprint already overlaps this one's — corals compete for the
+ * same patch of light and substrate, so a colony hemmed in by an
+ * established neighbour grows slower than the same polyp alone on open
+ * reef. Only equal/larger neighbours crowd; a small recruit never slows
+ * a cornerstone down.
+ */
+export function crowdingAt(state: ReefState, polyp: Polyp): number {
+  let crowd = 0;
+  for (const other of state.polyps) {
+    if (other.id === polyp.id) continue;
+    if (other.size < polyp.size) continue;
+    const reach = POLYP_REACH * (0.35 + other.size * 0.65);
+    const d = Math.hypot(other.x - polyp.x, other.y - polyp.y);
+    if (d >= reach) continue;
+    crowd += (reach - d) / reach;
+  }
+  return clamp01(crowd);
+}
+
+/**
+ * How deeply a dominant neighbour is overgrowing this polyp, 0..1 — real
+ * coral competition: a much larger colony overlapping this one's footprint
+ * by more than half its reach visibly overtakes the ground, and this
+ * polyp's own ceiling (below) is pulled down by it rather than staying at
+ * MAX_SIZE. A small size gap does not count as dominance.
+ */
+export function overgrowthAt(state: ReefState, polyp: Polyp): number {
+  let worst = 0;
+  for (const other of state.polyps) {
+    if (other.id === polyp.id) continue;
+    if (other.size <= polyp.size + 0.15) continue;
+    const reach = POLYP_REACH * (0.35 + other.size * 0.65) * 0.55;
+    const d = Math.hypot(other.x - polyp.x, other.y - polyp.y);
+    if (d >= reach) continue;
+    worst = Math.max(worst, (reach - d) / reach);
+  }
+  return worst;
 }
 
 // ——— the closed-form advance ——————————————————————————————————
@@ -248,9 +297,13 @@ export function advanceExact(
   const polyps = state.polyps.map((p) => {
     if (p.sealed) return { ...p, size: MAX_SIZE };
     const r = effectiveGrowthRate(p, state, climate);
-    // Closed form: S(t) = MAX_SIZE - (MAX_SIZE - S0) · exp(-r · t)
+    // A dominant, deeply-overlapping neighbour pulls this polyp's ceiling
+    // down instead of MAX_SIZE — real overgrowth, folded into the same
+    // closed form so an arbitrarily long absence still cannot overshoot
+    // or undershoot: S(t) relaxes toward `ceiling`, never past it.
+    const ceiling = MAX_SIZE * (1 - OVERGROWTH_C * overgrowthAt(state, p));
     const decay = Math.exp(-r * dt);
-    const size1 = MAX_SIZE - (MAX_SIZE - p.size) * decay;
+    const size1 = ceiling - (ceiling - p.size) * decay;
     return { ...p, size: clamp(size1, 0, MAX_SIZE) };
   });
   // Illumination relaxes toward its climate steady state on a 12-hour clock.

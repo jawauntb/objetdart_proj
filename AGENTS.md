@@ -65,15 +65,54 @@ test is a law, a law without one is a wish.
 | the whole-field clear is the shared `<LetGo>` | `test:room-contract` (§5) |
 | a room with a scale address mounts axis chrome | `test:room-contract` (§6) |
 | no room-facing resolver ships with nobody calling it | `test:room-contract` (§7) |
+| a room climbs the tap train's rungs — 1 / 3 / 5 / n — instead of answering every tap alike | `test:room-liveness` (§1, §2) |
+| a countable material states the force between its objects and what a merge produces | `test:room-liveness` (§3) |
+| every travel edge resolves to a film that depicts *that* crossing | `test:room-liveness` (§4) |
+| nothing in a room rolls `Math.random()` — the seed is the whole state | `test:room-liveness` (§5) |
 | an object that claims a gesture verb implements it | `test:scene` |
 | navigation order is derived from the scale graph, never hand-sorted | `test:routes` |
 | the guide documents exactly the rooms that exist, with screenshots | `test:guide` |
+| the chrome `?` mirrors the guide — every route resolves to one entry, and the component writes no room prose | `test:room-help` |
 | every room key sits on a band, in a peer circle, or in `SCALE_EXEMPT_KEYS` | `test:routes` |
+
+### What `test:room-liveness` checks, and why it exists
+
+`test:room-contract` made the *grammar* a law and now reports "68 interactive
+rooms, 13 global bindings each, no drift" — while a visitor described the album
+as *"just a spinning earth"*. A room can pass every line of that contract and
+still be a slideshow. So the same audit was run one level up, and the numbers
+are why this file gained four rows:
+
+- **46 of ~68 interactive rooms bound no multi-tap at all.** `gesture/core.ts`
+  has published the rungs — 1 / 3 / 5 / *n* — since the engine landed, and
+  almost nothing climbed them: a double tap did exactly what a single tap did.
+- **36 of 62 travel edges had no film**, and the gap was systematic — the whole
+  small-scale spine (quanta→quarks→nucleons→atoms→molecules→organics→dna→
+  organelles→cells→tissue) fell back to the shared 2400ms breath while every
+  registered film sat on the astronomical trunk. `DEFAULT_PASSAGE` names no
+  film, and `makeFilmFor` answers a filmless spec with the chart that curls
+  onto a turning globe — so the planet was literally playing between the
+  quarks and the nucleons. That is the spinning earth, found.
+- **Nothing checked that a room's objects act on each other**, which is the
+  entire difference between `/stars` — a black hole consumes the star that
+  drifts near it, two holes inspiral into a third thing that is neither
+  parent — and a field of decals with a particle count.
+
+So: every interactive room's `tap` reads `e.count` and branches at a rung above
+three; every countable material (`creates` non-null) states in the registry's
+**`interacts`** field which force acts between its objects and what a merge or
+reaction *produces*; every band-to-band travel edge resolves to a film; and no
+room calls `Math.random()`. Each has a reasoned-exemption field — `taps`,
+`interacts`, `nondeterminism` in `src/lib/room-registry.ts`, `PLAIN_BREATH_EDGES`
+in the test — because a stated reason beats a forced binding, and silence beats
+neither. Read `/stars`' `interacts` entry before writing yours.
 
 And the laws that no test can reach — hold these yourself:
 
 - Everything generated is a **deterministic function of a small state vector** (the
-  concern polygon, a seed). No `Math.random`, no model calls in the render loop.
+  concern polygon, a seed). `test:room-liveness` §5 now catches the loud half of
+  this — `Math.random()` in a room component — but not a model call in the render
+  loop, not a wall clock read as though it were state, and not `src/lib/` itself.
 - **Procedural over assets**: Web Audio synthesis, shaders, parametric models — not
   sound packs, stock, or AI illustration.
 - **Join the shared buses**, don't grow private ones: `src/lib/audio.ts` (one audio
@@ -89,8 +128,19 @@ And the laws that no test can reach — hold these yourself:
   is raised friction, and raised friction is a bug.
 - **State lands in ≥2 senses in the same frame** (sight + sound at minimum; haptics
   where hardware allows). The water on `/` is the reference feel.
-- **No instructions, ever.** No new explanatory copy, labels, tooltips, or onboarding.
-  Discovery is physical: glimmers only, after ~20s idle.
+- **No instructions in the room, ever.** No new explanatory copy, labels, tooltips, or
+  onboarding in the material. Discovery is physical: glimmers only, after ~20s idle.
+
+  This law was narrowed once, deliberately, by the owner, and the narrowing is the
+  whole of it: the site chrome now carries a `?` at the bottom right of every screen
+  (`src/components/RoomHelp.tsx`) that opens the current route's field-guide entry.
+  It is a **sought** surface, never a volunteered one — nothing auto-opens, there is
+  no first-run popup, no `?` sitting inside the canvas, and the room behind it still
+  explains nothing about itself. And it explains without writing: it renders the
+  room's own `GUIDE_ROOMS` entry, so it is a **mirror of `/guide`**, not a second
+  copy of it, and it cannot drift from the guide because it has no words of its own
+  to drift with. The ban on copy, labels and tooltips *inside* rooms stands exactly
+  where it stood; discovery is still physical, and help is still asked for.
 - **Voice**: lowercase product copy, two of the three registers
   (devotional/operational/oceanic) in every line, no marketing verbs, no emoji.
 - **Build in one room, then extract the law** — prove a mechanic on a single route
@@ -212,6 +262,16 @@ so the rooms never have to — in-room copy stays instruction-free, always.
   guide drift apart, and when a documented room has no screenshot. That failure
   is the reminder working, not an obstacle — never silence it by deleting the
   entry you should be updating.
+- **The guide has one mirror and no copies.** The chrome `?` on every screen
+  renders the current route's own entry and nothing else: route → key by
+  `guideKeyForPath` (`src/lib/guide-route.ts`, reading `SITE_ROUTES`), key →
+  entry by `GUIDE_ROOM_BY_KEY` (`src/data/guide.ts`). Editing a manifest or
+  `src/data/guide.ts` is the only way to change what the `?` says — there is
+  nowhere else to type it. `npm run test:room-help` keeps both halves total
+  over every registered route, and fails the moment a room key, a route, or a
+  line of a room's copy appears in the component. A route that deliberately has
+  no entry (`/compare`, `/reading/<hash>`) renders no `?` at all rather than an
+  empty one, and says so by name in that test.
 - The same law extends to the other load-bearing docs: a change that makes
   `DESIGN.md`, `docs/gesture-grammar.md`, or `docs/new-room.md` false must edit
   them in the same PR.
@@ -266,6 +326,20 @@ audit above is what happened when it was written as paragraphs.
       dwell (plant/grow), ceremony hold (the one solemn act), and the vessel's four —
       tilt, shake, **knock**, **flip**.
 - [ ] Nothing fires identically at 900ms and 2400ms. Duration deepens; intensity scales.
+- [ ] The **tap train is climbed, not counted**: `tap` reads `e.count`, branches through
+      `tapTrainTier` at 1 / 3 / 5 / *n*, and the top rung is the room's largest, rarest
+      event — real fidelity spent, not the same answer 30% louder. A `(count - 1) * 0.08`
+      multiplier is a loudness knob, not a ladder. `test:room-liveness` §1–2.
+- [ ] If the material is countable, the objects **act on each other** — a force appropriate
+      to the layer, and two of them meeting produces a third thing that is neither parent.
+      Say which force and what it produces in the registry's `interacts` field, in a
+      sentence a reviewer can falsify by playing the room. `test:room-liveness` §3.
+- [ ] Every travel edge your room opens **resolves to a film** that depicts that crossing,
+      registered in `PASSAGES` and dispatched in `makeFilmFor`. An unfilmed edge is not
+      silent — it plays the default turning globe. `test:room-liveness` §4.
+- [ ] **No `Math.random()`.** Seed it (`hashSeed` / `seededRandom`) or name the one call
+      that needs real entropy in the registry's `nondeterminism` field. A film cannot
+      replay backward on the return leg if the room rolls. `test:room-liveness` §5.
 - [ ] The room **pauses when hidden** (`onVisibility`) and governs its frame
       (`createFrameGovernor` + `detailForTier` + `resolveDpr`), or the shell does it.
 - [ ] **No `createRadialGradient` / `createLinearGradient` inside a loop over the
@@ -278,7 +352,9 @@ audit above is what happened when it was written as paragraphs.
 - [ ] The room mounts **`<AxisChrome route="…" />`** from its page, and binds pinch or
       `pan2` only if the registry says `frame: "own"`.
 - [ ] Reduced motion, keyboard, and 390px all still work.
-- [ ] No new explanatory copy. No emoji. Two of three registers in any line you wrote.
+- [ ] No new explanatory copy in the room. The chrome `?` mirrors `/guide` and is the
+      only surface that explains — if the visitor needs telling, the guide entry is
+      where you tell them. No emoji. Two of three registers in any line you wrote.
 - [ ] `src/data/guide.ts` updated and the screenshot re-shot, in this PR.
 - [ ] Anything you extracted into `src/lib/` has a consumer in `src/`, in this PR.
 

@@ -47,7 +47,7 @@ const PENTA = [60, 62, 64, 67, 69, 72, 74];
 const MAX_FACETS = 8;
 const FACET_HIT = 0.055; // normalized hit radius for "on an existing facet"
 const STORAGE_KEY = "objetdart:jewel:facets:v1";
-type Facet = { x: number; y: number; seed: number };
+type Facet = { x: number; y: number; seed: number; weight: number };
 
 // how hard a drag turns the stone (radians per screen-width of drag)
 const TURN_GAIN = 3.4;
@@ -195,6 +195,7 @@ export default function Jewel() {
       uniform vec3  u_rip[${MAX_RIPPLES}];  // x, y, age(seconds)
       uniform float u_ripStr[${MAX_RIPPLES}];
       uniform vec2  u_facet[${MAX_FACETS}]; // planted facets — the stone's kept material
+      uniform float u_facetW[${MAX_FACETS}]; // each facet's weight — two fused facets cut deeper
       uniform float u_facetN;
       uniform float u_gather;      // 0..1 a facet gathering under the held finger
       uniform vec2  u_gatherPos;
@@ -361,7 +362,10 @@ export default function Jewel() {
           if (float(i) >= u_facetN) break;
           vec2 fc = (u_facet[i] * 2.0 - 1.0); fc.x *= ar; fc.y *= -1.0;
           vec2 fd = uv - fc;
-          float fcore = exp(-dot(fd, fd) * 60.0);
+          // two facets fused by a hand meeting a facet twice cut wider AND
+          // brighter — the physics between the stone's own kept material
+          float w = max(1.0, u_facetW[i]);
+          float fcore = exp(-dot(fd, fd) * (60.0 / w)) * (0.6 + 0.4 * w);
           col += thi * fcore * 0.65;
           col += vec3(fcore) * vec3(1.0, 0.97, 0.9) * 0.5;
         }
@@ -425,6 +429,7 @@ export default function Jewel() {
     const uRip = gl.getUniformLocation(prog, "u_rip");
     const uRipStr = gl.getUniformLocation(prog, "u_ripStr");
     const uFacet = gl.getUniformLocation(prog, "u_facet");
+    const uFacetW = gl.getUniformLocation(prog, "u_facetW");
     const uFacetN = gl.getUniformLocation(prog, "u_facetN");
     const uGather = gl.getUniformLocation(prog, "u_gather");
     const uGatherPos = gl.getUniformLocation(prog, "u_gatherPos");
@@ -473,7 +478,9 @@ export default function Jewel() {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as { facets?: Facet[] };
-        if (Array.isArray(parsed.facets)) facetsRef.current = parsed.facets.slice(-MAX_FACETS);
+        if (Array.isArray(parsed.facets)) {
+          facetsRef.current = parsed.facets.slice(-MAX_FACETS).map((f) => ({ ...f, weight: f.weight ?? 1 }));
+        }
       }
     } catch { /* fresh */ }
     setHasFacets(facetsRef.current.length > 0);
@@ -491,9 +498,38 @@ export default function Jewel() {
       return best;
     };
 
+    /** How close two facets must land to fuse rather than sit side by side —
+     *  the physics between the stone's own kept material. */
+    const FACET_FUSE_R = FACET_HIT * 0.9;
+    const MAX_FACET_WEIGHT = 3;
+
     const addFacet = (nx: number, ny: number) => {
+      let nearIdx = -1;
+      let nearD = FACET_FUSE_R;
+      facetsRef.current.forEach((f, i) => {
+        const d = Math.hypot(f.x - nx, f.y - ny);
+        if (d < nearD) { nearD = d; nearIdx = i; }
+      });
+      if (nearIdx >= 0) {
+        // two facets meeting fuse into one deeper cut — the third thing
+        // that is neither parent, wider and brighter than either alone,
+        // up to the stone's own limit on how deep one cut can go
+        const old = facetsRef.current[nearIdx];
+        const weight = Math.min(MAX_FACET_WEIGHT, old.weight + 1);
+        const mx = (old.x + nx) / 2;
+        const my = (old.y + ny) / 2;
+        const seed = Math.floor((mx * 9973 + my * 6151 + weight * 733) % 100000);
+        facetsRef.current[nearIdx] = { x: mx, y: my, seed, weight };
+        writer.schedule();
+        fire.current = Math.min(1.9, fire.current + 0.5 + weight * 0.15);
+        spawnRipple(mx, my, 0.8 + weight * 0.15, nowSec());
+        try { getFieldAudio().bell(); } catch { /* noop */ }
+        try { haptics.bloom(); } catch { /* noop */ }
+        useField.getState().recordTape("kept", 0.75, "jewel/facet-fused");
+        return;
+      }
       const seed = Math.floor((nx * 9973 + ny * 6151 + facetsRef.current.length * 131) % 100000);
-      facetsRef.current.push({ x: nx, y: ny, seed });
+      facetsRef.current.push({ x: nx, y: ny, seed, weight: 1 });
       if (facetsRef.current.length > MAX_FACETS) facetsRef.current.shift();
       writer.schedule();
       fire.current = Math.min(1.9, fire.current + 0.6);
@@ -909,6 +945,7 @@ export default function Jewel() {
     const ripVec = new Float32Array(MAX_RIPPLES * 3);
     const ripStrVec = new Float32Array(MAX_RIPPLES);
     const facetVec = new Float32Array(MAX_FACETS * 2);
+    const facetWVec = new Float32Array(MAX_FACETS);
     let fftBuf: Uint8Array | null = null;
 
     let raf = 0;
@@ -1057,8 +1094,10 @@ export default function Jewel() {
         const f = facets[i];
         facetVec[i * 2] = f ? f.x : -1;
         facetVec[i * 2 + 1] = f ? f.y : -1;
+        facetWVec[i] = f ? (f.weight ?? 1) : 1;
       }
       gl.uniform2fv(uFacet, facetVec);
+      gl.uniform1fv(uFacetW, facetWVec);
       gl.uniform1f(uFacetN, facets.length);
       gl.uniform1f(uGather, g.amt);
       gl.uniform2f(uGatherPos, g.x, g.y);

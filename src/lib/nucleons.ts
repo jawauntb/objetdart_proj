@@ -315,6 +315,56 @@ export function canFission(z: number, n: number): boolean {
 }
 
 /**
+ * The liquid drop's fission barrier, MeV — the saddle a compound nucleus has
+ * to climb before the Coulomb push wins and the neck lets go. It is the
+ * surface energy scaled by how close the fissility already sits to 1: at
+ * x = 1 the barrier vanishes (the drop cannot hold itself at all) and it
+ * grows steeply as x falls, which is why nothing below the actinides splits
+ * however hard it is hit. Zero for anything already past x = 1.
+ */
+export function fissionBarrier(z: number, n: number): number {
+  const a = massNumber(z, n);
+  if (a <= 0) return 0;
+  const x = fissility(z, n);
+  if (x >= 1) return 0;
+  return 0.33 * A_SURF * Math.pow(a, 2 / 3) * Math.pow(1 - x, 3);
+}
+
+/**
+ * Whether absorbing ONE MORE NEUTRON makes this nuclide split on the spot —
+ * the whole difference between a fissile nuclide and a merely fertile one,
+ * and it is not put here by hand: the neutron's separation energy in the
+ * compound nucleus (captureQ, which carries the SEMF's pairing term) is
+ * compared against that compound nucleus's own barrier.
+ *
+ * The pairing term is the entire story. U-235 is even-Z/odd-N, so the
+ * captured neutron PAIRS UP and pays 7.4 MeV into a drop whose barrier is
+ * 5.8 — it splits at once, and that is why a reactor runs on it. U-238 is
+ * even-even, so the same neutron arrives unpaired, pays only 5.6 into a
+ * 6.4 MeV barrier, and merely warms the drop. Nothing about this file knows
+ * the word "uranium"; the distinction falls out of the energy, which is the
+ * only way the room is allowed to know it.
+ */
+export function promptFissionOnCapture(z: number, n: number): boolean {
+  const zi = Math.floor(z);
+  const ni = Math.floor(n);
+  if (!canFission(zi, ni + 1)) return false;
+  return captureQ(zi, ni, 0) > fissionBarrier(zi, ni + 1);
+}
+
+/**
+ * A neutron walks in and the drop comes apart: the compound nucleus (Z, N+1)
+ * split, or null when it only warms instead. The neutrons this returns are
+ * the ones that go looking for the next drop — the chain, in one call.
+ */
+export function inducedFission(z: number, n: number, seed: number): FissionSplit | null {
+  const zi = Math.floor(z);
+  const ni = Math.floor(n);
+  if (!promptFissionOnCapture(zi, ni)) return null;
+  return fissionSplit(zi, ni + 1, seed);
+}
+
+/**
  * How violent the split looks and sounds, 0..1. Zero when the split pays
  * nothing (a light nucleus simply refuses to come apart), saturating for
  * the ~200 MeV an actinide releases. Monotone in q.

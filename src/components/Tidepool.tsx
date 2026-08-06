@@ -19,6 +19,7 @@ import * as haptics from "@/lib/haptics";
 import { getTurbulence, relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import RoomShell from "@/components/RoomShell";
 import type { RoomVoice } from "@/lib/gesture/defaults";
+import { tapTrainTier, tapTrainDepth } from "@/lib/gesture/core";
 import { createGLStage, FULLSCREEN_VERT_UNIT } from "@/lib/webgl/stage";
 import { clocksFrom } from "@/lib/webgl/sizing";
 import {
@@ -72,6 +73,7 @@ import {
   nearestCreature,
   plantCreature,
   relaxTransients,
+  reproduceCreature,
   ringHzFor,
   sealCreature,
   setAnemoneCurl,
@@ -1231,6 +1233,9 @@ export default function Tidepool() {
     let lastSaveAt = performance.now();
     let dwellingCreatureId: number | null = null;
     let lastDeepenAt = 0;
+    // Deterministic index into the tier-3-on-open-water cycle (germinate /
+    // nudge / bloom) — advances once per tap, never Math.random.
+    let emptyTapCycle = 0;
     /** Time-constant of a creature's growth under a sustained press —
      *  a MATERIAL time-constant, not a gesture tier; tiers live in
      *  `gesture/core.ts` alone (AGENTS §"pre-merge checklist"). This
@@ -1255,6 +1260,37 @@ export default function Tidepool() {
     const chargeSizeFor = (elapsedMs: number) =>
       BIOMASS_STEP_MAX * (1 - Math.exp(-Math.max(0, elapsedMs) / BIOMASS_WIDEN_TAU_MS));
 
+    /**
+     * The tap ladder's top rung, on a creature or on open water alike: a
+     * tide change over the whole pool — a real storm-strength startle
+     * (knockStartle) plus several virtual hours of accelerated growth
+     * (advanceExact), so the surge in the food web (kelp fed by warmth,
+     * snails grazing it down, anemones filtering what drifts off both) is
+     * visible at once instead of trickling in. The room's largest, rarest
+     * event. `depth` is 0..1; tier 5 lands mid-scale, a sustained tier-n
+     * train deepens it continuously via tapTrainDepth.
+     */
+    const tideChange = (depth: number, intensity: number) => {
+      const startled = knockStartle(state, 0.55 + depth * 0.45, performance.now());
+      state = startled.state;
+      state = advanceExact(
+        state,
+        4 * 3600 * (0.4 + depth * 0.8) * (0.7 + intensity * 0.3),
+        state.climate,
+      );
+      for (const c of state.creatures) pushRipple(c.x, c.y, 0.55 + depth * 0.4);
+      try {
+        const meanB = meanBiomass(state);
+        audio.playTone(SNAIL_PITCH_BASE_HZ * Math.pow(2, -meanB / 0.5), 0.4 + depth * 0.3);
+        audio.playTone(ANEMONE_PITCH_BASE_HZ * Math.pow(2, -meanB / 0.5), 0.28 + depth * 0.2);
+        audio.bell();
+        haptics.roll();
+      } catch {
+        /* noop */
+      }
+      writer.schedule();
+    };
+
     // ——— the hand's verbs, in this room's material ———
     // __SLOT_VERB_HANDLERS__
     const engine: PoolApi = {
@@ -1264,21 +1300,23 @@ export default function Tidepool() {
         cursorY = ny;
         cursorLit = 1;
         if (fingers >= 2) return;
+        const tier = tapTrainTier(count);
         const phase = currentState(state.tau, state.climate);
         const found = nearestCreature(state, nx, ny, 0.08);
         if (found) {
-          // Ring the creature at its kind's pitch — the load-bearing invertible map.
-          const hz = ringHzFor(found.kind, found.biomass);
-          try {
-            if (hz > 0) audio.playTone(hz, 0.12 + intensity * 0.18);
-            haptics.tap();
-          } catch {
-            /* noop */
-          }
-          pushRipple(found.x, found.y, 0.6 + intensity * 0.35);
-          // DISCOVERABLE 1: tap on an anemone during LOW TIDE curls it.
-          if (phase === "low_tide") {
-            if (found.kind === "anemone") {
+          if (tier === 1) {
+            // the room's ordinary answer: ring the creature at its own
+            // pitch — the load-bearing invertible map.
+            const hz = ringHzFor(found.kind, found.biomass);
+            try {
+              if (hz > 0) audio.playTone(hz, 0.12 + intensity * 0.18);
+              haptics.tap();
+            } catch {
+              /* noop */
+            }
+            pushRipple(found.x, found.y, 0.6 + intensity * 0.35);
+            // DISCOVERABLE 1: tap on an anemone during LOW TIDE curls it.
+            if (phase === "low_tide" && found.kind === "anemone") {
               state = setAnemoneCurl(state, found.id, 1);
               try {
                 audio.playTone(ANEMONE_PITCH_BASE_HZ * 0.5, 0.32);
@@ -1288,10 +1326,107 @@ export default function Tidepool() {
               }
               noteDiscovered("d1");
             }
+            return;
+          }
+          if (tier === 3) {
+            // the creature reproduces, true to its own biology — a snail
+            // lays a cluster, a kelp frond fragments, an anemone splits by
+            // real binary fission — and pays a third of its own biomass to
+            // fund the offspring. Offset seeded from the creature's own id
+            // and the ledger's own clock (tau), never Math.random.
+            const rng = sceneMulberry32(hashSeed(found.id, Math.floor(state.tau * 997)));
+            const ang = rng() * Math.PI * 2;
+            const rad = 0.035 + rng() * 0.035;
+            const { state: next, childId } = reproduceCreature(
+              state,
+              found.id,
+              Math.cos(ang) * rad,
+              Math.sin(ang) * rad,
+            );
+            state = next;
+            if (childId !== null) {
+              const child = state.creatures.find((c) => c.id === childId);
+              if (child) pushRipple(child.x, child.y, 0.7);
+              pushRipple(found.x, found.y, 0.5);
+              try {
+                audio.playNote(54, 260);
+                audio.bell();
+                haptics.bloom();
+              } catch {
+                /* noop */
+              }
+              writer.schedule();
+            } else {
+              try { audio.refuse(); } catch { /* noop */ }
+            }
+            return;
+          }
+          // tier 5 / n — the tide changes over the whole pool, scaled by
+          // the train's depth past 5 so a sustained roll keeps deepening.
+          tideChange(tier === "n" ? tapTrainDepth(count) : 0.62, intensity);
+          return;
+        }
+        if (tier === 3) {
+          // a cycling set of rarer events over open water, true to the
+          // pool's own zones — a creature germinates on whatever shelf the
+          // tap landed on, a patch of biofilm blooms warm, a local nutrient
+          // pulse feeds whatever is already nearby — so a hand that keeps
+          // tapping open water keeps finding something new, deterministically.
+          const which = emptyTapCycle % 3;
+          emptyTapCycle++;
+          if (which === 0) {
+            const before = state.creatures.length;
+            state = plantCreature(state, nx, ny);
+            if (state.creatures.length > before) {
+              pushRipple(nx, ny, 0.6);
+              try {
+                audio.playNote(50, 240);
+                haptics.tap();
+              } catch {
+                /* noop */
+              }
+              writer.schedule();
+            } else {
+              try { audio.refuse(); } catch { /* noop */ }
+            }
+          } else if (which === 1) {
+            state = breathWarm(state, 0.12 + intensity * 0.08);
+            pushRipple(nx, ny, 0.65);
+            try {
+              audio.playTone(160, 0.28);
+              haptics.chop();
+            } catch {
+              /* noop */
+            }
+            writer.schedule();
+          } else {
+            let touched = 0;
+            for (const c of state.creatures) {
+              if (Math.hypot(c.x - nx, c.y - ny) > 0.14) continue;
+              state = deepenCreature(state, c.id, 0.08 + intensity * 0.06);
+              pushRipple(c.x, c.y, 0.5);
+              touched++;
+            }
+            if (touched > 0) {
+              try {
+                audio.bell();
+                haptics.chop();
+              } catch {
+                /* noop */
+              }
+              writer.schedule();
+            } else {
+              try { audio.refuse(); } catch { /* noop */ }
+            }
           }
           return;
         }
-        // Ring the pool at the mean of whatever is alive.
+        if (tier === 5 || tier === "n") {
+          // tier 5 / n on open water — the same whole-pool tide change.
+          tideChange(tier === "n" ? tapTrainDepth(count) : 0.62, intensity);
+          return;
+        }
+        // tier 1 on open water — ring the pool at the mean of whatever is alive.
         const meanB = meanBiomass(state);
         try {
           audio.playTone(SNAIL_PITCH_BASE_HZ * Math.pow(2, -meanB / 0.5), 0.14 + intensity * 0.14);
@@ -1299,7 +1434,7 @@ export default function Tidepool() {
         } catch {
           /* noop */
         }
-        pushRipple(nx, ny, 0.4 + intensity * 0.3 + Math.min(0.3, (count - 1) * 0.08));
+        pushRipple(nx, ny, 0.4 + intensity * 0.3);
       },
       stepBack: () => {
         if (lensSnapped === 1) {

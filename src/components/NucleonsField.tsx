@@ -85,6 +85,7 @@ import {
   fissility,
   fissionMagnitude,
   fissionSplit,
+  promptFissionOnCapture,
   hashSeed,
   massNumber,
   mostStableZ,
@@ -143,6 +144,13 @@ type Nucleus = {
   halo: number;
   /** When this drop next does what it wants, ms on the local clock. */
   decayAt: number;
+  /**
+   * A compound nucleus: a neutron has just walked in and the drop is already
+   * coming apart. Non-zero means it splits at this moment, whatever its
+   * decayAt says — induced fission is prompt, which is the only reason a
+   * chain reaction can outrun the beta decays.
+   */
+  promptAt: number;
   /** 0..1 necking: the drop pulling itself into two before a split. */
   neck: number;
   pushX: number;
@@ -271,6 +279,7 @@ function makeNucleus(z: number, n: number, nx: number, ny: number, growth: numbe
     charge: 0,
     halo,
     decayAt: now + decayDelay(z, n, seed),
+    promptAt: 0,
     neck: 0,
     pushX: 0,
     pushY: 0,
@@ -381,6 +390,13 @@ export default function NucleonsField() {
     let kbId: string | null = null;
     let lastAccreteAt = 0;
     let lastGatherNoteAt = 0;
+    let lastBarrierSoundAt = 0;
+    /** The pair currently highest up each other's Coulomb wall, for the paint. */
+    let barrierPair: { ax: number; ay: number; bx: number; by: number; strain: number; over: boolean } | null = null;
+    /** Which incoming radiation the tier-3 train brings next. */
+    let radiationCycle = 0;
+    /** The highest rung this tap train has already fired; 0 between trains. */
+    let trainRung = 0;
     const hold: {
       id: string | null;
       onExisting: boolean;
@@ -681,8 +697,23 @@ export default function NucleonsField() {
         return;
       }
       const before = massNumber(d.z, d.n);
+      // THE CHAIN. Before the neutron is absorbed, ask what absorbing it will
+      // do: in a fissile drop the captured neutron PAIRS UP and pays more
+      // into the compound nucleus than that nucleus's own barrier can hold,
+      // and it comes apart at once rather than waiting out any clock. In a
+      // merely fertile one the same neutron arrives unpaired and only warms
+      // it. src/lib/nucleons.ts decides that from the mass formula alone —
+      // nothing here knows the word uranium.
+      const prompt = f.kind === 0 && promptFissionOnCapture(d.z, d.n);
       retune(d, d.z + f.kind, d.n + (f.kind === 0 ? 1 : 0));
       d.ring = Math.min(1, d.ring + 0.5);
+      if (prompt) {
+        // the compound nucleus, for the breath it exists: swollen, necking,
+        // and already gone. Prompt is prompt — this is what outruns the betas
+        d.promptAt = performance.now() + 170;
+        d.neck = Math.max(d.neck, 0.5);
+        d.swell = Math.min(1, d.swell + 1);
+      }
       // the drop visibly takes it in: a swell that settles over a breath, so
       // a capture reads as the nucleus growing and not as a dot vanishing
       d.swell = Math.min(1, d.swell + 0.85);
@@ -921,6 +952,158 @@ export default function NucleonsField() {
       return mode;
     };
 
+    /**
+     * The sky's own hands, in a fixed cycle so a train of taps on the open
+     * field keeps being answered differently. Nothing here is invented: this
+     * is the actual weather a nucleus stands in — alphas off the decay chain
+     * of everything heavy around it, the cosmic ray that has been travelling
+     * since some other galaxy's supernova, and the neutrons that a nearby
+     * split threw out. Seeded, never random.
+     */
+    const incomingRadiation = (x: number, y: number, intensity: number, depth: number) => {
+      const which = radiationCycle % 3;
+      radiationCycle += 1;
+      const seed = hashSeed(Math.round(x), Math.round(y), radiationCycle, 0xd0d);
+      const k = 0.6 + intensity * 0.7 + depth * 0.7;
+      const edge = (a: number) => ({
+        x: width * 0.5 + Math.cos(a) * width * 0.75,
+        y: height * 0.5 + Math.sin(a) * height * 0.75,
+      });
+      if (which === 0) {
+        // AN ALPHA, arriving from off-field. Two protons and two neutrons
+        // bound as tightly as anything this light ever gets — which is why
+        // it is what heavy nuclei shed. It carries charge, so it has to climb
+        // every barrier it meets, and mostly it is turned aside.
+        const ang = hash01(seed) * Math.PI * 2;
+        const from = edge(ang);
+        const toward = Math.atan2(y - from.y, x - from.x);
+        const a = addNucleus(2, 2, clamp01(from.x / Math.max(1, width)), clamp(from.y / Math.max(1, height), 0.1, 0.9), 1);
+        a.vx = Math.cos(toward) * (300 + k * 220);
+        a.vy = Math.sin(toward) * (300 + k * 220);
+        a.ring = 1;
+        burst(from.x, from.y, [NUCLEON_TINTS.proton[3], NUCLEON_TINTS.neutron[3]], 8, 70, true);
+        try {
+          audio().chime();
+        } catch {
+          /* noop */
+        }
+        note(66, 200);
+        try {
+          haptics.detent();
+        } catch {
+          /* noop */
+        }
+        useField.getState().recordTape("object", clamp01(0.5 + depth * 0.3), "nucleons/alpha-in");
+        return;
+      }
+      if (which === 1) {
+        // A COSMIC RAY. One proton, arriving with more energy than any
+        // accelerator on this planet can give one, and when it lands it does
+        // not capture — it SPALLATES: the drop it hits sprays nucleons and
+        // is left lighter than it was. This is where most of the lithium in
+        // the universe comes from, and nothing else makes it.
+        const ang = hash01(seed * 1.7) * Math.PI * 2;
+        const from = edge(ang);
+        const toward = Math.atan2(y - from.y, x - from.x);
+        spawnFree(1, from.x, from.y, Math.cos(toward) * (760 + k * 400), Math.sin(toward) * (760 + k * 400));
+        // the streak it draws coming in, and the shower it will make
+        for (let i = 0; i < 8; i++) {
+          const u = i / 8;
+          burst(from.x + (x - from.x) * u, from.y + (y - from.y) * u, [NUCLEON_TINTS.proton[3], "#F7F3EA"], 2, 30, true);
+        }
+        try {
+          audio().spark();
+        } catch {
+          /* noop */
+        }
+        note(88, 90);
+        noteLater(120, 76, 160);
+        try {
+          haptics.chop();
+        } catch {
+          /* noop */
+        }
+        useField.getState().recordTape("ripple", clamp01(0.55 + depth * 0.35), "nucleons/cosmic-ray");
+        return;
+      }
+      // A NEUTRON TRICKLE: uncharged, so it feels no wall at all and simply
+      // walks in. Slow ones are the ones that get captured — a fast neutron
+      // goes straight through, which is why a reactor needs a moderator.
+      const n = 2 + Math.round(k * 2);
+      for (let i = 0; i < n; i++) {
+        const ang = hash01(seed + i * 13) * Math.PI * 2;
+        const from = edge(ang);
+        const toward = Math.atan2(y - from.y, x - from.x) + (hash01(seed + i * 7) - 0.5) * 0.3;
+        spawnFree(0, from.x, from.y, Math.cos(toward) * (150 + k * 90), Math.sin(toward) * (150 + k * 90));
+      }
+      flux = clamp01(flux + 0.12 + depth * 0.1);
+      try {
+        audio().buzz();
+      } catch {
+        /* noop */
+      }
+      note(58, 200);
+      try {
+        haptics.ripple(0.35 + depth * 0.3);
+      } catch {
+        /* noop */
+      }
+      useField.getState().recordTape("region", clamp01(0.45 + depth * 0.35), "nucleons/neutron-trickle");
+    };
+
+    /**
+     * THE FLASH — the room's largest, rarest event. A dense burst of
+     * neutrons out of one point, thermal and fast together, and what happens
+     * next is not this function's business: it is the FIELD's.
+     *
+     * If anything standing in the field is fissile, the first neutron to walk
+     * into it starts a chain — each split throws two or three more, each of
+     * those finds another drop, and it runs until it runs out of fuel. If
+     * nothing is fissile, the same burst is an r-process freeze-out instead:
+     * every drop standing in the rain climbs the chart of the nuclides,
+     * capture after capture, which is the only way the actinides have ever
+     * been made anywhere. Both are true, and which one the visitor gets
+     * depends entirely on what they built before they asked.
+     */
+    const neutronFlash = (x: number, y: number, intensity: number, depth: number) => {
+      const k = 0.5 + intensity * 0.7 + depth * 0.8;
+      const seed = hashSeed(Math.round(x), Math.round(y), Math.round(localT * 30), 0xf1a5);
+      const n = 9 + Math.round(k * 9);
+      for (let i = 0; i < n; i++) {
+        const ang = (i / n) * Math.PI * 2 + hash01(seed + i) * 0.5;
+        // a spread of speeds: the slow ones are the ones that get captured
+        const speed = 120 + hash01(seed + i * 31) * (260 + k * 220);
+        spawnFree(0, x, y, Math.cos(ang) * speed, Math.sin(ang) * speed);
+      }
+      flux = clamp01(flux + 0.5 + depth * 0.4);
+      blast(x, y, clamp01(0.4 + k * 0.4));
+      burst(x, y, [NUCLEON_TINTS.neutron[3], "#F7F3EA", NUCLEON_TINTS.proton[2]], 24, 190, true);
+      for (const q of nuclei) {
+        if (q.retiringAt || !q.closed) continue;
+        q.ring = 1;
+      }
+      tuttiPulse = Math.max(tuttiPulse, 0.9);
+      try {
+        audio().thud();
+      } catch {
+        /* noop */
+      }
+      try {
+        audio().bell();
+      } catch {
+        /* noop */
+      }
+      note(26, 640);
+      noteLater(190, 38, 460);
+      noteLater(430, 50, 380);
+      try {
+        haptics.storm();
+      } catch {
+        /* noop */
+      }
+      useField.getState().recordTape("sigil", clamp01(0.85 + depth * 0.15), "nucleons/flash");
+    };
+
     /** Two drops meeting hard enough merge — how superheavies are really made. */
     const attemptMerge = (a: Nucleus, b: Nucleus) => {
       if (!a.closed || !b.closed || a.retiringAt || b.retiringAt) return;
@@ -1040,11 +1223,18 @@ export default function NucleonsField() {
         if (e.fingers !== 1) return;
         const { x, y } = toLocal(e.x, e.y);
         const d = nucleusAt(x, y);
-        // rapid-tap ladder 1 / 3 / 5 / n — counts between tiers deepen intensity
+        // The site-wide tap ladder (gesture/core.ts: 1 / 3 / 5 / n) in this
+        // material. One tap rings the drop. Three ask it to do NOW the one
+        // thing it already wants — or, on the open field, bring in the sky's
+        // own weather. Five throw the flash, and what the flash starts is the
+        // field's business, not the hand's. Past seven the rain keeps rising
+        // for as long as the hammering lasts.
         const trainTier = tapTrainTier(e.count);
         const trainBase = trainTier === "n" ? 7 : trainTier;
         const deepen = Math.min(1, (e.count - trainBase) * 0.5);
+        if (e.count <= 1) trainRung = 0;
         if (trainTier === 1) {
+          trainRung = 1;
           if (!d) return;
           // the giant resonance: the whole drop rings, and a strained one
           // can shake a neutron loose
@@ -1069,88 +1259,87 @@ export default function NucleonsField() {
           return;
         }
         if (trainTier === 3) {
-          // the photoneutron: three sharp strikes knock a neutron out of any
-          // drop, strained or not — the hammer reaching what one tap only
-          // reaches on the fissile. On open field the strikes shake one out
-          // of the vacuum itself.
-          if (d && d.n > 1) {
-            const ang = hash01(d.seed + e.count) * Math.PI * 2;
-            retune(d, d.z, d.n - 1);
-            d.ring = Math.min(1, d.ring + 0.5 + deepen * 0.3);
-            spawnFree(
-              0,
-              d.sx + Math.cos(ang) * d.sr,
-              d.sy + Math.sin(ang) * d.sr,
-              Math.cos(ang) * (210 + deepen * 120),
-              Math.sin(ang) * (210 + deepen * 120),
-            );
+          if (trainRung >= 3) {
+            // still on the same rung: press harder rather than firing twice
+            if (d) d.ring = Math.min(1, d.ring + 0.3 + deepen * 0.4);
+            else flux = clamp01(flux + 0.08 + deepen * 0.12);
+            note(70 + Math.round(deepen * 10), 90);
             try {
-              audio().spark();
+              haptics.ripple(0.3 + deepen * 0.3);
             } catch {
               /* noop */
             }
-            note(midiOf(d.z, d.n) + 4, 140);
-            try {
-              haptics.detent();
-            } catch {
-              /* noop */
-            }
-            useField.getState().recordTape("ripple", 0.5 + deepen * 0.3, "nucleons/photoneutron");
-          } else {
-            spawnFree(0, x, y, 0, 0);
-            try {
-              audio().spark();
-            } catch {
-              /* noop */
-            }
-            note(70, 160);
-            try {
-              haptics.ripple(0.4);
-            } catch {
-              /* noop */
-            }
+            return;
           }
-          return;
-        }
-        if (trainTier === 5) {
-          // five strikes ask the drop NOW: it does the thing it already
-          // wanted — beta, alpha, fission — without waiting out its clock.
-          // A stable drop sings its stillness; the open field gives a spray.
+          trainRung = 3;
           if (d) {
-            d.ring = 1;
-            resolve(d, true);
+            // ASKED. The drop does the one thing it already wanted — beta,
+            // alpha, fission — instead of waiting out its own clock. A drop
+            // that wants nothing is stable, and a stable drop asked hard
+            // enough gives up a neutron instead: the photoneutron, which is
+            // the hammer reaching what one tap only reaches on the fissile.
+            const mode = resolve(d, true);
+            if (mode === "stable" && d.n > 1) {
+              const ang = hash01(d.seed + e.count) * Math.PI * 2;
+              retune(d, d.z, d.n - 1);
+              d.ring = Math.min(1, d.ring + 0.5 + deepen * 0.3);
+              spawnFree(
+                0,
+                d.sx + Math.cos(ang) * d.sr,
+                d.sy + Math.sin(ang) * d.sr,
+                Math.cos(ang) * (210 + deepen * 120),
+                Math.sin(ang) * (210 + deepen * 120),
+              );
+              try {
+                audio().spark();
+              } catch {
+                /* noop */
+              }
+              note(midiOf(d.z, d.n) + 4, 140);
+              useField.getState().recordTape("ripple", 0.5 + deepen * 0.3, "nucleons/photoneutron");
+            }
             try {
               haptics.chop();
             } catch {
               /* noop */
             }
           } else {
-            const n = 3 + Math.round(deepen * 2);
-            for (let i = 0; i < n; i++) {
-              const ang = (i / n) * Math.PI * 2 + hash01(e.count + i) * 0.7;
-              spawnFree(0, x, y, Math.cos(ang) * 180, Math.sin(ang) * 180);
-            }
-            try {
-              audio().spark();
-            } catch {
-              /* noop */
-            }
-            note(72, 140);
-            try {
-              haptics.ripple(0.5);
-            } catch {
-              /* noop */
-            }
+            incomingRadiation(x, y, e.intensity, deepen);
           }
           return;
         }
+        if (trainTier === 5) {
+          if (trainRung >= 5) {
+            // the same flash, pressed harder: more rain, not a second flash
+            flux = clamp01(flux + 0.2 + deepen * 0.25);
+            for (let i = 0; i < 3 + Math.round(deepen * 3); i++) {
+              const ang = hash01(e.count * 13 + i) * Math.PI * 2;
+              spawnFree(0, x, y, Math.cos(ang) * (140 + deepen * 260), Math.sin(ang) * (140 + deepen * 260));
+            }
+            try {
+              haptics.chop();
+            } catch {
+              /* noop */
+            }
+            return;
+          }
+          trainRung = 5;
+          neutronFlash(x, y, e.intensity, deepen);
+          return;
+        }
         // n: the drumroll summons the rain — the train run past seven raises
-        // the neutron flux itself, and every drop rings under the weather
+        // the neutron flux itself, and every drop rings under the weather.
+        // There is no last step: each further tap raises it again.
+        trainRung = 7;
         flux = clamp01(flux + 0.28 + deepen * 0.3);
         tuttiPulse = Math.max(tuttiPulse, 0.5 + deepen * 0.5);
         for (const q of nuclei) {
           if (q.retiringAt || !q.closed) continue;
           q.ring = Math.min(1, q.ring + 0.25 + deepen * 0.2);
+        }
+        for (let i = 0; i < 2 + Math.round(deepen * 4); i++) {
+          const ang = hash01(e.count * 31 + i) * Math.PI * 2;
+          spawnFree(0, x, y, Math.cos(ang) * (120 + deepen * 200), Math.sin(ang) * (120 + deepen * 200));
         }
         note(30 + Math.round(flux * 8), 420);
         try {
@@ -2074,6 +2263,14 @@ export default function NucleonsField() {
           d.neck = Math.max(0, d.neck - dt * 1.2);
         }
 
+        // the compound nucleus's own moment, which is shorter than any clock
+        // in this room: it splits, and its prompt neutrons go looking
+        if (d.promptAt > 0 && nowReal >= d.promptAt) {
+          d.promptAt = 0;
+          doFission(d);
+          continue;
+        }
+
         // the decay clock — this is why the room is alive when nobody is here
         if (d.closed && nowReal >= d.decayAt) {
           resolve(d, false);
@@ -2115,16 +2312,62 @@ export default function NucleonsField() {
         }
       }
 
-      // ——— drops meeting drops ———
+      // ——— drops meeting drops: the wall between every pair of them ———
+      //
+      // The Coulomb barrier is not a rule that fires at contact — it is a
+      // FIELD, and it must be legible on the way in or the refusal at the
+      // end reads as an arbitrary bounce. Every proton pushes every other
+      // proton, so two drops feel each other long before they touch, with a
+      // force that goes as Z_a·Z_b/r²: two hydrogens barely notice, two
+      // heavy drops fight the whole way. The pair that is currently fighting
+      // hardest is remembered so the paint can draw the wall they are on.
+      barrierPair = null;
+      let worstStrain = 0;
       for (let i = 0; i < nuclei.length; i++) {
+        const a = nuclei[i];
+        if (a.retiringAt || a.sr <= 0 || !a.closed) continue;
         for (let j = i + 1; j < nuclei.length; j++) {
-          const a = nuclei[i];
           const b = nuclei[j];
-          if (a.retiringAt || b.retiringAt || a.sr <= 0 || b.sr <= 0) continue;
-          if (Math.hypot(a.sx - b.sx, a.sy - b.sy) < (a.sr + b.sr) * 0.92) {
+          if (b.retiringAt || b.sr <= 0 || !b.closed) continue;
+          const dx = b.sx - a.sx;
+          const dy = b.sy - a.sy;
+          const d = Math.hypot(dx, dy);
+          if (d < 1) continue;
+          const touch = (a.sr + b.sr) * 0.92;
+          if (d < touch) {
             attemptMerge(a, b);
             i = nuclei.length;
             break;
+          }
+          const reach = touch * 4.5;
+          if (d > reach || a.z + b.z <= 0) continue;
+          // the push, in the real proportion — and the closing pair's own
+          // barrier, in MeV, so the wall the hand is pushing against is the
+          // same number attemptMerge will consult when they touch
+          const push = (a.z * b.z * 900) / (d * d);
+          const ux = dx / d;
+          const uy = dy / d;
+          a.pushX -= ux * push * dt;
+          a.pushY -= uy * push * dt;
+          b.pushX += ux * push * dt;
+          b.pushY += uy * push * dt;
+          const closing = Math.max(0, ((a.vx - b.vx) * ux + (a.vy - b.vy) * uy));
+          const barrier = coulombBarrier(a.z, a.n, b.z);
+          // 0 at the edge of the reach, 1 at the skin: how far up the wall
+          const strain = clamp01((1 - (d - touch) / Math.max(1, reach - touch)) * (0.35 + clamp01(mevOf(closing) / Math.max(0.5, barrier)) * 0.65));
+          if (strain > worstStrain) {
+            worstStrain = strain;
+            barrierPair = { ax: a.sx, ay: a.sy, bx: b.sx, by: b.sy, strain, over: mevOf(closing) >= barrier };
+          }
+          // and it is heard as well as seen: the wall whines as it is climbed
+          if (strain > 0.4 && nowReal - lastBarrierSoundAt > 260 - strain * 140) {
+            lastBarrierSoundAt = nowReal;
+            note(34 + Math.round(strain * 26), 90);
+            try {
+              (strain > 0.8 ? haptics.chop : haptics.tap)();
+            } catch {
+              /* noop */
+            }
           }
         }
       }
@@ -2247,6 +2490,50 @@ export default function NucleonsField() {
         ctx.beginPath();
         ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
         ctx.stroke();
+      }
+
+      // The wall between two drops, drawn while they are on it. Every proton
+      // in one pushes every proton in the other, so what stands between them
+      // is a real surface — and it is the same barrier attemptMerge consults
+      // when they touch. It brightens as they climb it and goes white the
+      // moment they are carrying enough to cross, which is the only warning
+      // the room gives that the next thing will be a merge and not a bounce.
+      if (barrierPair && barrierPair.strain > 0.06 && lens < 0.95) {
+        const bp = barrierPair;
+        const mx = (bp.ax + bp.bx) / 2;
+        const my = (bp.ay + bp.by) / 2;
+        const ang = Math.atan2(bp.by - bp.ay, bp.bx - bp.ax);
+        const half = Math.hypot(bp.bx - bp.ax, bp.by - bp.ay) * 0.34;
+        const alpha = (1 - lens) * bp.strain;
+        ctx.save();
+        ctx.translate(mx, my);
+        ctx.rotate(ang + Math.PI / 2);
+        // arcs stacked across the gap: the potential hill, seen edge-on
+        const rungs = 2 + Math.round(bp.strain * 4);
+        for (let r = 0; r < rungs; r++) {
+          const u = (r + 1) / (rungs + 1);
+          ctx.strokeStyle = colorAlpha(
+            bp.over ? "#F7F3EA" : NUCLEON_TINTS.strain[3],
+            (0.1 + bp.strain * 0.5) * (1 - Math.abs(u - 0.5) * 1.2) * alpha,
+          );
+          ctx.lineWidth = 0.8 + bp.strain * 1.2;
+          ctx.beginPath();
+          ctx.moveTo(-half * u, 0);
+          ctx.lineTo(half * u, 0);
+          ctx.stroke();
+          ctx.translate(0, 0);
+        }
+        ctx.restore();
+        // and the sparks a hard approach strikes off the wall
+        if (bp.strain > 0.7 && !reduce) {
+          ctx.fillStyle = colorAlpha(bp.over ? "#F7F3EA" : NUCLEON_TINTS.strain[3], 0.5 * alpha);
+          for (let i = 0; i < 3; i++) {
+            const a2 = ang + Math.PI / 2 + (i - 1) * 0.6;
+            ctx.beginPath();
+            ctx.arc(mx + Math.cos(a2) * half * 0.5, my + Math.sin(a2) * half * 0.5, 1.2, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
       }
 
       for (const d of nuclei) drawNucleus(d, t, breath);

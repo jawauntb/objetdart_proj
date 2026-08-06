@@ -57,6 +57,11 @@ const {
   dopplerHz,
   settlePopulation,
   starterKinds,
+  annihilates,
+  annihilationProducts,
+  annihilationPhotonEnergy,
+  interference,
+  superposedAmplitude,
 } = loadTsModule("src/lib/quanta.ts");
 
 // — The one great law: among the unstable massive species, more mass means
@@ -260,6 +265,60 @@ const {
   assert.deepEqual(s1, s2, "starters are deterministic in the seed");
   assert.equal(s1[0].id, "photon", "the field opens with light already crossing");
   assert.ok(ledgerOf(s1).charge <= 1 && s1.length === 3, "three starters, at most one charge visible");
+}
+
+// — What two excitations do to each other. A particle meeting its own
+//   antiparticle must leave TWO photons, never one: a single photon cannot
+//   carry off the pair's momentum in the pair's own rest frame. A bug that
+//   emitted one photon, or that let a photon "annihilate" another photon
+//   (it is self-conjugate — two photons make a brighter photon, not
+//   nothing), would pass every other check in this file.
+{
+  const e = { id: "electron", anti: false };
+  const p = { id: "electron", anti: true };
+  assert.ok(annihilates(e, p), "a particle and its antiparticle undo each other");
+  assert.ok(annihilates(p, e), "and it does not matter which arrived first");
+  assert.ok(!annihilates(e, e), "two electrons do not annihilate");
+  assert.ok(
+    !annihilates({ id: "photon", anti: false }, { id: "photon", anti: false }),
+    "the photon is its own antiparticle and does not annihilate itself",
+  );
+  assert.ok(
+    !annihilates({ id: "muon", anti: false }, { id: "electron", anti: true }),
+    "different fields do not annihilate, however opposite their charges",
+  );
+  const out = annihilationProducts(e, p);
+  assert.equal(out.length, 2, "annihilation leaves two photons, never one");
+  assert.ok(out.every((q) => q.id === "photon"), "and both of them are light");
+  const before = ledgerOf([e, p]);
+  const after = ledgerOf(out);
+  assert.deepEqual(after, before, "every book closes across an annihilation");
+  assert.deepEqual(after, { charge: 0, e: 0, mu: 0, tau: 0 }, "and closes at zero");
+  assert.deepEqual(annihilationProducts(e, e), [], "a non-pair produces nothing");
+  // energy is halved between the two, and never falls under the floor
+  assert.ok(
+    Math.abs(annihilationPhotonEnergy(4) * 2 - 4) < 1e-9,
+    "the two photons split the pair's whole energy",
+  );
+  assert.ok(annihilationPhotonEnergy(0) >= PHOTON_E_MIN, "even a cold pair rings audibly");
+}
+
+// — Interference. In phase reinforces, exactly out of phase cancels to
+//   nothing. A bug that used |Δφ| instead of cos, or forgot the half-angle
+//   in the superposition, would still look plausible on a screen.
+{
+  assert.ok(Math.abs(interference(1.3, 1.3) - 1) < 1e-12, "same phase: full reinforcement");
+  assert.ok(Math.abs(interference(0, Math.PI) + 1) < 1e-12, "opposite phase: full cancellation");
+  assert.ok(Math.abs(interference(0, Math.PI / 2)) < 1e-12, "a quarter turn apart: neither");
+  assert.equal(interference(0.4, 2.1), interference(2.1, 0.4), "interference is symmetric");
+  assert.ok(Math.abs(superposedAmplitude(2, 2) - 2) < 1e-12, "two in phase make twice the wave");
+  assert.ok(superposedAmplitude(0, Math.PI) < 1e-12, "two exactly opposed make none at all");
+  let prev = 2;
+  for (let d = 0; d <= Math.PI; d += Math.PI / 32) {
+    const amp = superposedAmplitude(0, d);
+    assert.ok(amp <= prev + 1e-12, "amplitude falls monotonically as the phases part");
+    prev = amp;
+  }
 }
 
 console.log("quanta: ok");

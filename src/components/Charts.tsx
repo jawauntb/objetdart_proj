@@ -1077,11 +1077,17 @@ export default function Charts() {
           return;
         }
         if (trainTier >= 5) {
-          // 5 — the closing bell: the last candles ring their closes in
-          // order, a wave of light walking the panels behind them. The
-          // sixth tap only deepens the wave, never re-rings the bell.
+          // 5 — the room's biggest, rarest event: a market shock. Volatility
+          // spikes hard and at once (not the storm tier's gradual climb),
+          // the last candles ring their closes in order behind it — a wave
+          // of light walking the panels — and the shock is named on the
+          // tape itself. The sixth tap only deepens the ringing wave, never
+          // re-triggers the shock.
           rippleRef.current = { t0: performance.now(), amp: 0.85, dir: 1 };
           if (e.count === 5) {
+            const shocked = Math.round(Math.min(3, volRef.current + 0.9 + e.intensity * 0.6) / 0.05) * 0.05;
+            setVolatility(shocked);
+            stirTurbulence(0.22 + e.intensity * 0.1);
             const all = candlesRef.current;
             const ringers = all.slice(Math.max(0, all.length - 6));
             ringers.forEach((c, i) => {
@@ -1089,9 +1095,9 @@ export default function Charts() {
                 try { playClickForCandle(c); } catch { /* noop */ }
               }, i * 90);
             });
-            try { haptics.bloom(); } catch { /* noop */ }
-            recordTape("sigil", 0.75, "charts/closing-bell");
-            addChartMark("the close", "rise", 0.85);
+            try { haptics.storm(); } catch { /* noop */ }
+            recordTape("sigil", 0.9, "charts/market-shock");
+            addChartMark(`shock vol ${shocked.toFixed(2)}`, "fall", 0.9);
           } else {
             playNote(57, 120);
             try { haptics.ripple(0.5); } catch { /* noop */ }

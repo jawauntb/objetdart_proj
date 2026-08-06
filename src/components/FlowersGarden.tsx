@@ -30,10 +30,17 @@ import LetGo from "@/components/LetGo";
 import {
   BLOOM_PEAK,
   GOLDEN_ANGLE,
+  LATENT_DIM,
+  canopySpread,
+  crossLatent,
   flowerGeometry,
   hashSeed,
   petalOutline,
+  rootOverlap,
+  shadeFrom,
+  speciesFromLatent,
   speciesFromSeed,
+  vigour as vigourOf,
   type FlowerGeometry,
   type Species,
 } from "@/lib/botany";
@@ -88,6 +95,44 @@ type Plant = {
   wiltStep: number;
   wiltDir: number;
   blowAway: boolean;
+  // —— what the neighbours do to it ——
+  /** 0..1 of full sun, after everything taller standing over it */
+  light: number;
+  /** 0..1 of its root disc shared with somebody else's */
+  rootShare: number;
+  /** what is left of the plant after light and root competition */
+  vigour: number;
+  /** 0..1 — pollen the head is carrying, spent when a grain leaves */
+  pollen: number;
+  /** born of two parents rather than of a seed */
+  crossed: boolean;
+};
+
+/** A grain in flight, from one head toward another. */
+type Grain = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  fromId: string;
+  fromSeed: number;
+  seed: number;
+  born: number;
+  color: string;
+};
+
+/** A pollinator working the garden — it carries what it last touched. */
+type Bee = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  seed: number;
+  born: number;
+  /** the plant it last drank at, whose pollen it is carrying */
+  carrying: string | null;
+  carrySeed: number;
+  targetId: string | null;
 };
 
 type Speck = {
@@ -102,7 +147,20 @@ type Speck = {
   swirl: number;
 };
 
-type Stored = { count: number; plants: Array<{ id: string; seed: number; nx: number; ny: number; phase: number; plantedAt: number }> };
+type Stored = {
+  count: number;
+  plants: Array<{
+    id: string;
+    seed: number;
+    nx: number;
+    ny: number;
+    phase: number;
+    plantedAt: number;
+    /** a crossed plant's own genome — without it a hybrid would come back
+     *  as whatever its seed alone decodes to, and the cross would be lost */
+    lat?: number[];
+  }>;
+};
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const clamp01 = (v: number) => clamp(v, 0, 1);
@@ -139,8 +197,18 @@ function mulberry32(seed: number): () => number {
   };
 }
 
-function makePlant(seed: number, nx: number, ny: number, phase: number, plantedAt: number): Plant {
-  const species = speciesFromSeed(seed);
+function makePlant(
+  seed: number,
+  nx: number,
+  ny: number,
+  phase: number,
+  plantedAt: number,
+  latent?: number[],
+): Plant {
+  // A crossed child carries a genome of its own — half of each parent, locus
+  // by locus — and it is decoded by exactly the same decoder a seeded plant
+  // is, so a hybrid is a real flower and not two pictures blended.
+  const species = latent ? speciesFromLatent(latent, seed) : speciesFromSeed(seed);
   return {
     id: `fl-${seed.toString(36)}-${Math.round(nx * 997)}`,
     seed,
@@ -170,6 +238,11 @@ function makePlant(seed: number, nx: number, ny: number, phase: number, plantedA
     wiltStep: 0,
     wiltDir: 1,
     blowAway: false,
+    light: 1,
+    rootShare: 0,
+    vigour: 1,
+    pollen: phase >= BLOOM_PEAK ? 1 : 0,
+    crossed: latent != null,
   };
 }
 
@@ -308,6 +381,24 @@ export default function FlowersGarden() {
     let nextVolAt = 20 + volRng() * 25;
     let volSpawned = 0;
 
+    // ————— what the plants do to each other —————
+    // Light and root space are competed for every frame; pollen actually
+    // travels, and where a grain lands on another open head a seed is set
+    // whose genome is half of each parent — a plant that is neither.
+    const grains: Grain[] = [];
+    const bees: Bee[] = [];
+    let crossCount = 0;
+    /** the open-soil cycle: a pollinator, rain, frost */
+    let soilEventIdx = 0;
+    /** rain and frost, as the weather the garden is actually under */
+    let rainUntil = 0;
+    let frostUntil = 0;
+    /** the top rung: a season racing the length of the garden */
+    let seasonRace: { x: number; u: number; speed: number; gain: number } | null = null;
+    /** the garden's own pollination clock */
+    let nextPollenAt = 0;
+    let pollenTick = 0;
+
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
     reduce = mq.matches;
     const onMq = () => { reduce = mq.matches; };
@@ -339,7 +430,17 @@ export default function FlowersGarden() {
           count: plantCount,
           plants: plants
             .filter((p) => !p.volunteer && p.wiltAt == null)
-            .map((p) => ({ id: p.id, seed: p.seed, nx: p.nx, ny: p.ny, phase: p.phase, plantedAt: p.plantedAt })),
+            .map((p) => ({
+              id: p.id,
+              seed: p.seed,
+              nx: p.nx,
+              ny: p.ny,
+              phase: p.phase,
+              plantedAt: p.plantedAt,
+              // only a cross needs its genome written: a seeded plant decodes
+              // back out of its seed exactly
+              ...(p.crossed ? { lat: p.species.latent.map((v) => Math.round(v * 1000) / 1000) } : {}),
+            })),
         };
         window.localStorage.setItem(STORE_KEY, JSON.stringify(stored));
       } catch { /* quota; the garden lives on in memory */ }
@@ -349,7 +450,16 @@ export default function FlowersGarden() {
     if (stored) {
       plantCount = stored.count;
       plants = stored.plants.slice(-MAX_PLANTS).map((p) =>
-        makePlant(p.seed, clamp01(p.nx), clamp01(p.ny), clamp01(p.phase), p.plantedAt || Date.now()),
+        makePlant(
+          p.seed,
+          clamp01(p.nx),
+          clamp01(p.ny),
+          clamp01(p.phase),
+          p.plantedAt || Date.now(),
+          Array.isArray(p.lat) && p.lat.length >= LATENT_DIM
+            ? p.lat.slice(0, LATENT_DIM).map((v) => clamp01(Number(v) || 0))
+            : undefined,
+        ),
       );
     } else {
       plants = STARTERS.map(([nx, ny, phase], i) =>
@@ -479,6 +589,129 @@ export default function FlowersGarden() {
       save();
       syncPlanted();
       return p;
+    };
+
+    /**
+     * Fertilisation. A grain from one head reaches another open head, and a
+     * seed sets: `crossLatent` takes each locus from one parent or the other,
+     * so the seedling is a real cross and not a blend. Sight (a burst in both
+     * parents' colours), sound (both parents' notes and a bell), and the
+     * bloom word in the hand — one frame.
+     */
+    const setSeedFrom = (mother: Plant, fatherSeed: number, fatherLatent: number[]) => {
+      if (clearing) return;
+      const planted = plants.filter((q) => !q.volunteer && q.wiltAt == null);
+      crossCount += 1;
+      const seed = hashSeed(mother.seed, fatherSeed, crossCount);
+      const latent = crossLatent(mother.species.latent, fatherLatent, seed);
+      const side = twinkleHash(seed % 4093) > 0.5 ? 1 : -1;
+      const nx = clamp(mother.nx + side * (0.05 + twinkleHash(seed % 997) * 0.06), 0.04, 0.96);
+      const ny = clamp(mother.ny + (twinkleHash((seed >> 3) % 991) - 0.5) * 0.05, 0.12, 0.96);
+      const child = makePlant(seed, nx, ny, 0, Date.now(), latent);
+      child.volunteer = planted.length >= MAX_PLANTS; // at the cap it is the garden's, not the ledger's
+      if (child.volunteer) child.volLife = 140000 + twinkleHash(seed % 3079) * 90000;
+      plants.push(child);
+      if (!child.volunteer) {
+        plantCount += 1;
+        const stillPlanted = plants.filter((q) => !q.volunteer);
+        if (stillPlanted.length > MAX_PLANTS) {
+          // at the cap the eldest visibly gives way — never a silent refusal
+          beginWilt(stillPlanted[0], "volunteer", performance.now());
+        }
+        save();
+        syncPlanted();
+      }
+      mother.pollen = Math.max(0, mother.pollen - 0.5);
+      burst(
+        mother.hx,
+        mother.hy,
+        [mother.species.palette.petal, child.species.palette.petal, child.species.palette.heart],
+        16,
+        44,
+      );
+      burst(child.nx * width, child.ny * height, [child.species.palette.stem, child.species.palette.glow], 8, 22);
+      note(midiOf(mother.species), 120);
+      window.setTimeout(() => note(midiOf(child.species), 220), 110);
+      try { audio().bell(); } catch { /* noop */ }
+      try { haptics.bloom(); } catch { /* noop */ }
+      useField.getState().recordTape("sigil", 0.8, "flowers/cross");
+    };
+
+    /** A grain leaves a head, aimed downwind at whatever is open nearby. */
+    const releasePollen = (p: Plant, n: number, gust: number) => {
+      if (p.pollen <= 0.05) return;
+      for (let k = 0; k < n && grains.length < 40; k++) {
+        const seed = hashSeed(p.seed, grains.length, k + pollenTick);
+        const a = twinkleHash(seed % 6151) * Math.PI * 2;
+        const sp = 26 + twinkleHash((seed >> 4) % 4001) * 34 + gust * 40;
+        grains.push({
+          x: p.hx,
+          y: p.hy,
+          vx: Math.cos(a) * sp * 0.5 + wind * 90 + gust * 30,
+          vy: Math.sin(a) * sp * 0.5 - 12,
+          fromId: p.id,
+          fromSeed: p.seed,
+          seed,
+          born: performance.now(),
+          color: p.species.palette.glow,
+        });
+      }
+      p.pollen = Math.max(0, p.pollen - 0.12 * n);
+      pollenTick += 1;
+    };
+
+    /** A pollinator enters the garden and starts working the open heads. */
+    const releaseBee = (x: number, y: number) => {
+      if (bees.length >= 4) bees.shift();
+      const seed = hashSeed(Math.round(x), Math.round(y), bees.length + crossCount);
+      bees.push({
+        x,
+        y,
+        vx: 0,
+        vy: 0,
+        seed,
+        born: performance.now(),
+        carrying: null,
+        carrySeed: 0,
+        targetId: null,
+      });
+      note(74, 90);
+      try { haptics.tap(); } catch { /* noop */ }
+    };
+
+    /**
+     * The 3-rung on open soil cycles the garden's weather: a pollinator, then
+     * rain (every plant drinks and quickens), then frost (the open heads shut
+     * and the weakest go).
+     */
+    const summonSoilEvent = (x: number, y: number, intensity: number) => {
+      const kind = soilEventIdx % 3;
+      soilEventIdx += 1;
+      const now = performance.now();
+      if (kind === 0) {
+        releaseBee(x, y);
+        burst(x, y, ["#E7AC52", "#F2C56B"], 6, 22);
+        return;
+      }
+      if (kind === 1) {
+        rainUntil = now + 9000 + intensity * 6000;
+        windTarget = clamp(windTarget + 0.2, -1, 1);
+        for (const q of plants) if (q.wiltAt == null) swayPlant(q, (twinkleHash(q.seed % 683) - 0.5) * 0.5);
+        note(45, 320);
+        try { audio().chime(); } catch { /* noop */ }
+        try { haptics.ripple(0.35 + intensity * 0.3); } catch { /* noop */ }
+        return;
+      }
+      frostUntil = now + 8000 + intensity * 5000;
+      for (const q of plants) {
+        if (q.wiltAt != null) continue;
+        q.over = Math.max(0, q.over - 0.4);
+        // the weakest are the ones frost takes — competition made visible
+        if (q.vigour < 0.3 && q.volunteer) beginWilt(q, "volunteer", now);
+      }
+      note(31, 420);
+      try { audio().thud(); } catch { /* noop */ }
+      try { haptics.chop(); } catch { /* noop */ }
     };
 
     const crossBloom = (p: Plant, loud: boolean) => {
@@ -649,6 +882,18 @@ export default function FlowersGarden() {
               }, i * 55);
             });
           windTarget = clamp(windTarget + 0.4 + depth * 0.4, -1, 1);
+          // ...and the top rung's own act, the largest thing this room does:
+          // a SEASON RACING the length of the garden. A front crosses the
+          // soil; every plant it passes runs bud → bloom → pollen → seed in
+          // its wake, and what the grains reach sets crossed seedlings behind
+          // the front.
+          seasonRace = {
+            x: 0,
+            u: 0,
+            speed: 0.28 + e.intensity * 0.22 + depth * 0.16,
+            gain: e.intensity + depth * 0.4,
+          };
+          try { audio().bell(); } catch { /* noop */ }
           try { haptics.ripple(0.5 + depth * 0.4); } catch { /* noop */ }
           return;
         }
@@ -683,15 +928,22 @@ export default function FlowersGarden() {
         if (trainTier === 3) {
           const p3 = plantAt(x, y);
           if (p3) {
-            // three taps shake the pollen loose — a rising arpeggio
+            // three taps shake the pollen loose — a rising arpeggio, and the
+            // grains actually leave the head. Where one lands on another open
+            // flower a seed sets that is half of each of them.
             fallPetals(p3.hx, p3.hy, [p3.species.palette.petal, p3.species.palette.heart], 4, false);
             swayPlant(p3, (x < p3.hx ? -1 : 1) * (0.8 + depth));
+            if (p3.geo && p3.geo.openness > 0.25) {
+              releasePollen(p3, 3 + Math.round(depth * 4 + e.intensity * 3), 0.3 + depth * 0.5);
+            } else {
+              // not open yet: the shake brings it on toward its bloom instead
+              advancePhase(p3, 0.06 + depth * 0.05, e.intensity);
+            }
             note(midiOf(p3.species), 90);
             window.setTimeout(() => note(midiOf(p3.species) + 4, 90), 80);
             window.setTimeout(() => note(midiOf(p3.species) + 7, 120), 170);
           } else {
-            burst(x, y, ["#E7AC52", "#F2EEE6"], 8 + Math.round(depth * 6), 30);
-            note(64 + Math.round(depth * 5), 90);
+            summonSoilEvent(x, y, e.intensity + depth * 0.3);
           }
           try { haptics.tap(); } catch { /* noop */ }
           return;
@@ -1416,6 +1668,150 @@ export default function FlowersGarden() {
         p.swayX += p.swayV * dt * timeScale;
       }
 
+      // ————— the physics BETWEEN plants —————
+      // Light and root space are finite and shared. A taller neighbour standing
+      // over a plant takes its light (shade is one-directional — a seedling
+      // never shades the flower above it); overlapping root discs share what
+      // the soil has. What is left is the plant's vigour, and vigour is what
+      // it grows and blooms on, so a crowded corner visibly thins itself.
+      {
+        const living = plants.filter((q) => q.wiltAt == null);
+        const rainOn = now < rainUntil;
+        const frostOn = now < frostUntil;
+        for (const p of living) {
+          const spread = canopySpread(p.species);
+          let shade = 0;
+          let root = 0;
+          for (const q of living) {
+            if (q === p) continue;
+            const dx = q.nx - p.nx;
+            if (Math.abs(dx) > 0.34) continue;
+            shade += shadeFrom(p.species.height, q.species.height, dx, spread + canopySpread(q.species) * 0.5);
+            root += rootOverlap(dx, 0.055 + p.species.height * 0.05, 0.055 + q.species.height * 0.05) * 0.6;
+          }
+          p.light = clamp01(1 - shade) * (rainOn ? 0.92 : 1) * (frostOn ? 0.7 : 1);
+          p.rootShare = clamp01(root);
+          const v = vigourOf(p.light, p.rootShare) * (rainOn ? 1.25 : 1) * (frostOn ? 0.55 : 1);
+          p.vigour += (clamp01(v) - p.vigour) * Math.min(1, dt * 0.9);
+          // a plant with enough of itself left grows on its own; one starved
+          // in somebody else's shadow stalls, and a volunteer there is lost
+          if (!reduce && p.phase > 0 && p.phase < 1) {
+            p.phase = clamp01(p.phase + dt * timeScale * 0.006 * p.vigour * seasonGrowthMul());
+            if (!p.bloomed && p.phase >= BLOOM_PEAK) crossBloom(p, false);
+          }
+          if (p.geo && p.geo.openness > 0.3) p.pollen = Math.min(1, p.pollen + dt * 0.14 * p.vigour);
+          if (p.volunteer && p.vigour < 0.12 && p.volAge > p.volLife * 0.2) beginWilt(p, "volunteer", now);
+        }
+
+        // — the pollinators, working the open heads —
+        for (let k = bees.length - 1; k >= 0; k--) {
+          const b = bees[k];
+          if (now - b.born > 42000) {
+            bees.splice(k, 1);
+            continue;
+          }
+          let target: Plant | null = null;
+          let bestD = Infinity;
+          for (const q of living) {
+            if (!q.geo || q.geo.openness < 0.25) continue;
+            if (q.id === b.carrying) continue;
+            const d = Math.hypot(q.hx - b.x, q.hy - b.y);
+            if (d < bestD) {
+              bestD = d;
+              target = q;
+            }
+          }
+          if (target) {
+            const d = Math.max(1, bestD);
+            b.vx += ((target.hx - b.x) / d) * 260 * dt;
+            b.vy += ((target.hy - b.y) / d) * 260 * dt;
+            if (bestD < Math.max(14, target.hr)) {
+              // it drinks, and what it was carrying fertilises this head
+              if (b.carrying && b.carrying !== target.id) {
+                const father = plants.find((q) => q.id === b.carrying);
+                if (father && target.geo && target.geo.openness > 0.25) {
+                  setSeedFrom(target, b.carrySeed, father.species.latent);
+                }
+              }
+              b.carrying = target.id;
+              b.carrySeed = target.seed;
+              target.pollen = Math.min(1, target.pollen + 0.2);
+              swayPlant(target, (twinkleHash(b.seed % 811) - 0.5) * 0.5);
+              b.vx *= -0.4;
+              b.vy *= -0.4;
+            }
+          }
+          b.vx += Math.sin(localT * 3.1 + b.seed % 7) * 40 * dt + wind * 30 * dt;
+          b.vy += Math.cos(localT * 2.7 + b.seed % 5) * 40 * dt;
+          b.vx *= Math.exp(-dt * 1.6);
+          b.vy *= Math.exp(-dt * 1.6);
+          b.x = clamp(b.x + b.vx * dt, 0, width);
+          b.y = clamp(b.y + b.vy * dt, 0, height);
+        }
+
+        // — the grains in flight: gravity, the wind, and where they land —
+        for (let k = grains.length - 1; k >= 0; k--) {
+          const g = grains[k];
+          const age = (now - g.born) / 1000;
+          if (age > 6 || g.y > height) {
+            grains.splice(k, 1);
+            continue;
+          }
+          g.vx += wind * 120 * dt;
+          g.vy += 26 * dt;
+          g.vx *= Math.exp(-dt * 0.7);
+          g.vy *= Math.exp(-dt * 0.7);
+          g.x += g.vx * dt;
+          g.y += g.vy * dt;
+          for (const q of living) {
+            if (q.id === g.fromId) continue;
+            if (!q.geo || q.geo.openness < 0.25) continue;
+            if (Math.hypot(q.hx - g.x, q.hy - g.y) > Math.max(12, q.hr * 0.9)) continue;
+            const father = plants.find((f) => f.id === g.fromId);
+            if (father) setSeedFrom(q, g.fromSeed, father.species.latent);
+            grains.splice(k, 1);
+            break;
+          }
+        }
+
+        // ————— the garden pollinates itself, with nobody here —————
+        if (nextPollenAt === 0) nextPollenAt = now + 7000;
+        if (now >= nextPollenAt && !reduce && !clearing) {
+          nextPollenAt = now + 8000 + volRng() * 12000;
+          const open = living.filter((q) => q.geo && q.geo.openness > 0.4 && q.pollen > 0.4);
+          if (open.length > 0) {
+            const pick = open[Math.floor(volRng() * open.length) % open.length];
+            releasePollen(pick, 2, 0.2 + Math.abs(wind) * 0.5);
+          } else if (bees.length === 0 && living.length > 1 && volRng() < 0.4) {
+            releaseBee(width * (0.1 + volRng() * 0.8), height * (0.3 + volRng() * 0.4));
+          }
+        }
+
+        // — the season racing the length of the garden (the top rung) —
+        if (seasonRace) {
+          const before = seasonRace.u;
+          seasonRace.u = Math.min(1, seasonRace.u + dt * timeScale * seasonRace.speed);
+          for (const p of living) {
+            if (p.nx > before && p.nx <= seasonRace.u) {
+              // the front reaches it: a whole season in one pass
+              p.phase = clamp01(Math.max(p.phase, BLOOM_PEAK + 0.05));
+              if (!p.bloomed) crossBloom(p, false);
+              p.over = Math.min(1, p.over + 0.4 + seasonRace.gain * 0.4);
+              p.pollen = 1;
+              releasePollen(p, 2 + Math.round(seasonRace.gain * 3), 0.6);
+              swayPlant(p, (twinkleHash(p.seed % 997) - 0.5) * (1.4 + seasonRace.gain));
+              note(midiOf(p.species), 90);
+            }
+          }
+          if (seasonRace.u >= 1) {
+            seasonRace = null;
+            try { audio().chime(); } catch { /* noop */ }
+            try { haptics.bloom(); } catch { /* noop */ }
+            save();
+          }
+        }
+      }
+
       // background — a garden after dark, lit by the candle families. Season
       // tints the wash toward its own light without leaving the palette.
       ctx.fillStyle = bgGrad ?? "#0a1214";
@@ -1460,6 +1856,54 @@ export default function FlowersGarden() {
       }
       if (removedPlanted) { save(true); syncPlanted(); }
       if (clearing && plants.every((p) => p.wiltAt == null)) clearing = false;
+
+      // the season's front, where one is running the garden
+      if (seasonRace) {
+        const fx = seasonRace.u * width;
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.strokeStyle = colorAlpha("#E7AC52", 0.16 + seasonRace.gain * 0.12);
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(fx, 0);
+        ctx.lineTo(fx, height);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // the grains in flight, and the pollinators working the heads
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (const g of grains) {
+        const age = (now - g.born) / 6000;
+        ctx.fillStyle = colorAlpha(g.color, (1 - age) * 0.75);
+        ctx.beginPath();
+        ctx.arc(g.x, g.y, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+      for (const b of bees) {
+        const flick = reduce ? 0 : Math.sin(localT * 26 + (b.seed % 13)) * 2.2;
+        ctx.fillStyle = colorAlpha("#E7AC52", 0.75);
+        ctx.beginPath();
+        ctx.ellipse(b.x, b.y, 3.2, 2.2, Math.atan2(b.vy, b.vx), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = colorAlpha("#F2EEE6", 0.4);
+        ctx.lineWidth = 0.8;
+        ctx.beginPath();
+        ctx.moveTo(b.x, b.y - 1);
+        ctx.lineTo(b.x - 3, b.y - 3 - flick);
+        ctx.moveTo(b.x, b.y - 1);
+        ctx.lineTo(b.x + 3, b.y - 3 + flick);
+        ctx.stroke();
+        // what it is carrying, riding on its back
+        if (b.carrying) {
+          ctx.fillStyle = colorAlpha("#F2C56B", 0.8);
+          ctx.beginPath();
+          ctx.arc(b.x, b.y - 2.4, 1.1, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
 
       // specks
       ctx.save();

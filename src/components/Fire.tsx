@@ -358,6 +358,27 @@ export default function Fire() {
     const wells: PressureWell[] = [];
     const strokes: HeatStroke[] = [];
 
+    // ── the bed's own fuel, a coarse strip along its width ────────────
+    // Real combustion, not a decal: every well burns down the fuel under
+    // it, starves and dies early where the bed is bare, and a well hot
+    // enough spreads to a fuel-rich neighbour on its own. Fuel slowly
+    // regrows over the room's slow cycle, so the bed is never permanently
+    // spent. This is the pure state Task 2 asks for — deterministic,
+    // fed only by taps and by the wells that already exist.
+    const FUEL_N = 28;
+    const fuel = new Float32Array(FUEL_N).fill(1);
+    const fuelIndex = (nx: number) => Math.max(0, Math.min(FUEL_N - 1, Math.round(nx * (FUEL_N - 1))));
+    const fuelAt = (nx: number) => fuel[fuelIndex(nx)];
+    const addFuel = (nx: number, amount: number) => {
+      const i0 = fuelIndex(nx);
+      for (let d = -1; d <= 1; d++) {
+        const i = i0 + d;
+        if (i < 0 || i >= FUEL_N) continue;
+        fuel[i] = Math.min(1, fuel[i] + amount * (d === 0 ? 1 : 0.4));
+      }
+    };
+    let lastSpreadAt = 0;
+
     let nextId = 1;
     let emberHint = 0;
     let activeStroke: HeatStroke | null = null;
@@ -588,27 +609,54 @@ export default function Fire() {
           return;
         }
         if (tier === 5) {
-          // the draft opens: a rising column pulls sparks straight up the flue
+          // tier 5 — the bed's biggest reachable event: flashover. Fuel
+          // permitting, the whole width catches at once — a real chain
+          // ignition read off the fuel bed, not a fixed pattern
           for (let i = 0; i < 18; i++) {
             const off = (i / 18 - 0.5) * 26;
             spawnEmber(p.x + off, p.y + Math.abs(off) * 0.4, off * 0.6 + wind * 40, -(240 + Math.random() * 200) * (0.8 + depth * 0.4), 1);
           }
+          const lanes = 6;
+          for (let i = 0; i < lanes; i++) {
+            const nx = (i + 0.5) / lanes;
+            if (fuelAt(nx) < 0.18) continue; // bare ground doesn't catch
+            addWell(nx * p.w, p.h * (0.78 + (i % 2) * 0.05), 0.7 + depth * 0.3);
+            addFuel(nx, -0.3); // the flashover itself burns down what it just lit
+          }
           ignitionAmp = Math.max(ignitionAmp, 0.5 + e.intensity * 0.2 + depth * 0.2);
           ignitionT0 = simNow;
           try { audio.chime(); } catch { /* noop */ }
-          try { haptics.ripple(0.5 + depth * 0.3); } catch { /* noop */ }
-          markFire("the draft opens", "#dcecff", 0.7 + depth * 0.2);
-          useField.getState().recordTape("ripple", 0.6 + depth * 0.2, "fire/draft");
+          try { audio.thud(); } catch { /* noop */ }
+          try { haptics.storm(); } catch { /* noop */ }
+          markFire("flashover", "#dcecff", 0.7 + depth * 0.2);
+          useField.getState().recordTape("ripple", 0.6 + depth * 0.2, "fire/flashover");
           return;
         }
         if (tier === 3) {
-          // a spark fountain hurled off the strike, sideways and up
+          // tier 3, near an existing well: it sparks a new flame off itself
+          // — a real child well, not a decal spark. On bare bed: fuel is
+          // laid down instead of ignition, so the next strike has something
+          // to catch.
+          let nearest: PressureWell | null = null;
+          let nearestD = 90;
+          for (const well of wells) {
+            const d = Math.hypot(well.x - p.x, well.y - p.y);
+            if (d < nearestD) { nearestD = d; nearest = well; }
+          }
           burst(p.x, p.y, 16 + Math.round(depth * 10), 0.85 + e.intensity * 0.4 + depth * 0.3);
+          if (nearest) {
+            const ang = Math.random() * Math.PI * 2;
+            const childX = clamp(nearest.x + Math.cos(ang) * 40, 8, p.w - 8);
+            addWell(childX, nearest.y + Math.sin(ang) * 18, nearest.strength * 0.7);
+            markFire("a flame sparks", "#f5b15a", 0.6 + depth * 0.25);
+          } else {
+            addFuel(p.x / Math.max(1, p.w), 0.35 + depth * 0.2);
+            markFire("fuel laid down", "#c8927a", 0.45 + depth * 0.2);
+          }
           ignitionAmp = Math.max(ignitionAmp, 0.38 + e.intensity * 0.2 + depth * 0.15);
           ignitionT0 = simNow;
           try { audio.spark(); } catch { /* noop */ }
           try { haptics.chop(); } catch { /* noop */ }
-          markFire("spark fountain", "#f5b15a", 0.55 + depth * 0.25);
           return;
         }
         // tap intensity is the strike: ember count, ignition and haptic
@@ -1047,9 +1095,55 @@ export default function Fire() {
 
       fx.clearRect(0, 0, w, h);
 
+      // ── the fire's own laws: fuel, starving, spreading, merging ──────
+      if (!reduce && w > 0) {
+        // every well burns down the fuel it sits on, and starves early
+        // where the bed is already bare — the strength that drawWell and
+        // the shader read is a real function of what's left to burn
+        for (const well of wells) {
+          const nx = well.x / w;
+          const local = fuelAt(nx);
+          fuel[fuelIndex(nx)] = Math.max(0, local - well.strength * step * 0.05);
+          if (local < 0.12) well.strength = Math.max(0, well.strength - step * 0.6);
+        }
+        // two wells whose reach overlaps merge into one — bigger, hotter,
+        // a third well that is neither parent
+        for (let i = 0; i < wells.length; i++) {
+          const a = wells[i];
+          for (let j = wells.length - 1; j > i; j--) {
+            const b = wells[j];
+            if (Math.hypot(a.x - b.x, a.y - b.y) > (a.radius + b.radius) * 0.32) continue;
+            a.strength = Math.min(1, a.strength + b.strength * 0.7);
+            a.radius = Math.min(340, Math.max(a.radius, b.radius) + 30);
+            a.x = (a.x + b.x) / 2;
+            a.y = (a.y + b.y) / 2;
+            a.t0 = simNow; // a merged well burns fresh, not on the older parent's clock
+            wells.splice(j, 1);
+            burst(a.x, a.y, 14, 1.1);
+            try { audio.thud(); } catch { /* noop */ }
+            try { haptics.bloom(); } catch { /* noop */ }
+          }
+        }
+        // a hot enough well spreads to a fuel-rich neighbour on the bed,
+        // at most a couple of times a second — real fire, not a tap echo
+        if (simNow - lastSpreadAt > 420) {
+          for (const well of wells) {
+            if (well.strength < 0.62 || wells.length >= 8) continue;
+            const dir = well.x > w / 2 ? -1 : 1;
+            const nx = clamp(well.x / w + dir * 0.07, 0.02, 0.98);
+            if (fuelAt(nx) < 0.35) continue;
+            lastSpreadAt = simNow;
+            addWell(nx * w, well.y, well.strength * 0.55);
+            break;
+          }
+        }
+        // fuel regrows slowly on its own — the bed is never permanently spent
+        for (let i = 0; i < FUEL_N; i++) fuel[i] = Math.min(1, fuel[i] + step * 0.01);
+      }
+
       for (let i = wells.length - 1; i >= 0; i--) {
         const well = wells[i];
-        if ((simNow - well.t0) / 1000 > 5.6) wells.splice(i, 1);
+        if ((simNow - well.t0) / 1000 > 5.6 || well.strength <= 0) wells.splice(i, 1);
         else drawWell(well, simNow);
       }
 

@@ -3,12 +3,20 @@
 /**
  * TravelPassage — the crossing as a place, without becoming a room.
  *
- * Most band crossings fade to ink and go (ScaleTravel.executeTravel). The
- * atlas ↔ stars edge is the album's trunk — the map recedes into the sky —
- * and that transition deserves to be traversed, not skipped: the parchment
- * chart curls onto a turning planet, the camera pulls back through near
- * orbit, and the sky thickens into stars. Travelling back down plays the
- * same film reversed. ~3.5s, and a tap anywhere skips to the end.
+ * Most band crossings fade to ink and go (ScaleTravel.executeTravel). A
+ * crossing that is worth traversing instead gets a film: a scene function of
+ * one coordinate u ∈ [0, 1] that draws what actually happens between those
+ * two scales. Travelling back down plays the same film reversed. ~2.2–3.6s,
+ * and a tap anywhere skips to the end.
+ *
+ * `makeFilm` below — the parchment chart curling onto a turning planet — was
+ * written for atlas ↔ stars and became the DEFAULT for every unregistered
+ * edge, which is how a visitor came to report that "many are just a spinning
+ * earth": the planet was playing between the quarks and the nucleons. It is
+ * now only the fallback of last resort. Every edge the scale graph actually
+ * walks resolves to its own film (`PASSAGES` in lib/travel-passage.ts,
+ * dispatched in `makeFilmFor`), and atlas ↔ stars has "starchart" — the
+ * chart re-projected into the sky it was always a piece of.
  *
  * Architecture: a registry (PASSAGES in lib/travel-passage.ts) keyed by travel
  * edge, consumed by the shared travel execution. Unregistered edges take the
@@ -1942,6 +1950,2304 @@ function makeFoldFilm(seed: number): Film {
   return { renderFrame };
 }
 
+// ——— The small-scale spine, quanta ↔ drop ————————————————————————————
+//
+// Ten films for the ten trunk edges the astronomical trunk left dark (the
+// whole quanta→quarks→nucleons→atoms→molecules→organics→dna→organelles→
+// cells→tissue→drop run used to fall back to a plain 2400ms breath — the
+// only films a visitor ever saw were the planetary ones). Each depicts the
+// actual physical relationship between its two scales, not a zoom:
+// excitations condensing into a bound triplet, confinement tubes drawing
+// closed, a nucleus receding as its cloud blooms, two clouds overlapping
+// into a bond, a backbone lengthening, a strand twisting shut into a helix,
+// the helix coiling into a membrane-bound body, a membrane closing around a
+// working interior, cells adhering into a sheet, and the sheet dissolving
+// into the water it lives in. All ten are quicker than the astronomical
+// films — nothing here needs 3.5s to read. Every one is a pure function of
+// u and a seed: randomness is drawn once at film-build time into fixed
+// arrays, never inside renderFrame, so the return leg's backward replay
+// lands on exactly the frames the outbound leg drew.
+
+// Color-charge triplet — the three primaries a bound state cancels to white.
+const CHARGE_RED: RGB = [214, 74, 66];
+const CHARGE_GREEN: RGB = [92, 186, 108];
+const CHARGE_BLUE: RGB = [88, 128, 224];
+const CHARGE_COLORS: RGB[] = [CHARGE_RED, CHARGE_GREEN, CHARGE_BLUE];
+
+/**
+ * quanta ↔ quarks — "quantum": the vacuum's seethe resolving into a bound
+ * triplet.
+ *   u = 0   virtual pairs flicker in and out everywhere, colorless, none
+ *           of them lasting
+ *   u ≈ 0.6 three of them stop flickering and take a color charge
+ *   u = 1   three color-charged points, tied by confinement tubes, standing
+ *           in a tight triangle — a quark triplet
+ * The rest of the seethe never stops; only the chosen three condense.
+ */
+function makeQuantumFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const FLICKER = 140;
+  const flicker: Array<{ x: number; y: number; ph: number; freq: number }> = [];
+  for (let i = 0; i < FLICKER; i++) {
+    flicker.push({ x: rng(), y: rng(), ph: rng() * TAU, freq: 3 + rng() * 5 });
+  }
+  const chargeSprites = CHARGE_COLORS.map((c) => makeGlowSprite(mix(c, PAPER, 0.3), c, 0.5));
+  // The three that condense: seeded scatter start → a fixed tight triangle.
+  const quarks = CHARGE_COLORS.map((_, i) => ({
+    sx: 0.32 + rng() * 0.36,
+    sy: 0.28 + rng() * 0.4,
+    ang: (i / 3) * TAU - Math.PI / 2,
+  }));
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+
+    // The seethe: always flickering, thinning as the triplet takes over.
+    const seetheA = 1 - smoothstep(0.4, 0.95, u) * 0.55;
+    for (const f of flicker) {
+      const v = 0.5 + 0.5 * Math.sin(f.ph + u * f.freq * TAU);
+      const a = Math.max(0, v - 0.35) * 1.4 * seetheA;
+      if (a <= 0.01) continue;
+      ctx.fillStyle = rgba(PAPER, a * 0.55);
+      ctx.fillRect(f.x * w, f.y * h, 1.1, 1.1);
+    }
+
+    const condense = easeInOut(smoothstep(0.15, 0.88, u));
+    const cx = w / 2;
+    const cy = h / 2;
+    const R = m * 0.1;
+    const pos = quarks.map((q) => {
+      const tx = cx + Math.cos(q.ang) * R;
+      const ty = cy + Math.sin(q.ang) * R;
+      return { x: lerp(q.sx * w, tx, condense), y: lerp(q.sy * h, ty, condense) };
+    });
+
+    // Confinement tubes: they draw closed as the triplet condenses.
+    const tubeA = smoothstep(0.3, 0.85, u);
+    if (tubeA > 0.01) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.lineWidth = Math.max(1, m * 0.006 * condense);
+      for (let i = 0; i < 3; i++) {
+        const a = pos[i];
+        const b = pos[(i + 1) % 3];
+        const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+        g.addColorStop(0, rgba(CHARGE_COLORS[i], 0.5 * tubeA));
+        g.addColorStop(1, rgba(CHARGE_COLORS[(i + 1) % 3], 0.5 * tubeA));
+        ctx.strokeStyle = g;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // The quarks themselves, gaining color as they condense.
+    const chargeIn = smoothstep(0.1, 0.7, u);
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (let i = 0; i < 3; i++) {
+      blitGlow(ctx, chargeSprites[i], pos[i].x, pos[i].y, m * (0.02 + condense * 0.035), 0.55 + 0.4 * chargeIn);
+    }
+    ctx.restore();
+  };
+
+  return { renderFrame };
+}
+
+/**
+ * quarks ↔ nucleons — "confine": the three confinement tubes drawing closed
+ * into one nucleon's skin.
+ *   u = 0   the quark triplet, spread in its confinement triangle, three
+ *           colors held apart by the tubes between them
+ *   u ≈ 0.6 the tubes draw closed, the colors blur toward white as they
+ *           cancel
+ *   u = 1   one nucleon: a single bound skin, no color visible from outside
+ * Confinement made visible: the triplet never separates, it only closes.
+ */
+function makeConfineFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const chargeSprites = CHARGE_COLORS.map((c) => makeGlowSprite(mix(c, PAPER, 0.3), c, 0.5));
+  const skinSprite = makeGlowSprite(mix(PAPER, CANDLE, 0.25), CANDLE, 0.4);
+  const quarks = CHARGE_COLORS.map((_, i) => ({ ang: (i / 3) * TAU - Math.PI / 2 }));
+  // A quiet scatter behind everything — the vacuum this nucleon sits in.
+  const dust: Array<{ x: number; y: number; ph: number }> = [];
+  for (let i = 0; i < 60; i++) dust.push({ x: rng(), y: rng(), ph: rng() * TAU });
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+
+    for (const d of dust) {
+      const a = 0.14 * (0.5 + 0.5 * Math.sin(d.ph + u * 4));
+      ctx.fillStyle = rgba(PAPER, a);
+      ctx.fillRect(d.x * w, d.y * h, 1, 1);
+    }
+
+    const close = easeInOut(smoothstep(0.08, 0.82, u));
+    const cx = w / 2;
+    const cy = h / 2;
+    const R = m * 0.16 * (1 - close * 0.94);
+    const pos = quarks.map((q) => ({
+      x: cx + Math.cos(q.ang) * R,
+      y: cy + Math.sin(q.ang) * R,
+    }));
+
+    const tubeA = 1 - smoothstep(0.55, 0.92, u) * 0.85;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.lineWidth = Math.max(1, m * 0.008);
+    for (let i = 0; i < 3; i++) {
+      const a = pos[i];
+      const b = pos[(i + 1) % 3];
+      const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+      g.addColorStop(0, rgba(CHARGE_COLORS[i], 0.55 * tubeA));
+      g.addColorStop(1, rgba(CHARGE_COLORS[(i + 1) % 3], 0.55 * tubeA));
+      ctx.strokeStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+    const colorA = 1 - smoothstep(0.5, 0.95, u);
+    if (colorA > 0.01) {
+      for (let i = 0; i < 3; i++) {
+        blitGlow(ctx, chargeSprites[i], pos[i].x, pos[i].y, m * 0.028, 0.7 * colorA);
+      }
+    }
+    ctx.restore();
+
+    // The skin: color-neutral, bound — it grows in as the colors cancel.
+    const skinA = smoothstep(0.35, 0.9, u);
+    if (skinA > 0.01) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      blitGlow(ctx, skinSprite, cx, cy, m * (0.05 + skinA * 0.09), 0.85 * skinA);
+      ctx.restore();
+      ctx.fillStyle = rgba(mix(PAPER, CANDLE, 0.15), 0.9 * skinA);
+      ctx.beginPath();
+      ctx.arc(cx, cy, m * 0.05 * skinA, 0, TAU);
+      ctx.fill();
+    }
+  };
+
+  return { renderFrame };
+}
+
+/**
+ * nucleons ↔ atoms — "shell": the nucleus receding to a point as the
+ * electron cloud's probability shells bloom around it. The real story of
+ * the atom — not a planet with moons, a point and the mostly-empty cloud
+ * around it.
+ *   u = 0   the nucleon fills the frame, a single bound skin
+ *   u ≈ 0.5 it recedes to a bright point at centre
+ *   u = 1   probability shells have bloomed around that point
+ */
+function makeShellFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const skinSprite = makeGlowSprite(mix(PAPER, CANDLE, 0.25), CANDLE, 0.4);
+  const SHELLS = 4;
+  // Electron specks: seeded angle + shell index + phase, radius fixed per shell.
+  const specks: Array<{ shell: number; ang: number; ph: number; drift: number }> = [];
+  for (let s = 0; s < SHELLS; s++) {
+    const n = 10 + s * 8;
+    for (let i = 0; i < n; i++) {
+      specks.push({ shell: s, ang: rng() * TAU, ph: rng() * TAU, drift: 0.4 + rng() * 0.8 });
+    }
+  }
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+    const cx = w / 2;
+    const cy = h / 2;
+
+    const recede = easeInOut(smoothstep(0.05, 0.55, u));
+    const nucR = lerp(m * 0.42, m * 0.012, recede);
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    blitGlow(ctx, skinSprite, cx, cy, Math.max(2, nucR * 1.6), 0.9);
+    ctx.restore();
+    ctx.fillStyle = rgba(mix(PAPER, CANDLE, 0.12), 0.95);
+    ctx.beginPath();
+    ctx.arc(cx, cy, Math.max(1, nucR * 0.5), 0, TAU);
+    ctx.fill();
+
+    // Shells bloom outward, outer ones later — mostly empty space between them.
+    const bloom = smoothstep(0.3, 0.98, u);
+    for (const sp of specks) {
+      const shellR = m * (0.06 + sp.shell * 0.09);
+      const reach = clamp01(bloom * (SHELLS + 1) - sp.shell);
+      if (reach <= 0) continue;
+      const r = shellR * (0.4 + 0.6 * reach);
+      const wobble = 1 + 0.06 * Math.sin(sp.ph + u * sp.drift * 6);
+      const x = cx + Math.cos(sp.ang + u * sp.drift) * r * wobble;
+      const y = cy + Math.sin(sp.ang + u * sp.drift) * r * wobble;
+      const tw = 0.5 + 0.5 * Math.sin(sp.ph + u * 5);
+      ctx.fillStyle = rgba(mix(AURORA, PAPER, 0.3), reach * tw * 0.55);
+      ctx.fillRect(x, y, 1.3, 1.3);
+    }
+    // A faint shell ring per level — the probability, not a boundary.
+    for (let s = 0; s < SHELLS; s++) {
+      const reach = clamp01(bloom * (SHELLS + 1) - s);
+      if (reach <= 0.02) continue;
+      ctx.strokeStyle = rgba(AURORA, 0.05 * reach);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(cx, cy, m * (0.06 + s * 0.09), 0, TAU);
+      ctx.stroke();
+    }
+  };
+
+  return { renderFrame };
+}
+
+/**
+ * atoms ↔ molecules — "bond": two clouds overlapping and a bond forming in
+ * the shared lobe.
+ *   u = 0   two clouds, each a nucleus point and its shell, apart
+ *   u ≈ 0.7 they overlap; a bond lobe brightens in the shared lens
+ *   u = 1   one molecule — two nuclei held by the shared electron pair
+ */
+function makeBondFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const cloudSprite = makeGlowSprite(mix(AURORA, PAPER, 0.3), AURORA, 0.35);
+  const nucSprite = makeGlowSprite(mix(PAPER, CANDLE, 0.25), CANDLE, 0.4);
+  const bondSprite = makeGlowSprite(PAPER, mix(PAPER, CANDLE, 0.4), 0.5);
+  const jitter = { a: rng() * TAU, b: rng() * TAU };
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+    const cy = h / 2;
+    const close = easeInOut(smoothstep(0.05, 0.85, u));
+    const sep = lerp(m * 0.42, m * 0.1, close);
+    const ax = w / 2 - sep;
+    const bx = w / 2 + sep;
+    const cloudR = m * 0.2;
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    blitGlow(ctx, cloudSprite, ax, cy, cloudR, 0.4);
+    blitGlow(ctx, cloudSprite, bx, cy, cloudR, 0.4);
+    ctx.restore();
+
+    // The bond: brightest where the clouds overlap.
+    const overlap = clamp01((cloudR * 2 - sep * 2) / (cloudR * 2));
+    if (overlap > 0.02) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const midx = (ax + bx) / 2;
+      blitGlow(ctx, bondSprite, midx, cy, cloudR * 0.55 * overlap, 0.85 * overlap);
+      ctx.restore();
+    }
+
+    const tw = (ph: number) => 0.8 + 0.2 * Math.sin(ph + u * 5);
+    ctx.fillStyle = rgba(mix(PAPER, CANDLE, 0.15), 0.95);
+    ctx.beginPath();
+    ctx.arc(ax, cy, m * 0.014 * tw(jitter.a), 0, TAU);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(bx, cy, m * 0.014 * tw(jitter.b), 0, TAU);
+    ctx.fill();
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    blitGlow(ctx, nucSprite, ax, cy, m * 0.03, 0.6);
+    blitGlow(ctx, nucSprite, bx, cy, m * 0.03, 0.6);
+    ctx.restore();
+  };
+
+  return { renderFrame };
+}
+
+const CHAIN_LINKS = 14;
+
+/**
+ * molecules ↔ organics — "chain": a chain lengthening, carbon backbone
+ * articulating.
+ *   u = 0   the bonded pair from the last edge, small, at centre
+ *   u = 1   a carbon backbone has articulated across the frame, zigzagging,
+ *           side groups snapping onto it as it lengthens
+ */
+function makeChainFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const nucSprite = makeGlowSprite(mix(PAPER, CANDLE, 0.25), CANDLE, 0.4);
+  const sideColors: RGB[] = [mix(AURORA, PAPER, 0.3), mix(SEA, PAPER, 0.35), mix(KEPT, PAPER, 0.3)];
+  const sides = Array.from({ length: CHAIN_LINKS }, () => ({
+    has: rng() > 0.5,
+    ang: rng() > 0.5 ? -1 : 1,
+    col: sideColors[Math.floor(rng() * sideColors.length)],
+  }));
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+    const cx = w / 2;
+    const cy = h / 2;
+
+    const grow = smoothstep(0.05, 0.95, u);
+    const span = lerp(m * 0.06, w * 0.78, easeInOut(grow));
+    const step = span / (CHAIN_LINKS - 1);
+    const amp = lerp(0, m * 0.05, smoothstep(0.1, 0.55, u));
+    const x0 = cx - span / 2;
+
+    const nodes: Array<{ x: number; y: number; a: number }> = [];
+    for (let i = 0; i < CHAIN_LINKS; i++) {
+      const reach = clamp01(grow * CHAIN_LINKS - i * 0.75);
+      const x = x0 + step * i;
+      const y = cy + (i % 2 === 0 ? -amp : amp);
+      nodes.push({ x, y, a: reach });
+    }
+
+    ctx.strokeStyle = rgba(mix(PAPER, CANDLE, 0.1), 0.6);
+    ctx.lineWidth = Math.max(1, m * 0.006);
+    ctx.beginPath();
+    let started = false;
+    for (const n of nodes) {
+      if (n.a < 0.05) continue;
+      if (!started) {
+        ctx.moveTo(n.x, n.y);
+        started = true;
+      } else {
+        ctx.lineTo(n.x, n.y);
+      }
+    }
+    ctx.stroke();
+
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      if (n.a < 0.05) continue;
+      ctx.save();
+      ctx.globalAlpha = n.a;
+      ctx.globalCompositeOperation = "lighter";
+      blitGlow(ctx, nucSprite, n.x, n.y, m * 0.016, 0.7);
+      ctx.restore();
+      ctx.fillStyle = rgba(mix(PAPER, CANDLE, 0.1), 0.9 * n.a);
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, m * 0.007, 0, TAU);
+      ctx.fill();
+
+      const s = sides[i];
+      if (s.has) {
+        const sideReach = clamp01((n.a - 0.4) / 0.6);
+        if (sideReach > 0.01) {
+          const sy = n.y + s.ang * amp * 1.3;
+          ctx.strokeStyle = rgba(s.col, 0.4 * sideReach);
+          ctx.lineWidth = Math.max(1, m * 0.004);
+          ctx.beginPath();
+          ctx.moveTo(n.x, n.y);
+          ctx.lineTo(n.x, sy);
+          ctx.stroke();
+          ctx.fillStyle = rgba(s.col, 0.85 * sideReach);
+          ctx.beginPath();
+          ctx.arc(n.x, sy, m * 0.009, 0, TAU);
+          ctx.fill();
+        }
+      }
+    }
+  };
+
+  return { renderFrame };
+}
+
+const HELIX_N = 22;
+const HELIX_TURNS = 2.6;
+const BASE_TINTS: RGB[] = [
+  mix(AURORA, PAPER, 0.2),
+  mix([200, 120, 150] as RGB, PAPER, 0.2),
+  mix(KEPT, PAPER, 0.15),
+  mix(SEA, PAPER, 0.25),
+];
+
+/**
+ * organics ↔ dna — "helix": the strand twisting closed into the double
+ * helix, base-pair rungs snapping in.
+ *   u = 0   the backbone, flat, from the last edge
+ *   u = 1   it has twisted closed into the double helix, rungs snapped in
+ *           as the strands wind
+ */
+function makeHelixFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const bases = Array.from({ length: HELIX_N }, () => Math.floor(rng() * BASE_TINTS.length));
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+    const cx = w / 2;
+    const cy = h / 2;
+    const span = h * 0.72;
+    const y0 = cy - span / 2;
+    const twist = easeInOut(smoothstep(0.05, 0.85, u));
+    const radius = m * 0.09 * twist;
+
+    const strandA: Array<{ x: number; y: number; z: number }> = [];
+    const strandB: Array<{ x: number; y: number; z: number }> = [];
+    for (let i = 0; i < HELIX_N; i++) {
+      const t = i / (HELIX_N - 1);
+      const ang = t * TAU * HELIX_TURNS;
+      const y = y0 + t * span;
+      strandA.push({ x: cx + Math.cos(ang) * radius, y, z: Math.sin(ang) });
+      strandB.push({ x: cx + Math.cos(ang + Math.PI) * radius, y, z: Math.sin(ang + Math.PI) });
+    }
+
+    const drawStrand = (pts: typeof strandA) => {
+      ctx.beginPath();
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        if (i === 0) ctx.moveTo(p.x, p.y);
+        else ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+    };
+    ctx.strokeStyle = rgba(mix(PAPER, CANDLE, 0.15), 0.75);
+    ctx.lineWidth = Math.max(1.2, m * 0.007);
+    drawStrand(strandA);
+    drawStrand(strandB);
+
+    // Rungs snap in progressively, back strand behind, front in front.
+    const rungIn = smoothstep(0.25, 0.98, u);
+    for (let i = 0; i < HELIX_N; i++) {
+      const reach = clamp01(rungIn * HELIX_N - i * 0.9);
+      if (reach <= 0.02) continue;
+      const a = strandA[i];
+      const b = strandB[i];
+      const depth = 0.5 + 0.5 * a.z;
+      ctx.strokeStyle = rgba(BASE_TINTS[bases[i]], 0.65 * reach * (0.4 + 0.6 * depth));
+      ctx.lineWidth = Math.max(1, m * 0.005) * (0.6 + 0.4 * depth);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+    // Backbone nodes, brighter once the twist has begun to open them out.
+    const nodeA = clamp01(twist * 4);
+    for (let i = 0; i < HELIX_N; i++) {
+      for (const p of [strandA[i], strandB[i]]) {
+        const depth = 0.5 + 0.5 * p.z;
+        ctx.fillStyle = rgba(mix(PAPER, CANDLE, 0.1), (0.5 + 0.5 * depth) * (0.3 + 0.7 * nodeA));
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, m * 0.006 * (0.6 + 0.4 * depth), 0, TAU);
+        ctx.fill();
+      }
+    }
+  };
+
+  return { renderFrame };
+}
+
+/**
+ * dna ↔ organelles — "chromatin": the helix coiling into chromatin and
+ * receding into a membrane-bound body.
+ *   u = 0   the double helix, small, at centre
+ *   u ≈ 0.5 it coils around a widening loop — supercoiling into chromatin
+ *   u = 1   condensed into a membrane-bound body, faint neighbour
+ *           organelles already keeping it company
+ */
+function makeChromatinFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const bases = Array.from({ length: HELIX_N }, () => Math.floor(rng() * BASE_TINTS.length));
+  const membraneSprite = makeGlowSprite(mix(AURORA, PAPER, 0.35), AURORA, 0.3);
+  const neighborTints: RGB[] = [mix(KEPT, PAPER, 0.3), mix(SEA, PAPER, 0.3), mix(CANDLE, PAPER, 0.35)];
+  const neighbors = neighborTints.map((col, i) => ({
+    ang: (i / neighborTints.length) * TAU + rng() * 0.6,
+    dist: 0.22 + rng() * 0.1,
+    r: 0.5 + rng() * 0.4,
+    col,
+  }));
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+    const cx = w / 2;
+    const cy = h / 2;
+
+    const coil = easeInOut(smoothstep(0.02, 0.6, u));
+    const condense = easeInOut(smoothstep(0.45, 0.98, u));
+    // The helix's own centreline sweeps a widening loop as it supercoils,
+    // then the whole assembly shrinks toward the organelle's seat.
+    const loopR = m * 0.1 * coil;
+    const scale = lerp(1, 0.16, condense);
+    const span = h * 0.5 * scale;
+
+    for (let i = 0; i < HELIX_N; i++) {
+      const t = i / (HELIX_N - 1);
+      const loopAng = t * TAU * 2.2;
+      const lx = cx + Math.cos(loopAng) * loopR * (1 - condense);
+      const ly = cy + Math.sin(loopAng) * loopR * (1 - condense) * 0.6 - span / 2 + t * span;
+      const ang = t * TAU * HELIX_TURNS;
+      const radius = m * 0.05 * scale;
+      const ax = lx + Math.cos(ang) * radius;
+      const bx = lx + Math.cos(ang + Math.PI) * radius;
+      const z = Math.sin(ang);
+      const depth = 0.5 + 0.5 * z;
+      ctx.fillStyle = rgba(BASE_TINTS[bases[i]], (0.35 + 0.35 * depth) * (1 - condense * 0.7));
+      ctx.beginPath();
+      ctx.arc(ax, ly, Math.max(0.6, m * 0.006 * (1 - condense * 0.6)), 0, TAU);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(bx, ly, Math.max(0.6, m * 0.006 * (1 - condense * 0.6)), 0, TAU);
+      ctx.fill();
+    }
+
+    // Faint neighbour organelles, keeping company as this one seals shut.
+    const neighborA = smoothstep(0.55, 0.98, u);
+    if (neighborA > 0.01) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (const n of neighbors) {
+        const nx = cx + Math.cos(n.ang) * m * n.dist;
+        const ny = cy + Math.sin(n.ang) * m * n.dist * 0.8;
+        blitGlow(ctx, membraneSprite, nx, ny, m * 0.05 * n.r, 0.3 * neighborA);
+      }
+      ctx.restore();
+    }
+
+    // The membrane closes around the condensed body.
+    const membraneA = smoothstep(0.55, 1, u);
+    if (membraneA > 0.01) {
+      ctx.strokeStyle = rgba(AURORA, 0.5 * membraneA);
+      ctx.lineWidth = Math.max(1, m * 0.006);
+      ctx.beginPath();
+      ctx.arc(cx, cy, m * 0.1 * scale + m * 0.02, 0, TAU);
+      ctx.stroke();
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      blitGlow(ctx, membraneSprite, cx, cy, m * 0.16 * scale + m * 0.03, 0.35 * membraneA);
+      ctx.restore();
+    }
+  };
+
+  return { renderFrame };
+}
+
+const MEMBRANE_LOBES = 9;
+
+/**
+ * organelles ↔ cells — "membrane": the membrane closing around a working
+ * interior.
+ *   u = 0   loose organelles, no boundary
+ *   u = 1   a membrane has closed around them; cytoplasm grain fills what
+ *           used to be empty frame
+ */
+function makeMembraneFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const wobble = new Float32Array(MEMBRANE_LOBES);
+  for (let i = 0; i < MEMBRANE_LOBES; i++) wobble[i] = rng();
+  const organelleTints: RGB[] = [
+    mix(AURORA, PAPER, 0.25),
+    mix(KEPT, PAPER, 0.3),
+    mix(SEA, PAPER, 0.3),
+    mix(CANDLE, PAPER, 0.3),
+  ];
+  // Sprites built once, outside the frame loop — never per organelle per frame.
+  const organelleSprites = organelleTints.map((c) => makeGlowSprite(mix(c, PAPER, 0.3), c, 0.35));
+  const organelles = organelleTints.map((col, i) => ({
+    freeAng: rng() * TAU,
+    freeDist: 0.3 + rng() * 0.35,
+    ang: (i / organelleTints.length) * TAU + rng() * 0.4,
+    dist: 0.14 + rng() * 0.16,
+    r: 0.5 + rng() * 0.4,
+    col,
+  }));
+  const grain: Array<{ x: number; y: number; a: number }> = [];
+  for (let i = 0; i < 90; i++) grain.push({ x: rng(), y: rng(), a: 0.3 + rng() * 0.5 });
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+    const cx = w / 2;
+    const cy = h / 2;
+    const close = easeInOut(smoothstep(0.1, 0.92, u));
+
+    // Organelles drift from loose scatter to their settled interior anchors.
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (let i = 0; i < organelles.length; i++) {
+      const o = organelles[i];
+      const fx = cx + Math.cos(o.freeAng) * m * o.freeDist;
+      const fy = cy + Math.sin(o.freeAng) * m * o.freeDist * 0.8;
+      const sx = cx + Math.cos(o.ang) * m * o.dist;
+      const sy = cy + Math.sin(o.ang) * m * o.dist * 0.8;
+      const x = lerp(fx, sx, close);
+      const y = lerp(fy, sy, close);
+      blitGlow(ctx, organelleSprites[i], x, y, m * 0.045 * o.r, 0.55);
+    }
+    ctx.restore();
+
+    // Cytoplasm grain fills in behind, once there is an inside to fill.
+    const grainA = smoothstep(0.3, 0.9, u);
+    if (grainA > 0.01) {
+      for (const g of grain) {
+        const dx = g.x - 0.5;
+        const dy = g.y - 0.5;
+        if (dx * dx + dy * dy > 0.22) continue;
+        ctx.fillStyle = rgba(mix(AURORA, PAPER, 0.4), grainA * g.a * 0.3);
+        ctx.fillRect(g.x * w, g.y * h, 1, 1);
+      }
+    }
+
+    // The membrane: a blobby closed curve, growing from a ring to the cell wall.
+    const membraneA = smoothstep(0.15, 0.7, u);
+    if (membraneA > 0.01) {
+      const baseR = lerp(m * 0.05, m * 0.4, close);
+      ctx.beginPath();
+      for (let i = 0; i <= MEMBRANE_LOBES; i++) {
+        const t = (i % MEMBRANE_LOBES) / MEMBRANE_LOBES;
+        const ang = t * TAU;
+        const wob = 1 + (wobble[i % MEMBRANE_LOBES] - 0.5) * 0.16;
+        const x = cx + Math.cos(ang) * baseR * wob;
+        const y = cy + Math.sin(ang) * baseR * wob;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.strokeStyle = rgba(mix(PAPER, AURORA, 0.3), 0.7 * membraneA);
+      ctx.lineWidth = Math.max(1.2, m * 0.008);
+      ctx.stroke();
+    }
+  };
+
+  return { renderFrame };
+}
+
+const SHEET_ROWS = 5;
+const SHEET_COLS = 5;
+
+/** A hex-tiled anchor grid, shared by the sheet and dissolve films so the
+ * tissue they both look at is the same mosaic. */
+function buildHexAnchors(): Array<{ x: number; y: number }> {
+  const out: Array<{ x: number; y: number }> = [];
+  for (let r = 0; r < SHEET_ROWS; r++) {
+    for (let c = 0; c < SHEET_COLS; c++) {
+      const x = 0.5 + (c - (SHEET_COLS - 1) / 2) * 0.19 + (r % 2 === 0 ? 0.095 : -0.095);
+      const y = 0.5 + (r - (SHEET_ROWS - 1) / 2) * 0.165;
+      out.push({ x, y });
+    }
+  }
+  return out;
+}
+
+/**
+ * cells ↔ tissue — "sheet": cells adhering into a sheet, junctions forming.
+ *   u = 0   one cell, membrane and all, centred and large
+ *   u = 1   a tessellated sheet of adhered cells, junctions glowing at
+ *           every shared edge
+ */
+function makeSheetFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const anchors = buildHexAnchors();
+  const centerI = Math.floor(anchors.length / 2);
+  const scatter = anchors.map((a, i) => (i === centerI ? a : { x: rng(), y: rng() }));
+  const membraneCol = mix(PAPER, AURORA, 0.3);
+  const cellR = 0.1;
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+
+    const settle = easeInOut(smoothstep(0.08, 0.85, u));
+    const zoomOut = lerp(2.6, 1, smoothstep(0.15, 0.95, u));
+    const cx = w / 2;
+    const cy = h / 2;
+
+    const cellIn = smoothstep(0.05, 0.7, u);
+    const pos = anchors.map((a, i) => {
+      const s = scatter[i];
+      const nx = lerp(s.x, a.x, settle);
+      const ny = lerp(s.y, a.y, settle);
+      return { x: cx + (nx - 0.5) * m * zoomOut, y: cy + (ny - 0.5) * m * zoomOut };
+    });
+
+    for (let i = 0; i < pos.length; i++) {
+      const reach = i === centerI ? 1 : clamp01(cellIn * pos.length - i * 0.3);
+      if (reach <= 0.02) continue;
+      const p = pos[i];
+      const r = m * cellR * zoomOut * (0.85 + 0.15 * reach);
+      ctx.fillStyle = rgba(mix(AURORA, NIGHT, 0.82), 0.5 * reach);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, TAU);
+      ctx.fill();
+      ctx.strokeStyle = rgba(membraneCol, 0.6 * reach);
+      ctx.lineWidth = Math.max(1, m * 0.004);
+      ctx.stroke();
+    }
+
+    // Adhesion junctions: bright points where neighbours have closed distance.
+    const junctionA = smoothstep(0.4, 0.98, u);
+    if (junctionA > 0.01) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (let i = 0; i < pos.length; i++) {
+        for (let j = i + 1; j < pos.length; j++) {
+          const dx = pos[i].x - pos[j].x;
+          const dy = pos[i].y - pos[j].y;
+          const d = Math.hypot(dx, dy);
+          const rr = m * cellR * zoomOut * 2.05;
+          if (d > rr) continue;
+          const mx = (pos[i].x + pos[j].x) / 2;
+          const my = (pos[i].y + pos[j].y) / 2;
+          ctx.fillStyle = rgba(PAPER, junctionA * 0.6);
+          ctx.beginPath();
+          ctx.arc(mx, my, Math.max(1, m * 0.005), 0, TAU);
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+  };
+
+  return { renderFrame };
+}
+
+/**
+ * tissue ↔ drop — "dissolve": the sheet dissolving into the water it lives
+ * in.
+ *   u = 0   the tessellated sheet, junctions and all
+ *   u = 1   the sheet has let go into the water — one drop, ripples
+ *           answering a surface no longer solid
+ */
+function makeDissolveFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const anchors = buildHexAnchors();
+  const jitter = anchors.map(() => ({ ph: rng() * TAU }));
+  const membraneCol = mix(PAPER, AURORA, 0.3);
+  const dropSprite = makeGlowSprite([150, 235, 250], [70, 150, 190], 0.4);
+  const cellR = 0.1;
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+    const cx = w / 2;
+    const cy = h / 2;
+
+    const erode = easeInOut(smoothstep(0.1, 0.85, u));
+    const gather = smoothstep(0.35, 0.98, u);
+
+    // The sheet's cells drift apart and lose their edges as they go.
+    const sheetA = 1 - smoothstep(0.3, 0.85, u);
+    if (sheetA > 0.02) {
+      for (let i = 0; i < anchors.length; i++) {
+        const a = anchors[i];
+        const j = jitter[i];
+        const spread = erode * 0.5;
+        const x = cx + (a.x - 0.5 + Math.cos(j.ph) * spread) * m;
+        const y = cy + (a.y - 0.5 + Math.sin(j.ph) * spread) * m;
+        const r = m * cellR * (1 - erode * 0.35);
+        ctx.fillStyle = rgba(mix(AURORA, NIGHT, 0.82), 0.4 * sheetA);
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, TAU);
+        ctx.fill();
+        ctx.strokeStyle = rgba(membraneCol, (0.55 - erode * 0.4) * sheetA);
+        ctx.lineWidth = Math.max(1, m * 0.004);
+        ctx.stroke();
+      }
+    }
+
+    // The drop: everything the sheet was made of, held now by surface tension.
+    if (gather > 0.01) {
+      const R = m * 0.32 * gather;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      blitGlow(ctx, dropSprite, cx, cy, R * 1.3, 0.6 * gather);
+      ctx.restore();
+      ctx.fillStyle = rgba([150, 220, 235], 0.35 * gather);
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, 0, TAU);
+      ctx.fill();
+      // Ripples, answering a surface no longer solid.
+      for (let k = 0; k < 3; k++) {
+        const rp = (u * 2.2 + k / 3) % 1;
+        ctx.strokeStyle = rgba([200, 240, 250], (1 - rp) * 0.3 * gather);
+        ctx.lineWidth = Math.max(1, m * 0.004);
+        ctx.beginPath();
+        ctx.arc(cx, cy, R * (0.3 + rp * 1.1), 0, TAU);
+        ctx.stroke();
+      }
+      // One highlight glint.
+      ctx.fillStyle = rgba(PAPER, 0.6 * gather);
+      ctx.beginPath();
+      ctx.ellipse(cx - R * 0.32, cy - R * 0.32, R * 0.14, R * 0.08, -0.6, 0, TAU);
+      ctx.fill();
+    }
+  };
+
+  return { renderFrame };
+}
+
+// ——— The doors both trunks left dark ————————————————————————————————
+//
+// Nine films for the eighteen edges that still resolved to the default
+// planet: the album's busiest hop (atlas ↔ stars — the literal spinning
+// earth a visitor reported, playing on a crossing it has nothing to do
+// with), the six human-scale doors of the living middle, and the two at the
+// top of the axis. Same law as the spine: every random element is drawn
+// ONCE at construction into fixed arrays, and renderFrame reads only `u`
+// and those arrays — so the return leg's backward replay lands on exactly
+// the frames the outbound leg drew, and a frame at u=0.42 is the same frame
+// whether it is the third drawn or the thirtieth.
+
+const SAND: RGB = [174, 156, 128];
+const WET_SAND: RGB = [120, 116, 108];
+const LEAF: RGB = [86, 120, 64];
+const LEAF_DEEP: RGB = [38, 60, 36];
+const GROUND: RGB = [104, 94, 70];
+const SKY_LOW: RGB = [190, 212, 226];
+const SKY_HIGH: RGB = [92, 134, 178];
+/** The drop's own water — the dissolve film's bead, so a drop is the same
+ * drop through every door it opens. */
+const DROP_CORE: RGB = [150, 220, 235];
+const DROP_RIM: RGB = [70, 150, 190];
+
+/**
+ * The wobble every coast film gives its shoreline — the strand film's own
+ * formula, shared so /coast reads as one shore whichever door the hand came
+ * through. Returns a signed offset in [-0.5, 0.5].
+ */
+function makeSwash(seed: number): (t: number, u: number) => number {
+  const n = makeNoise2(seed ^ 0x5a5b0e);
+  return (t, u) => fbm(n, t * 3.2 + u, 2.1, 3) - 0.5;
+}
+
+/** A folded ridge line — an arête, not a hill. Built once, read per frame. */
+function foldedRidge(n: Noise2, stops: number, freq: number, phase: number): Float32Array {
+  const arr = new Float32Array(stops);
+  for (let i = 0; i < stops; i++) {
+    const v = fbm(n, (i / (stops - 1)) * freq + phase, phase * 0.7, 4);
+    arr[i] = 1 - Math.abs(2 * v - 1);
+  }
+  return arr;
+}
+
+/**
+ * A bird as two strokes and a beat — shared by the two flock films, so the
+ * same flyer crosses the garden door and the shore door. `flap` ∈ [-1, 1]
+ * is the wing position, which the caller derives from u alone.
+ */
+function drawBird(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  span: number,
+  flap: number,
+  col: RGB,
+  alpha: number,
+): void {
+  if (alpha <= 0.01 || span <= 0.3) return;
+  const dy = -span * 0.5 * flap;
+  ctx.strokeStyle = rgba(col, alpha);
+  ctx.lineWidth = Math.max(0.7, span * 0.16);
+  ctx.beginPath();
+  ctx.moveTo(x - span, y + dy);
+  ctx.quadraticCurveTo(x - span * 0.45, y + dy * 0.2, x, y);
+  ctx.quadraticCurveTo(x + span * 0.45, y + dy * 0.2, x + span, y + dy);
+  ctx.stroke();
+}
+
+/** A bloom: a disc and a whorl of petals, the garden film's construction. */
+function drawBloom(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  r: number,
+  col: RGB,
+  alpha: number,
+  spin: number,
+): void {
+  if (alpha <= 0.02 || r <= 0.4) return;
+  ctx.fillStyle = rgba(mix(col, PAPER, 0.35), alpha * 0.75);
+  for (let p = 0; p < 5; p++) {
+    const ang = spin + (p * TAU) / 5;
+    ctx.beginPath();
+    ctx.ellipse(x + Math.cos(ang) * r * 0.95, y + Math.sin(ang) * r * 0.95, r * 0.6, r * 0.3, ang, 0, TAU);
+    ctx.fill();
+  }
+  ctx.fillStyle = rgba(col, alpha * 0.95);
+  ctx.beginPath();
+  ctx.arc(x, y, r * 0.55, 0, TAU);
+  ctx.fill();
+}
+
+const STARCHART_STARS = 240;
+const STARCHART_MERIDIANS = 9;
+const STARCHART_PARALLELS = 5;
+const LAND_STOPS = 30;
+
+/**
+ * atlas ↔ stars — "starchart": one world's chart re-projected into a sky of
+ * many suns. The busiest hop in the album, and until now the one playing the
+ * default planet.
+ *   u = 0   the chart: parchment, a sea tint, ink coasts, the ruled
+ *           graticule, and the settlements marked as ink dots
+ *   u ≈ 0.5 the graticule bends — meridians converging on a pole, parallels
+ *           closing into circles. The same instrument, re-aimed
+ *   u = 1   a polar star chart. The paper has gone to night, the ruled ink
+ *           is ruled light, every mark that stood for a place on one world
+ *           is a sun with its own distance, and the cartographer's hand
+ *           rules lines between them
+ * The coastlines, the graticule and the place-marks all travel through one
+ * projection function, so nothing is cross-faded over anything: the single
+ * drawing is bent from a sheet into a dome.
+ */
+function makeStarChartFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const n = makeNoise2(seed ^ 0x57a4c4);
+  // Landmasses as closed contours in sheet space — the chart's ink.
+  const lands: Float32Array[] = [];
+  for (let l = 0; l < 4; l++) {
+    const lx = -0.55 + rng() * 1.1;
+    const ly = -0.5 + rng() * 1;
+    const rad = 0.13 + rng() * 0.18;
+    const wob = 0.35 + rng() * 0.5;
+    const ph = rng() * TAU;
+    const pts = new Float32Array(LAND_STOPS * 2);
+    for (let i = 0; i < LAND_STOPS; i++) {
+      const t = (i / LAND_STOPS) * TAU;
+      const rr =
+        rad *
+        (1 +
+          wob *
+            (fbm(n, Math.cos(t + ph) * 1.5 + l * 6.3, Math.sin(t + ph) * 1.5 + l * 2.1, 3) - 0.5));
+      pts[i * 2] = lx + Math.cos(t) * rr * 1.3;
+      pts[i * 2 + 1] = ly + Math.sin(t) * rr;
+    }
+    lands.push(pts);
+  }
+  // Each star keeps a seat on the sheet. The bright ones are the settlements
+  // the cartographer marked, and those are the ones that become suns.
+  const stars: Array<{ a: number; b: number; mag: number; warm: boolean; ph: number }> = [];
+  for (let i = 0; i < STARCHART_STARS; i++) {
+    stars.push({
+      a: -1 + rng() * 2,
+      b: -1 + rng() * 2,
+      mag: rng(),
+      warm: rng() > 0.87,
+      ph: rng() * TAU,
+    });
+  }
+  const glowSprite = makeGlowSprite(PAPER, CANDLE, 0.45);
+  // Constellation lines: each bright star to its nearest bright neighbour,
+  // measured in the sky the film lands on — computed once, at build time.
+  const bright: number[] = [];
+  for (let i = 0; i < stars.length; i++) if (stars[i].mag > 0.88) bright.push(i);
+  const skyX = (s: { a: number; b: number }) => Math.sin(s.a * Math.PI) * (0.05 + (s.b + 1) * 0.23);
+  const skyY = (s: { a: number; b: number }) => -Math.cos(s.a * Math.PI) * (0.05 + (s.b + 1) * 0.23);
+  const links: Array<[number, number]> = [];
+  for (const i of bright) {
+    let best = -1;
+    let bestD = Infinity;
+    for (const j of bright) {
+      if (j === i) continue;
+      const d = (skyX(stars[i]) - skyX(stars[j])) ** 2 + (skyY(stars[i]) - skyY(stars[j])) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = j;
+      }
+    }
+    if (best < 0) continue;
+    const p = Math.min(i, best);
+    const q = Math.max(i, best);
+    if (!links.some(([x, y]) => x === p && y === q)) links.push([p, q]);
+  }
+
+  // One scratch point — the projection runs some hundreds of times a frame
+  // and must not allocate.
+  const P = { x: 0, y: 0 };
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    const morph = easeInOut(smoothstep(0.05, 0.9, u));
+    const dark = smoothstep(0.15, 0.6, u);
+    const spin = morph * 0.42;
+
+    /** Sheet coordinates → screen, bent from the flat chart to the dome.
+     * The sheet's two vertical edges meet at the antimeridian, so the sky
+     * closes: a full turn, not a fan with a seam left open in it. */
+    const project = (a: number, b: number): void => {
+      const az = a * Math.PI + spin;
+      const rho = (0.05 + (b + 1) * 0.23) * m;
+      P.x = lerp(w / 2 + a * w * 0.52, w / 2 + Math.sin(az) * rho, morph);
+      P.y = lerp(h / 2 + b * h * 0.52, h / 2 - Math.cos(az) * rho, morph);
+    };
+
+    ctx.fillStyle = rgba(mix(PAPER, NIGHT, dark), 1);
+    ctx.fillRect(0, 0, w, h);
+    const paper = 1 - dark;
+    if (paper > 0.02) {
+      ctx.fillStyle = rgba(SEA, 0.1 * paper);
+      ctx.fillRect(0, 0, w, h);
+    }
+
+    // Land: filled while there is paper to fill, then only its ink coast,
+    // then nothing but the sky it was bent into.
+    // The ink has to be gone before the sheet's two edges meet, or a coast
+    // that straddles the antimeridian draws a chord across the whole sky.
+    const landA = (1 - smoothstep(0.1, 0.42, u)) * 0.9;
+    const coastA = (1 - smoothstep(0.2, 0.54, u)) * 0.85;
+    if (landA > 0.01 || coastA > 0.01) {
+      for (const pts of lands) {
+        ctx.beginPath();
+        for (let i = 0; i < LAND_STOPS; i++) {
+          project(pts[i * 2], pts[i * 2 + 1]);
+          if (i === 0) ctx.moveTo(P.x, P.y);
+          else ctx.lineTo(P.x, P.y);
+        }
+        ctx.closePath();
+        if (landA > 0.01) {
+          ctx.fillStyle = rgba(mix(PAPER2, KEPT, 0.34), landA);
+          ctx.fill();
+        }
+        if (coastA > 0.01) {
+          ctx.strokeStyle = rgba(mix(INK, PAPER, morph * 0.7), coastA);
+          ctx.lineWidth = Math.max(1, m * 0.003);
+          ctx.stroke();
+        }
+      }
+    }
+
+    // The graticule is the one thing that survives the crossing intact:
+    // ruled in ink on the paper, ruled in light on the sky, bent between.
+    ctx.strokeStyle = rgba(mix(INK, mix(PAPER, CANDLE, 0.35), morph), lerp(0.3, 0.17, morph));
+    ctx.lineWidth = 1;
+    for (let i = 0; i < STARCHART_MERIDIANS; i++) {
+      const a = -1 + (2 * i) / (STARCHART_MERIDIANS - 1);
+      ctx.beginPath();
+      for (let k = 0; k <= 20; k++) {
+        project(a, -1 + (2 * k) / 20);
+        if (k === 0) ctx.moveTo(P.x, P.y);
+        else ctx.lineTo(P.x, P.y);
+      }
+      ctx.stroke();
+    }
+    for (let j = 0; j < STARCHART_PARALLELS; j++) {
+      const b = -1 + (2 * j) / (STARCHART_PARALLELS - 1);
+      ctx.beginPath();
+      for (let k = 0; k <= 40; k++) {
+        project(-1 + (2 * k) / 40, b);
+        if (k === 0) ctx.moveTo(P.x, P.y);
+        else ctx.lineTo(P.x, P.y);
+      }
+      ctx.stroke();
+    }
+
+    // The marks. Ink first, light after — and the faint ones were never on
+    // the chart at all, they only need the paper out of the way.
+    for (const s of stars) {
+      const isMark = s.mag > 0.72;
+      const inkA = isMark ? (1 - smoothstep(0.2, 0.55, u)) * 0.7 : 0;
+      const lightA =
+        smoothstep(isMark ? 0.25 : 0.42, isMark ? 0.62 : 0.9, u) * (0.35 + 0.65 * s.mag);
+      if (inkA <= 0.01 && lightA <= 0.01) continue;
+      project(s.a, s.b);
+      if (inkA > 0.01) {
+        ctx.fillStyle = rgba(INK, inkA);
+        ctx.fillRect(P.x - 1, P.y - 1, 2, 2);
+      }
+      if (lightA > 0.01) {
+        const r = 0.6 + s.mag * 1.5;
+        const tw = 0.72 + 0.28 * Math.sin(s.ph + u * 8);
+        ctx.fillStyle = rgba(s.warm ? CANDLE : PAPER, lightA * tw);
+        ctx.fillRect(P.x - r / 2, P.y - r / 2, r, r);
+      }
+    }
+
+    const glowA = smoothstep(0.6, 0.95, u);
+    if (glowA > 0.01) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (const i of bright) {
+        project(stars[i].a, stars[i].b);
+        blitGlow(ctx, glowSprite, P.x, P.y, m * 0.022 * (0.6 + stars[i].mag), 0.35 * glowA);
+      }
+      ctx.restore();
+    }
+
+    // And the same hand rules lines between them — a coastline of suns.
+    const linkA = smoothstep(0.72, 0.98, u);
+    if (linkA > 0.01) {
+      ctx.strokeStyle = rgba(mix(PAPER, CANDLE, 0.35), 0.22 * linkA);
+      ctx.lineWidth = 1;
+      for (const [a, b] of links) {
+        project(stars[a].a, stars[a].b);
+        const x0 = P.x;
+        const y0 = P.y;
+        project(stars[b].a, stars[b].b);
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(P.x, P.y);
+        ctx.stroke();
+      }
+    }
+  };
+
+  return { renderFrame };
+}
+
+const LAMINA_VEINS = 9;
+
+/**
+ * tissue ↔ flowers — "lamina": a sheet of cells resolving into the leaf it
+ * is a slice of.
+ *   u = 0   the mosaic fills the frame — adhered cells with their membranes,
+ *           the tissue room's own material
+ *   u ≈ 0.5 veins arrive through the mosaic: the sheet turns out to be
+ *           plumbed, and the plumbing has a direction
+ *   u = 1   one blade in the garden's light, its cells still there as grain
+ * Nothing cross-fades: the same cells are on screen the whole way, they
+ * simply stop being the subject.
+ */
+function makeLaminaFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  /** Half the blade's width at t ∈ [0, 1] from tip to base — lanceolate. */
+  const halfW = (t: number) => 0.58 * Math.pow(Math.sin(Math.PI * clamp01(t)), 0.72);
+  const cells: Array<{ x: number; y: number; r: number; tint: number }> = [];
+  for (let row = 0; row < 21; row++) {
+    const ly = -1 + (row / 20) * 2;
+    const half = halfW((ly + 1) / 2);
+    for (let col = -6; col <= 6; col++) {
+      const lx = col * 0.1 + (row % 2 === 0 ? 0.05 : -0.05);
+      if (Math.abs(lx) > half - 0.035) continue;
+      // Jittered, and each its own size: a mosaic, not graph paper.
+      cells.push({
+        x: lx + (rng() - 0.5) * 0.03,
+        y: ly + (rng() - 0.5) * 0.03,
+        r: 0.036 + rng() * 0.016,
+        tint: rng(),
+      });
+    }
+  }
+  const veins = Array.from({ length: LAMINA_VEINS }, (_, i) => ({
+    t: 0.2 + (i / (LAMINA_VEINS - 1)) * 0.62,
+    side: i % 2 === 0 ? 1 : -1,
+    reach: 0.74 + rng() * 0.2,
+  }));
+  const neighbours = Array.from({ length: 3 }, () => ({
+    x: rng(),
+    y: 0.1 + rng() * 0.8,
+    r: 0.2 + rng() * 0.2,
+    ang: (rng() - 0.5) * 1.4,
+  }));
+  const bloomHint = { x: 0.18 + rng() * 0.16, y: 0.16 + rng() * 0.14, ph: rng() * TAU };
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    const open = smoothstep(0.15, 0.8, u);
+    const zoom = lerp(6.2, 1, easeInOut(smoothstep(0.05, 0.95, u)));
+    const S = m * 0.46 * zoom;
+    const cx = w / 2;
+    const cy = h / 2;
+
+    ctx.fillStyle = rgba(mix(NIGHT, LEAF_DEEP, smoothstep(0.3, 0.95, u)), 1);
+    ctx.fillRect(0, 0, w, h);
+
+    // Out-of-focus neighbours: the garden this blade is one leaf of.
+    const nbA = smoothstep(0.68, 0.98, u);
+    if (nbA > 0.01) {
+      for (const nb of neighbours) {
+        ctx.save();
+        ctx.translate(nb.x * w, nb.y * h);
+        ctx.rotate(nb.ang);
+        ctx.fillStyle = rgba(mix(LEAF_DEEP, NIGHT, 0.35), 0.5 * nbA);
+        ctx.beginPath();
+        ctx.ellipse(0, 0, nb.r * m * 0.5, nb.r * m, 0, 0, TAU);
+        ctx.fill();
+        ctx.restore();
+      }
+      drawBloom(
+        ctx,
+        bloomHint.x * w,
+        bloomHint.y * h,
+        m * 0.11,
+        mix(CANDLE, PAPER, 0.3),
+        0.4 * nbA,
+        bloomHint.ph + u,
+      );
+    }
+
+    // The blade: the substrate the cells were always sitting in, becoming
+    // chlorophyll as the frame widens enough to show what it is.
+    ctx.beginPath();
+    for (let i = 0; i <= 40; i++) {
+      const t = i / 40;
+      const x = cx + halfW(t) * S;
+      const y = cy + (-1 + t * 2) * S;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    for (let i = 40; i >= 0; i--) {
+      const t = i / 40;
+      ctx.lineTo(cx - halfW(t) * S, cy + (-1 + t * 2) * S);
+    }
+    ctx.closePath();
+    ctx.fillStyle = rgba(mix(mix(AURORA, NIGHT, 0.86), mix(LEAF, LEAF_DEEP, 0.4), open), 1);
+    ctx.fill();
+    if (open > 0.2) {
+      ctx.strokeStyle = rgba(mix(LEAF, PAPER, 0.35), 0.45 * open);
+      ctx.lineWidth = Math.max(1, m * 0.003);
+      ctx.stroke();
+    }
+
+    // The cells — cull what the zoom has pushed off the frame.
+    const cellStroke = mix(PAPER, AURORA, 0.3);
+    for (const c of cells) {
+      const x = cx + c.x * S;
+      const y = cy + c.y * S;
+      const r = c.r * S;
+      if (x + r < 0 || x - r > w || y + r < 0 || y - r > h) continue;
+      ctx.fillStyle = rgba(
+        mix(mix(AURORA, NIGHT, 0.78), mix(LEAF, PAPER, 0.1 + c.tint * 0.2), open),
+        lerp(0.5, 0.32, open),
+      );
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, TAU);
+      ctx.fill();
+      if (r > 1.4) {
+        ctx.strokeStyle = rgba(cellStroke, (0.55 - open * 0.32) * clamp01(r / 3));
+        ctx.lineWidth = Math.max(0.8, m * 0.004 * zoom * 0.2);
+        ctx.stroke();
+      }
+    }
+
+    // The plumbing: midrib first, then the secondaries out to the margin.
+    const veinA = smoothstep(0.28, 0.72, u);
+    if (veinA > 0.01) {
+      const veinCol = mix(PAPER, LEAF, 0.45);
+      ctx.strokeStyle = rgba(veinCol, 0.55 * veinA);
+      ctx.lineWidth = Math.max(1.2, m * 0.006 * Math.min(2.2, zoom));
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - S * 0.97);
+      ctx.lineTo(cx, cy + S * 0.97);
+      ctx.stroke();
+      ctx.lineWidth = Math.max(0.9, m * 0.003 * Math.min(2.2, zoom));
+      for (let i = 0; i < veins.length; i++) {
+        const v = veins[i];
+        const reach = clamp01(veinA * (veins.length + 1) - i);
+        if (reach <= 0.02) continue;
+        const t2 = Math.max(0.04, v.t - 0.16);
+        const y0 = cy + (-1 + v.t * 2) * S;
+        const x1 = cx + v.side * halfW(t2) * v.reach * S * reach;
+        const y1 = cy + (-1 + t2 * 2) * S;
+        ctx.strokeStyle = rgba(veinCol, 0.4 * reach * veinA);
+        ctx.beginPath();
+        ctx.moveTo(cx, y0);
+        ctx.quadraticCurveTo(cx + (x1 - cx) * 0.5, y0 - S * 0.04, x1, y1);
+        ctx.stroke();
+      }
+    }
+  };
+
+  return { renderFrame };
+}
+
+/**
+ * drop ↔ coast — "tension": one bead among a shoreline of them. The bead's
+ * own rim IS the shoreline; it only has to grow until the curvature is the
+ * sea's instead of a drop's.
+ *   u = 0   one drop, held together by its surface, filling the frame
+ *   u ≈ 0.5 it is one bead among others left on wet sand
+ *   u = 1   the same curve at the sea's radius — the swash line, foamed,
+ *           with the same water inside it
+ */
+function makeTensionFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const swash = makeSwash(seed);
+  const dropSprite = makeGlowSprite(DROP_CORE, DROP_RIM, 0.4);
+  const beads = Array.from({ length: 15 }, () => ({
+    x: 0.06 + rng() * 0.88,
+    y: 0.5 + rng() * 0.46,
+    r: 0.007 + rng() * 0.02,
+    at: rng(),
+  }));
+  const foam = Array.from({ length: 44 }, () => ({ t: rng(), off: rng(), ph: rng() * TAU }));
+  const glint = Array.from({ length: 30 }, () => ({ t: rng(), d: rng(), ph: rng() * TAU }));
+  const grain = Array.from({ length: 120 }, () => ({ x: rng(), y: rng(), s: rng() }));
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    const grow = easeInOut(smoothstep(0.06, 0.94, u));
+    const R = lerp(m * 0.33, m * 7.2, grow);
+    const cx = w / 2;
+    const cy = lerp(h * 0.5 + m * 0.33, h * 0.42, grow) - R;
+    const sea = smoothstep(0.28, 0.9, u);
+    /** The water's edge at this x — the bead's limb, wherever it has got to. */
+    const limbY = (x: number): number => {
+      const dx = x - cx;
+      return dx * dx >= R * R ? Infinity : cy + Math.sqrt(R * R - dx * dx);
+    };
+
+    ctx.fillStyle = rgba(mix(NIGHT, SAND, sea), 1);
+    ctx.fillRect(0, 0, w, h);
+    // Sand is grained, and the band nearest the water stays wet — but only
+    // the sand: an overlay across the whole frame would tint the sea too.
+    if (sea > 0.05) {
+      for (const gr of grain) {
+        const gy = gr.y * h;
+        const gx = gr.x * w;
+        if (gy < limbY(gx)) continue;
+        ctx.fillStyle = rgba(gr.s > 0.6 ? WET_SAND : mix(SAND, PAPER, 0.3), 0.3 * sea * gr.s);
+        ctx.fillRect(gx, gy, 1 + gr.s, 1 + gr.s);
+      }
+      ctx.fillStyle = rgba(WET_SAND, 0.4 * sea);
+      ctx.beginPath();
+      for (let i = 0; i <= 48; i++) {
+        const x = (i / 48) * w;
+        const y = limbY(x);
+        ctx.lineTo(x, isFinite(y) ? y : h);
+      }
+      for (let i = 48; i >= 0; i--) {
+        const x = (i / 48) * w;
+        const y = limbY(x);
+        ctx.lineTo(x, (isFinite(y) ? y : h) + h * 0.12);
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // The bead. Its rim takes the shore's wobble only once it is wide enough
+    // for a wobble to mean anything.
+    const wob = m * 0.028 * smoothstep(0.3, 1, u);
+    ctx.beginPath();
+    for (let i = 0; i <= 84; i++) {
+      const th = (i / 84) * TAU;
+      const rr = R + wob * swash(i / 84, u) * 2;
+      const x = cx + Math.sin(th) * rr;
+      const y = cy + Math.cos(th) * rr;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = rgba(mix(DROP_CORE, mix(SEA, SKY_LOW, 0.22), sea), lerp(0.45, 0.94, sea));
+    ctx.fill();
+    ctx.strokeStyle = rgba(mix(PAPER, DROP_CORE, 0.4), 0.45 + 0.3 * sea);
+    ctx.lineWidth = Math.max(1.2, m * 0.005);
+    ctx.stroke();
+
+    // While it is still a bead: its own light, and the one highlight that
+    // says a curved surface is holding it.
+    if (R < m * 1.4) {
+      const beadA = 1 - smoothstep(0.2, 0.62, u);
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      blitGlow(ctx, dropSprite, cx, cy, R * 1.25, 0.5 * beadA);
+      ctx.restore();
+      if (beadA > 0.01) {
+        ctx.fillStyle = rgba(PAPER, 0.55 * beadA);
+        ctx.beginPath();
+        ctx.ellipse(cx - R * 0.3, cy - R * 0.32, R * 0.15, R * 0.08, -0.6, 0, TAU);
+        ctx.fill();
+      }
+    }
+
+    // The shoreline of beads it turns out to be one of.
+    const beadIn = smoothstep(0.26, 0.72, u);
+    if (beadIn > 0.01) {
+      for (const b of beads) {
+        const a = clamp01(beadIn * 2 - b.at * 0.9) * (1 - smoothstep(0.92, 1, u) * 0.3);
+        if (a <= 0.02) continue;
+        const bx = b.x * w;
+        const by = b.y * h;
+        if (by < limbY(bx) + m * 0.01) continue; // beads live on the sand
+        const br = b.r * m;
+        ctx.fillStyle = rgba(mix(DROP_CORE, SAND, 0.3), 0.5 * a);
+        ctx.beginPath();
+        ctx.arc(bx, by, br, 0, TAU);
+        ctx.fill();
+        ctx.fillStyle = rgba(PAPER, 0.5 * a);
+        ctx.beginPath();
+        ctx.arc(bx - br * 0.3, by - br * 0.32, Math.max(0.5, br * 0.22), 0, TAU);
+        ctx.fill();
+      }
+    }
+
+    // Foam where the water's edge lands, and glitter on what it opens onto.
+    const foamA = smoothstep(0.45, 0.85, u);
+    if (foamA > 0.01) {
+      for (const f of foam) {
+        const x = f.t * w;
+        const y = limbY(x);
+        if (!isFinite(y)) continue;
+        const tw = 0.45 + 0.45 * Math.sin(f.ph + u * 7);
+        ctx.fillStyle = rgba(PAPER, foamA * tw * 0.7);
+        ctx.beginPath();
+        ctx.arc(x, y + (f.off - 0.5) * m * 0.024, 0.8 + f.off * 2, 0, TAU);
+        ctx.fill();
+      }
+    }
+    const glitA = smoothstep(0.55, 0.95, u);
+    if (glitA > 0.01) {
+      for (const g of glint) {
+        const x = g.t * w;
+        const y0 = limbY(x);
+        if (!isFinite(y0)) continue;
+        const tw = 0.5 + 0.5 * Math.sin(g.ph + u * 9);
+        ctx.fillStyle = rgba(PAPER, glitA * tw * 0.45 * (1 - g.d));
+        ctx.fillRect(x, y0 - h * 0.02 - g.d * h * 0.3, 1.6, 1.6);
+      }
+    }
+  };
+
+  return { renderFrame };
+}
+
+const DEW_PETALS = 7;
+
+/**
+ * drop ↔ flowers — "dew": the bead settles onto a petal. The scale graph's
+ * own reason for this door, drawn: "a petal is tissue before it is one cell;
+ * dew gathers on them too" (TRAVEL_OVERRIDES, src/lib/scale.ts).
+ *   u = 0   the drop, filling the frame
+ *   u ≈ 0.6 it has shrunk to a bead resting on a petal, flattened a little
+ *           where it wets it, with the petal's edge running backwards
+ *           through it — a lens does that
+ *   u = 1   the bloom is open and beaded all along its margins
+ */
+function makeDewFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const dropSprite = makeGlowSprite(DROP_CORE, DROP_RIM, 0.4);
+  const petalCols: RGB[] = [
+    mix(CANDLE, PAPER, 0.3),
+    mix(KEPT, PAPER, 0.38),
+    mix([180, 90, 110] as RGB, PAPER, 0.32),
+  ];
+  const petals = Array.from({ length: DEW_PETALS }, (_, i) => ({
+    ang: -0.95 + (i / (DEW_PETALS - 1)) * 1.9 + (rng() - 0.5) * 0.12,
+    len: 0.72 + rng() * 0.22,
+    wid: 0.12 + rng() * 0.05,
+    col: petalCols[i % petalCols.length],
+  }));
+  const behind = Array.from({ length: 4 }, () => ({
+    x: rng(),
+    y: 0.12 + rng() * 0.5,
+    r: 0.07 + rng() * 0.07,
+    col: petalCols[Math.floor(rng() * petalCols.length)],
+    ph: rng() * TAU,
+  }));
+  const restIdx = Math.floor(DEW_PETALS / 2);
+  const dew = Array.from({ length: 9 }, () => ({
+    p: Math.floor(rng() * DEW_PETALS),
+    t: 0.4 + rng() * 0.5,
+    side: rng() > 0.5 ? 1 : -1,
+    r: 0.008 + rng() * 0.013,
+    at: rng(),
+  }));
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    const settle = easeInOut(smoothstep(0.08, 0.86, u));
+    const open = smoothstep(0.2, 0.8, u);
+    const fx = w / 2;
+    const fy = h * 1.02;
+
+    /** A point on a petal, in screen space: t along the axis, s across it. */
+    const petalPoint = (i: number, t: number, s: number, out: { x: number; y: number }): void => {
+      const p = petals[i];
+      const L = p.len * m * Math.max(0.02, open);
+      const half = p.wid * m * Math.max(0.02, open) * Math.sqrt(Math.max(0, 1 - (2 * t - 1) ** 2));
+      const lx = s * half;
+      const ly = -L * t;
+      out.x = fx + lx * Math.cos(p.ang) - ly * Math.sin(p.ang);
+      out.y = fy + lx * Math.sin(p.ang) + ly * Math.cos(p.ang);
+    };
+    const A = { x: 0, y: 0 };
+
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, rgba(mix(NIGHT, mix(LEAF_DEEP, LEAF, 0.3), open * 0.9), 1));
+    g.addColorStop(1, rgba(mix(NIGHT, LEAF_DEEP, open * 0.8), 1));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+
+    // The rest of the bed, out of focus behind it.
+    if (open > 0.05) {
+      for (const b of behind) {
+        drawBloom(ctx, b.x * w, b.y * h, b.r * m * open, b.col, 0.3 * open, b.ph + u * 0.6);
+      }
+    }
+
+    // The bloom opens under the bead.
+    if (open > 0.03) {
+      for (const p of petals) {
+        const L = p.len * m * open;
+        ctx.save();
+        ctx.translate(fx, fy);
+        ctx.rotate(p.ang);
+        ctx.fillStyle = rgba(p.col, 0.9 * open);
+        ctx.beginPath();
+        ctx.ellipse(0, -L * 0.5, p.wid * m * open, L * 0.5, 0, 0, TAU);
+        ctx.fill();
+        ctx.strokeStyle = rgba(mix(p.col, PAPER, 0.45), 0.5 * open);
+        ctx.lineWidth = Math.max(0.8, m * 0.002);
+        ctx.stroke();
+        ctx.restore();
+      }
+      ctx.fillStyle = rgba(mix(KEPT, CANDLE, 0.4), 0.9 * open);
+      ctx.beginPath();
+      ctx.arc(fx, fy, m * 0.05 * open, 0, TAU);
+      ctx.fill();
+    }
+
+    // The bead, from the whole frame down to a rest on the petal's edge.
+    petalPoint(restIdx, 0.62, 0.9, A);
+    const R = lerp(m * 0.33, m * 0.055, settle);
+    const bx = lerp(w / 2, A.x, settle);
+    const by = lerp(h / 2, A.y, settle);
+    const squash = 1 - 0.2 * settle; // surface tension, resting on wax
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    blitGlow(ctx, dropSprite, bx, by, R * 1.3, 0.5);
+    ctx.restore();
+    ctx.fillStyle = rgba(DROP_CORE, 0.32);
+    ctx.beginPath();
+    ctx.ellipse(bx, by, R, R * squash, 0, 0, TAU);
+    ctx.fill();
+
+    // What a bead does to what is behind it: the petal, inverted through it.
+    const lens = smoothstep(0.4, 0.8, u);
+    if (lens > 0.02) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(bx, by, R * 0.94, R * squash * 0.94, 0, 0, TAU);
+      ctx.clip();
+      const p = petals[restIdx];
+      const L = p.len * m * Math.max(0.02, open);
+      ctx.translate(bx, by);
+      ctx.rotate(Math.PI);
+      ctx.translate(-bx, -by);
+      ctx.save();
+      ctx.translate(fx, fy);
+      ctx.rotate(p.ang);
+      ctx.fillStyle = rgba(mix(p.col, PAPER, 0.3), 0.75 * lens);
+      ctx.beginPath();
+      ctx.ellipse(0, -L * 0.5, p.wid * m * Math.max(0.02, open), L * 0.5, 0, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+      ctx.restore();
+    }
+
+    ctx.strokeStyle = rgba(mix(PAPER, DROP_CORE, 0.5), 0.55);
+    ctx.lineWidth = Math.max(1, m * 0.004);
+    ctx.beginPath();
+    ctx.ellipse(bx, by, R, R * squash, 0, 0, TAU);
+    ctx.stroke();
+    ctx.fillStyle = rgba(PAPER, 0.6);
+    ctx.beginPath();
+    ctx.ellipse(bx - R * 0.32, by - R * 0.34, R * 0.16, R * 0.09, -0.6, 0, TAU);
+    ctx.fill();
+
+    // The rest of the night's dew, gathered along the margins.
+    const dewIn = smoothstep(0.5, 0.95, u);
+    if (dewIn > 0.01) {
+      for (const d of dew) {
+        const a = clamp01(dewIn * 2 - d.at);
+        if (a <= 0.02) continue;
+        petalPoint(d.p, d.t, d.side * 0.92, A);
+        const r = d.r * m;
+        ctx.fillStyle = rgba(DROP_CORE, 0.35 * a);
+        ctx.beginPath();
+        ctx.arc(A.x, A.y, r, 0, TAU);
+        ctx.fill();
+        ctx.strokeStyle = rgba(mix(PAPER, DROP_CORE, 0.5), 0.5 * a);
+        ctx.lineWidth = Math.max(0.7, m * 0.002);
+        ctx.stroke();
+        ctx.fillStyle = rgba(PAPER, 0.55 * a);
+        ctx.beginPath();
+        ctx.arc(A.x - r * 0.3, A.y - r * 0.32, Math.max(0.5, r * 0.24), 0, TAU);
+        ctx.fill();
+      }
+    }
+  };
+
+  return { renderFrame };
+}
+
+const FLOCK_N = 34;
+
+/**
+ * flowers ↔ birds — "lift": pollinator to flyer. The garden's own visitor is
+ * the first bird, and the frame follows it up.
+ *   u = 0   the bed, close: blooms filling the frame and one pollinator
+ *           holding station over them, wings a blur
+ *   u ≈ 0.5 the ground falls away; the beat slows into a wingbeat
+ *   u = 1   sky, and the flyer is one of a flock that has taken the frame
+ */
+function makeLiftFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const bloomCols: RGB[] = [
+    mix(CANDLE, PAPER, 0.25),
+    mix(KEPT, PAPER, 0.35),
+    mix([180, 90, 110] as RGB, PAPER, 0.3),
+    mix(AURORA, PAPER, 0.4),
+  ];
+  const blooms = Array.from({ length: 12 }, (_, i) => ({
+    x: rng(),
+    y: rng(),
+    r: 0.035 + rng() * 0.055,
+    col: bloomCols[i % bloomCols.length],
+    ph: rng() * TAU,
+  }));
+  const flock = Array.from({ length: FLOCK_N }, (_, i) => ({
+    // The pollinator holds station over the bed; the rest are still in it.
+    x0: i === 0 ? 0.5 : 0.24 + rng() * 0.52,
+    y0: i === 0 ? 0.28 : 0.42 + rng() * 0.4,
+    seatA: rng() * TAU,
+    seatR: 0.06 + rng() * 0.3,
+    lag: i === 0 ? 0 : 0.06 + rng() * 0.55,
+    ph: rng() * TAU,
+    freq: i === 0 ? 96 : 22 + rng() * 14,
+    size: i === 0 ? 1.5 : 0.6 + rng() * 0.7,
+  }));
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    const rise = easeInOut(smoothstep(0.05, 0.92, u));
+
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, rgba(mix([132, 156, 150], SKY_HIGH, rise), 1));
+    g.addColorStop(0.6, rgba(mix([120, 142, 104], SKY_LOW, rise), 1));
+    g.addColorStop(1, rgba(mix(LEAF_DEEP, mix(SKY_LOW, LEAF_DEEP, 0.4), rise), 1));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+
+    // The ground lets go — late, and all at once, the way it does when the
+    // thing you were watching decides to leave.
+    const groundY = lerp(h * 0.34, h * 1.2, easeInOut(smoothstep(0.24, 0.98, u)));
+    if (groundY < h) {
+      ctx.fillStyle = rgba(mix(LEAF, LEAF_DEEP, 0.45), 1);
+      ctx.beginPath();
+      ctx.moveTo(0, groundY + h * 0.03);
+      ctx.quadraticCurveTo(w * 0.3, groundY - h * 0.04, w * 0.58, groundY + h * 0.01);
+      ctx.quadraticCurveTo(w * 0.82, groundY + h * 0.05, w, groundY - h * 0.02);
+      ctx.lineTo(w, h);
+      ctx.lineTo(0, h);
+      ctx.closePath();
+      ctx.fill();
+    }
+    for (const b of blooms) {
+      const by = groundY + b.y * h * 0.34;
+      if (by > h + m * 0.1) continue;
+      drawBloom(
+        ctx,
+        b.x * w,
+        by,
+        b.r * m * (1 - rise * 0.72),
+        b.col,
+        0.95 * (1 - smoothstep(0.6, 0.95, u) * 0.7),
+        b.ph + u * 0.8,
+      );
+    }
+
+    // The flock: seats found late, and the first flyer's buzz slowing into
+    // a wingbeat as it stops hovering and starts travelling.
+    const spin = u * 0.5;
+    const flockX = w / 2;
+    const flockY = lerp(h * 0.44, h * 0.38, rise);
+    const birdCol = mix(INK, SKY_HIGH, 0.3);
+    for (let i = 0; i < flock.length; i++) {
+      const b = flock[i];
+      const first = i === 0;
+      const tt = clamp01((rise - b.lag * 0.6) / (1 - b.lag * 0.6));
+      const e = easeInOut(tt);
+      const sx = flockX + Math.cos(b.seatA + spin) * b.seatR * w * 0.9;
+      const sy = flockY + Math.sin(b.seatA + spin) * b.seatR * h * 0.42;
+      const x = lerp(b.x0 * w, sx, e);
+      const y = lerp(b.y0 * h, sy, e);
+      // Frequency falls with u; the phase is its integral, so the beat is
+      // continuous and still a pure function of u.
+      const flap = Math.sin(b.ph + u * b.freq * (1 - 0.45 * u));
+      const span = m * 0.024 * b.size * lerp(first ? 2.4 : 1.5, 1, rise);
+      // Only the pollinator is there at the start; the rest are found on
+      // the way up, and a bird that has not left yet is not yet a bird.
+      const alpha = first ? 1 : smoothstep(0.12, 0.5, tt) * 0.95;
+      drawBird(ctx, x, y, span, flap, birdCol, alpha);
+      if (first) {
+        // Its body, while it is still close enough to have one.
+        ctx.fillStyle = rgba(birdCol, 0.85);
+        ctx.beginPath();
+        ctx.ellipse(x, y + span * 0.1, span * 0.3, span * 0.16, 0, 0, TAU);
+        ctx.fill();
+      }
+    }
+  };
+
+  return { renderFrame };
+}
+
+/**
+ * birds ↔ coast — "shorewing": the flock over the shoreline, resolving into
+ * the coast's own scale.
+ *   u = 0   the flock, close enough that a wing is a gesture of the frame
+ *   u = 1   the shore has arrived beneath them: the swash line, the wet
+ *           sheen, the same birds now a thread of specks strung along it
+ *           with their reflections under them
+ * The swash comes through the shared makeSwash, so this shoreline and the
+ * one the drop's rim becomes are the same shoreline.
+ */
+function makeShorewingFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const swash = makeSwash(seed);
+  const flock = Array.from({ length: 24 }, () => ({
+    x0: 0.1 + rng() * 0.8,
+    y0: 0.12 + rng() * 0.72,
+    x1: 0.08 + rng() * 0.84,
+    y1: 0.1 + rng() * 0.34,
+    ph: rng() * TAU,
+    freq: 20 + rng() * 12,
+    size: 0.6 + rng() * 0.8,
+  }));
+  const foam = Array.from({ length: 46 }, () => ({ t: rng(), off: rng(), ph: rng() * TAU }));
+  const shells = Array.from({ length: 18 }, () => ({ x: rng(), y: rng(), r: 0.5 + rng() * 1.6 }));
+  const swells = Array.from({ length: 3 }, () => ({ at: 0.58 + rng() * 0.34, ph: rng() * TAU }));
+  const sandGrain = Array.from({ length: 90 }, () => ({ x: rng(), y: rng(), s: rng() }));
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    const back = easeInOut(smoothstep(0.05, 0.92, u));
+    // At u = 0 the hand is up among them and there is nothing below but air:
+    // the ground arrives through haze, it does not switch on.
+    const ground = smoothstep(0.16, 0.62, u);
+    const horizonY = lerp(h * 0.9, h * 0.24, back);
+    const shoreBase = lerp(h * 2.1, h * 0.66, back);
+    const shoreY = (x: number): number => shoreBase + swash(x / Math.max(1, w), u) * h * 0.06;
+
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, rgba(mix([120, 160, 196], SKY_HIGH, back * 0.6), 1));
+    g.addColorStop(1, rgba(SKY_LOW, 1));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+
+    if (ground > 0.01) {
+      ctx.save();
+      ctx.globalAlpha = ground;
+      // The sea, between the horizon and the shore.
+      if (horizonY < h) {
+        ctx.fillStyle = rgba(mix(SEA, [64, 100, 122], 0.3), 1);
+        ctx.beginPath();
+        ctx.moveTo(0, Math.max(0, horizonY));
+        ctx.lineTo(w, Math.max(0, horizonY));
+        for (let i = 48; i >= 0; i--) {
+          const x = (i / 48) * w;
+          ctx.lineTo(x, shoreY(x));
+        }
+        ctx.closePath();
+        ctx.fill();
+        // The haze that sits on any real horizon, softening the seam.
+        ctx.fillStyle = rgba(mix(SKY_LOW, PAPER, 0.35), 0.3);
+        ctx.fillRect(0, Math.max(0, horizonY) - h * 0.008, w, h * 0.016);
+        // Swells running in, parallel to the shore they will land on.
+        for (const s of swells) {
+          const y = lerp(horizonY, shoreBase, s.at + 0.04 * Math.sin(s.ph + u * 2));
+          if (y <= horizonY || y >= shoreBase) continue;
+          ctx.strokeStyle = rgba(mix(SEA, PAPER, 0.6), 0.4);
+          ctx.lineWidth = Math.max(1.4, h * 0.007);
+          ctx.beginPath();
+          for (let i = 0; i <= 24; i++) {
+            const x = (i / 24) * w;
+            const yy = y + swash(x / Math.max(1, w) + s.at, u) * h * 0.012;
+            if (i === 0) ctx.moveTo(x, yy);
+            else ctx.lineTo(x, yy);
+          }
+          ctx.stroke();
+        }
+      }
+
+      // The sand, and the wet band that still remembers the last swash.
+      ctx.fillStyle = rgba(mix(SAND, WET_SAND, 0.25), 1);
+      ctx.beginPath();
+      ctx.moveTo(0, h);
+      for (let i = 0; i <= 48; i++) {
+        const x = (i / 48) * w;
+        ctx.lineTo(x, shoreY(x));
+      }
+      ctx.lineTo(w, h);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = rgba(WET_SAND, 0.4);
+      ctx.beginPath();
+      for (let i = 0; i <= 48; i++) {
+        const x = (i / 48) * w;
+        ctx.lineTo(x, shoreY(x));
+      }
+      for (let i = 48; i >= 0; i--) {
+        const x = (i / 48) * w;
+        ctx.lineTo(x, shoreY(x) + h * 0.1);
+      }
+      ctx.closePath();
+      ctx.fill();
+      for (const gr of sandGrain) {
+        const gy = shoreY(gr.x * w) + h * 0.03 + gr.y * h * 0.4;
+        if (gy > h) continue;
+        ctx.fillStyle = rgba(gr.s > 0.6 ? WET_SAND : mix(SAND, PAPER, 0.35), 0.3 * gr.s);
+        ctx.fillRect(gr.x * w, gy, 1 + gr.s, 1 + gr.s);
+      }
+      ctx.restore();
+    }
+
+    const foamA = smoothstep(0.2, 0.7, u) * ground;
+    if (foamA > 0.01) {
+      for (const f of foam) {
+        const x = f.t * w;
+        const tw = 0.45 + 0.45 * Math.sin(f.ph + u * 7);
+        ctx.fillStyle = rgba(PAPER, foamA * tw * 0.7);
+        ctx.beginPath();
+        ctx.arc(x, shoreY(x) + (f.off - 0.5) * h * 0.018, 0.8 + f.off * 2.2, 0, TAU);
+        ctx.fill();
+      }
+    }
+    const shellA = smoothstep(0.62, 0.98, u) * ground;
+    if (shellA > 0.01) {
+      for (const s of shells) {
+        const x = s.x * w;
+        const y = shoreY(x) + h * 0.06 + s.y * h * 0.28;
+        if (y > h) continue;
+        ctx.fillStyle = rgba(mix(PAPER, SAND, 0.4), 0.5 * shellA);
+        ctx.beginPath();
+        ctx.arc(x, y, s.r, 0, TAU);
+        ctx.fill();
+      }
+    }
+
+    // The birds, losing the frame to the coast they are flying over.
+    const birdCol = mix(INK, SEA, 0.35);
+    for (const b of flock) {
+      const x = lerp(b.x0 * w, b.x1 * w, back);
+      const y = lerp(b.y0 * h, b.y1 * h, back);
+      const span = m * lerp(0.07, 0.012, back) * b.size;
+      const flap = Math.sin(b.ph + u * b.freq);
+      drawBird(ctx, x, y, span, flap, birdCol, 0.9);
+      // On the wet sheen, each one is answered from below.
+      const sy = shoreY(x);
+      const refY = sy + (sy - y) * 0.18;
+      if (back > 0.45 && refY < h) {
+        drawBird(ctx, x, refY, span * 0.8, -flap, birdCol, 0.16 * smoothstep(0.45, 0.9, u));
+      }
+    }
+  };
+
+  return { renderFrame };
+}
+
+const MASSIF_STOPS = 76;
+
+/**
+ * olympus ↔ earth — "massif": the peak resolving into the ground it stands
+ * on. Explicitly NOT a globe: nothing rotates and no sphere is ever drawn —
+ * the HORIZON BENDS, which is the thing a climb actually shows you, and the
+ * range that filled the frame becomes one crease along the limb of a world.
+ *   u = 0   folded ranges filling the frame under mountain blue
+ *   u ≈ 0.5 the horizon has begun to bow; the ranges shrink toward the
+ *           middle of it and the blue thins
+ *   u = 1   a curved ground with the whole massif as one wrinkle on it,
+ *           further ranges beyond, an ice field, the air a rim of light
+ */
+function makeMassifFilm(seed: number): Film {
+  const n = makeNoise2(seed ^ 0x0a5517);
+  const ridges = [0, 1, 2].map((r) => foldedRidge(n, MASSIF_STOPS, 2.6 + r * 1.9, r * 13.7 + 3.1));
+  const rng = seededRandom(seed ^ 0x9a11);
+  const stars = Array.from({ length: 90 }, () => ({ x: rng(), y: rng() * 0.5, r: 0.5 + rng() * 1.1 }));
+  const creases = Array.from({ length: 3 }, () => ({
+    off: 0.06 + rng() * 0.22,
+    span: 0.3 + rng() * 0.5,
+    at: 0.1 + rng() * 0.7,
+    amp: 0.1 + rng() * 0.5,
+  }));
+  const clouds = Array.from({ length: 7 }, () => ({
+    x: rng(),
+    y: rng(),
+    len: 0.1 + rng() * 0.2,
+    speed: 0.06 + rng() * 0.18,
+  }));
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    const climb = easeInOut(smoothstep(0.05, 0.92, u));
+    const bulge = climb * h * 0.19;
+    const baseY = lerp(h * 0.66, h * 0.6, climb);
+    /** The ground's edge: flat from the summit, bowed from far enough up. */
+    const limbY = (x: number): number => {
+      const t = (x - w / 2) / (w / 2);
+      return baseY - bulge * (1 - t * t);
+    };
+
+    // Sky: mountain blue emptying toward the dark it was always in front of.
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, rgba(mix([96, 138, 180], NIGHT, climb * 0.94), 1));
+    g.addColorStop(1, rgba(mix([182, 206, 222], [78, 110, 142], climb), 1));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+
+    const starA = smoothstep(0.55, 0.95, u);
+    if (starA > 0.01) {
+      for (const s of stars) {
+        ctx.fillStyle = rgba(PAPER, starA * 0.75 * (1 - s.y));
+        ctx.fillRect(s.x * w, s.y * h, s.r, s.r);
+      }
+    }
+
+    // The ground, and the light its air scatters along the edge of it. Dark
+    // rock underfoot at the summit; a lit surface with distance.
+    const gg = ctx.createLinearGradient(0, baseY - bulge, 0, h);
+    gg.addColorStop(0, rgba(mix([26, 30, 38], mix(GROUND, PAPER, 0.22), climb), 1));
+    gg.addColorStop(1, rgba(mix([18, 21, 27], mix(GROUND, NIGHT, 0.25), climb), 1));
+    ctx.fillStyle = gg;
+    ctx.beginPath();
+    ctx.moveTo(0, h + 2);
+    for (let i = 0; i <= 60; i++) {
+      const x = (i / 60) * w;
+      ctx.lineTo(x, limbY(x));
+    }
+    ctx.lineTo(w, h + 2);
+    ctx.closePath();
+    ctx.fill();
+    const rimA = smoothstep(0.35, 0.9, u);
+    if (rimA > 0.01) {
+      ctx.strokeStyle = rgba(mix([150, 190, 210], PAPER, 0.3), 0.45 * rimA);
+      ctx.lineWidth = Math.max(1.2, m * 0.006);
+      ctx.beginPath();
+      for (let i = 0; i <= 60; i++) {
+        const x = (i / 60) * w;
+        if (i === 0) ctx.moveTo(x, limbY(x));
+        else ctx.lineTo(x, limbY(x));
+      }
+      ctx.stroke();
+    }
+
+    // Other ranges, an ice field, weather: the features a whole ground has
+    // once one range is no longer the whole of it.
+    const farA = smoothstep(0.45, 0.9, u);
+    if (farA > 0.01) {
+      for (const c of creases) {
+        ctx.strokeStyle = rgba(mix(GROUND, NIGHT, 0.45), 0.5 * farA);
+        ctx.lineWidth = Math.max(1, m * 0.004);
+        ctx.beginPath();
+        for (let i = 0; i <= 24; i++) {
+          const t = i / 24;
+          const x = (c.at + t * c.span) * w;
+          const y = limbY(x) + c.off * h + Math.sin(t * 9 + c.amp * 6) * h * 0.012 * c.amp;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+      ctx.fillStyle = rgba(PAPER, 0.22 * farA);
+      ctx.beginPath();
+      ctx.ellipse(w * 0.12, limbY(w * 0.12) + h * 0.05, w * 0.16, h * 0.03, 0.32, 0, TAU);
+      ctx.fill();
+      for (const cl of clouds) {
+        const x = ((cl.x + u * cl.speed) % 1.2 - 0.1) * w;
+        const y = limbY(x) + cl.y * h * 0.3;
+        ctx.fillStyle = rgba(PAPER, 0.22 * farA);
+        ctx.beginPath();
+        ctx.ellipse(x, y, cl.len * w * 0.5, h * 0.012, 0, 0, TAU);
+        ctx.fill();
+      }
+    }
+
+    // The massif itself: it never leaves the frame, it stops being the whole
+    // of it. Each range is a BAND along the ground's edge — a crease with a
+    // finite length once there is enough ground for it to be shorter than —
+    // so nothing ever stands up as a wall the way a squeezed silhouette does.
+    for (let r = 2; r >= 0; r--) {
+      const halfSpan = lerp(1.35, 0.34 - r * 0.05, climb); // in sheet widths
+      const amp = h * (0.2 + r * 0.06) * lerp(1, 0.13, climb);
+      // The layers close on the limb as the distance grows: from three
+      // ranges deep at the summit to one crease with a lit and a shaded side.
+      const drop = h * (0.02 + r * 0.05) * (1 - climb * 0.86);
+      ctx.beginPath();
+      for (let i = 0; i < MASSIF_STOPS; i++) {
+        const t = i / (MASSIF_STOPS - 1);
+        const x = w / 2 + (t * 2 - 1) * (w / 2 + 4);
+        // A range tapers to nothing at its own ends, and its ends walk in.
+        const s = ((t - 0.5) * 2) / halfSpan;
+        const win = Math.max(0, 1 - s * s);
+        ctx.lineTo(x, limbY(x) + drop - ridges[r][i] * amp * win * win);
+      }
+      for (let i = MASSIF_STOPS - 1; i >= 0; i--) {
+        const t = i / (MASSIF_STOPS - 1);
+        const x = w / 2 + (t * 2 - 1) * (w / 2 + 4);
+        const s = ((t - 0.5) * 2) / halfSpan;
+        const win = Math.max(0, 1 - s * s);
+        // The underside tapers with the crest, so a range that has ended
+        // leaves no band of itself lying along the ground.
+        ctx.lineTo(x, limbY(x) + drop + h * 0.02 * win);
+      }
+      ctx.closePath();
+      const dark: RGB = r === 2 ? [20, 24, 32] : r === 1 ? [36, 42, 54] : [56, 64, 78];
+      ctx.fillStyle = rgba(mix(dark, mix(GROUND, NIGHT, 0.3), climb * 0.55 + (2 - r) * 0.05), 1);
+      ctx.fill();
+    }
+  };
+
+  return { renderFrame };
+}
+
+// ——— The top of the axis: a wave field, and what it hardens into ————————
+//
+// /beyond is an interference field. Both of its doors are drawn from the
+// same construction — the crest of two coherent sources is a hyperbola with
+// the sources as foci — so the room reads as itself from either side.
+
+const CREST_HALF_LAMBDA = 0.11;
+const CREST_KMAX = 18;
+
+/**
+ * One point on a hyperbolic crest: the locus where the two sources' paths
+ * differ by a fixed number of wavelengths. `a` is half that difference, `c`
+ * half the source separation. As c grows the branch straightens toward the
+ * line x = a — which is how a wave field becomes a lattice, and the whole
+ * argument of the curvature film.
+ */
+function crestPoint(a: number, b: number, t: number, out: { x: number; y: number }): void {
+  out.x = a * Math.cosh(t);
+  out.y = b * Math.sinh(t);
+}
+
+/**
+ * space ↔ beyond — "interfere": the cosmic web read as a standing wave.
+ *   u = 0   the web: knots and the filaments between them, as /space keeps
+ *           them
+ *   u ≈ 0.6 crest lines rise through the frame — and every knot is already
+ *           standing on one
+ *   u = 1   the field alone, its two sources faintly lit: the spacing
+ *           between galaxies was never a scatter, it was a frozen sound
+ * The knots are BUILT on the crests at construction, so the reveal is not a
+ * coincidence arranged per frame — the web was drawn from the field it
+ * turns out to be.
+ */
+function makeInterfereFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const vignette = makeVignette();
+  const knotSprite = makeGlowSprite(PAPER, CANDLE, 0.45);
+  const sourceSprite = makeGlowSprite(mix(PAPER, AURORA, 0.4), AURORA, 0.35);
+  const C = 1.05;
+  const rot = 0.42;
+  const levels: number[] = [];
+  for (let k = -11; k <= 11; k++) {
+    const a = k * CREST_HALF_LAMBDA * 1.35;
+    if (Math.abs(a) < C * 0.94) levels.push(a);
+  }
+  const S = { x: 0, y: 0 };
+  const knots = Array.from({ length: 24 }, () => {
+    const a = levels[Math.min(levels.length - 1, Math.floor(rng() * levels.length))];
+    const t = (rng() - 0.5) * 2.6;
+    const b = Math.sqrt(Math.max(0.02, C * C - a * a));
+    crestPoint(a, b, t, S);
+    return { fx: S.x, fy: S.y, m: 0.4 + rng() * 0.9, ph: rng() * TAU };
+  });
+  const links: Array<[number, number]> = [];
+  for (let i = 0; i < knots.length; i++) {
+    const near: Array<{ j: number; d: number }> = [];
+    for (let j = 0; j < knots.length; j++) {
+      if (j === i) continue;
+      near.push({ j, d: (knots[j].fx - knots[i].fx) ** 2 + (knots[j].fy - knots[i].fy) ** 2 });
+    }
+    near.sort((a, b) => a.d - b.d);
+    for (let k = 0; k < 2; k++) {
+      const p = Math.min(i, near[k].j);
+      const q = Math.max(i, near[k].j);
+      if (!links.some(([x, y]) => x === p && y === q)) links.push([p, q]);
+    }
+  }
+  const P = { x: 0, y: 0 };
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    const cx = w / 2;
+    const cy = h / 2;
+    const cs = Math.cos(rot);
+    const sn = Math.sin(rot);
+    const toScreen = (fx: number, fy: number): void => {
+      P.x = cx + (fx * cs - fy * sn) * m * 0.5;
+      P.y = cy + (fx * sn + fy * cs) * m * 0.5;
+    };
+
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+
+    // The crests arrive through the web, not over it.
+    const crestA = smoothstep(0.22, 0.85, u);
+    if (crestA > 0.01) {
+      const yExtent = (Math.hypot(w, h) / m) * 1.1;
+      ctx.lineWidth = 1;
+      for (const a of levels) {
+        const b = Math.sqrt(Math.max(0.02, C * C - a * a));
+        const tMax = Math.min(2.2, Math.asinh(yExtent / b));
+        const near = 1 - Math.min(1, Math.abs(a) / C);
+        ctx.strokeStyle = rgba(mix(PAPER, AURORA, 0.35), crestA * (0.16 + 0.34 * near));
+        ctx.beginPath();
+        for (let i = 0; i <= 30; i++) {
+          const t = -tMax + (2 * tMax * i) / 30;
+          crestPoint(a, b, t, S);
+          toScreen(S.x, S.y);
+          if (i === 0) ctx.moveTo(P.x, P.y);
+          else ctx.lineTo(P.x, P.y);
+        }
+        ctx.stroke();
+      }
+    }
+
+    // The filaments let go once what strung them is visible.
+    const webA = (1 - smoothstep(0.4, 0.85, u)) * 0.9;
+    if (webA > 0.02) {
+      ctx.strokeStyle = rgba([140, 176, 206], 0.32 * webA);
+      ctx.lineWidth = 1;
+      for (const [a, b] of links) {
+        toScreen(knots[a].fx, knots[a].fy);
+        const x0 = P.x;
+        const y0 = P.y;
+        toScreen(knots[b].fx, knots[b].fy);
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(P.x, P.y);
+        ctx.stroke();
+      }
+    }
+
+    // The knots stay put the whole way: they were antinodes all along.
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const pulse = smoothstep(0.45, 0.95, u);
+    for (const kn of knots) {
+      toScreen(kn.fx, kn.fy);
+      const beat = 0.6 + 0.4 * Math.sin(kn.ph + u * 5);
+      blitGlow(ctx, knotSprite, P.x, P.y, 5 + kn.m * 10 * (1 + pulse * 0.4), 0.4 + 0.3 * pulse * beat);
+    }
+    // And the two sources whose difference the whole field is.
+    const srcA = smoothstep(0.7, 1, u);
+    if (srcA > 0.01) {
+      for (const sx of [-C, C]) {
+        toScreen(sx, 0);
+        blitGlow(ctx, sourceSprite, P.x, P.y, m * 0.1, 0.22 * srcA);
+      }
+    }
+    ctx.restore();
+
+    vignette(ctx, w, h);
+  };
+
+  return { renderFrame };
+}
+
+/**
+ * beyond ↔ manifold — "curvature": amplitude becoming geometry.
+ *   u = 0   the wave field of /beyond — the same hyperbolic crests the
+ *           interfere film ends on
+ *   u ≈ 0.5 the sources walk apart, and every crest straightens as they do
+ *           (a hyperbola with distant foci is a line — no cheating, the
+ *           same equation with c growing)
+ *   u = 1   a mesh, square and ruled, with one mass in it: the exact well
+ *           the fold film draws on the space ↔ manifold hop, so /manifold
+ *           is entered through the same door from both sides
+ */
+function makeCurvatureFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const vignette = makeVignette();
+  const knotSprite = makeGlowSprite(PAPER, CANDLE, 0.45);
+  const massSprite = makeGlowSprite(mix(PAPER, CANDLE, 0.3), CANDLE, 0.4);
+  const relics = Array.from({ length: 10 }, () => ({
+    fx: (rng() - 0.5) * 2.4,
+    fy: (rng() - 0.5) * 2.4,
+    m: 0.4 + rng() * 0.8,
+  }));
+  const S = { x: 0, y: 0 };
+  const P = { x: 0, y: 0 };
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    const cx = w / 2;
+    const cy = h / 2;
+    const straighten = easeInOut(smoothstep(0.06, 0.9, u));
+    const C = lerp(1.05, 30, straighten);
+    const rot = 0.42 * (1 - straighten);
+    const cross = smoothstep(0.3, 0.88, u);
+    const well = 0.12 * smoothstep(0.35, 1, u);
+    const cs = Math.cos(rot);
+    const sn = Math.sin(rot);
+    const yExtent = (Math.hypot(w, h) / m) * 1.15;
+
+    /** Field → screen, then bent by whatever mass the mesh has taken on —
+     * the fold film's displacement, identically. */
+    const toScreen = (fx: number, fy: number, swap: boolean): void => {
+      const rx = swap ? fy : fx;
+      const ry = swap ? fx : fy;
+      const x = cx + (rx * cs - ry * sn) * m * 0.5;
+      const y = cy + (rx * sn + ry * cs) * m * 0.5;
+      if (well <= 0) {
+        P.x = x;
+        P.y = y;
+        return;
+      }
+      const nx = (x / w - 0.5) * 2;
+      const ny = (y / h - 0.5) * 2;
+      const pull = well / (0.15 + nx * nx + ny * ny);
+      P.x = x - nx * pull * w * 0.35;
+      P.y = y - ny * pull * h * 0.35;
+    };
+
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+
+    const lineCol = mix(mix(PAPER, AURORA, 0.35), mix(PAPER, CANDLE, 0.2), straighten);
+    ctx.lineWidth = 1;
+    for (let pass = 0; pass < 2; pass++) {
+      const passA = pass === 0 ? 1 : cross;
+      if (passA <= 0.01) continue;
+      for (let k = -CREST_KMAX; k <= CREST_KMAX; k++) {
+        const a = k * CREST_HALF_LAMBDA * lerp(2.6, 1, straighten);
+        if (Math.abs(a) >= C * 0.94) continue;
+        const b = Math.sqrt(Math.max(0.02, C * C - a * a));
+        const tMax = Math.min(2.4, Math.asinh(yExtent / b));
+        const near = 1 - Math.min(1, Math.abs(a) / (CREST_KMAX * CREST_HALF_LAMBDA * 2));
+        ctx.strokeStyle = rgba(lineCol, passA * (0.09 + 0.16 * near));
+        ctx.beginPath();
+        for (let i = 0; i <= 26; i++) {
+          const t = -tMax + (2 * tMax * i) / 26;
+          crestPoint(a, b, t, S);
+          toScreen(S.x, S.y, pass === 1);
+          if (i === 0) ctx.moveTo(P.x, P.y);
+          else ctx.lineTo(P.x, P.y);
+        }
+        ctx.stroke();
+      }
+    }
+
+    // The last knots of the web, letting go of their light.
+    const relicA = 1 - smoothstep(0.15, 0.6, u);
+    if (relicA > 0.02) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (const r of relics) {
+        toScreen(r.fx, r.fy, false);
+        blitGlow(ctx, knotSprite, P.x, P.y, 5 + r.m * 9, 0.4 * relicA);
+      }
+      ctx.restore();
+    }
+
+    // And the mass the mesh has agreed to carry.
+    const massA = smoothstep(0.5, 1, u);
+    if (massA > 0.01) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      blitGlow(ctx, massSprite, cx, cy, m * 0.12, 0.3 * massA);
+      ctx.restore();
+    }
+
+    vignette(ctx, w, h);
+  };
+
+  return { renderFrame };
+}
+
 function makeFilmFor(spec: PassageSpec): Film | null {
   if (spec.film === "arm") return makeArmFilm();
   if (spec.film === "node") return makeNodeFilm();
@@ -1955,8 +4261,70 @@ function makeFilmFor(spec: PassageSpec): Film | null {
   if (spec.film === "chartland") return makeChartLandFilm(PASSAGE_SEED ^ 0x0c4a71);
   if (spec.film === "strand") return makeStrandFilm(PASSAGE_SEED ^ 0x057a4d);
   if (spec.film === "fold") return makeFoldFilm(PASSAGE_SEED ^ 0x0f01d0);
+  if (spec.film === "quantum") return makeQuantumFilm(PASSAGE_SEED ^ 0x0900a1);
+  if (spec.film === "confine") return makeConfineFilm(PASSAGE_SEED ^ 0x0c0f19);
+  if (spec.film === "shell") return makeShellFilm(PASSAGE_SEED ^ 0x05e11c);
+  if (spec.film === "bond") return makeBondFilm(PASSAGE_SEED ^ 0x0b04d0);
+  if (spec.film === "chain") return makeChainFilm(PASSAGE_SEED ^ 0x0c4a1e);
+  if (spec.film === "helix") return makeHelixFilm(PASSAGE_SEED ^ 0x0e11c5);
+  if (spec.film === "chromatin") return makeChromatinFilm(PASSAGE_SEED ^ 0x0c4084);
+  if (spec.film === "membrane") return makeMembraneFilm(PASSAGE_SEED ^ 0x0eeb4a);
+  if (spec.film === "sheet") return makeSheetFilm(PASSAGE_SEED ^ 0x05ee70);
+  if (spec.film === "dissolve") return makeDissolveFilm(PASSAGE_SEED ^ 0x0d1550);
+  if (spec.film === "starchart") return makeStarChartFilm(PASSAGE_SEED ^ 0x057a12);
+  if (spec.film === "lamina") return makeLaminaFilm(PASSAGE_SEED ^ 0x01a311);
+  if (spec.film === "tension") return makeTensionFilm(PASSAGE_SEED ^ 0x07e1f0);
+  if (spec.film === "dew") return makeDewFilm(PASSAGE_SEED ^ 0x0de147);
+  if (spec.film === "lift") return makeLiftFilm(PASSAGE_SEED ^ 0x011f70);
+  if (spec.film === "shorewing") return makeShorewingFilm(PASSAGE_SEED ^ 0x0540e9);
+  if (spec.film === "massif") return makeMassifFilm(PASSAGE_SEED ^ 0x0a5511);
+  if (spec.film === "interfere") return makeInterfereFilm(PASSAGE_SEED ^ 0x01e7fe);
+  if (spec.film === "curvature") return makeCurvatureFilm(PASSAGE_SEED ^ 0x0c4a7e);
   return makeFilm(PASSAGE_SEED);
 }
+
+/**
+ * Test-only surface: the node test scripts (scripts/lib/load-ts.mjs) load
+ * this module directly and need the pure film factories to assert
+ * determinism — they are otherwise internal to makeFilmFor. Never consumed
+ * by the app itself. A factory that draws through an offscreen canvas
+ * (`makeFilm`, `beads`, `chartland`, `airmap`) cannot be built in node and
+ * so cannot be listed here; everything below is pure drawing plus the
+ * shared sprite cache, which degrades to no-ops without a document.
+ */
+export const __pureFilmFactories: Record<string, (seed: number) => Film> = {
+  // the astronomical trunk and the ground/vista films
+  arm: makeArmFilm,
+  node: makeNodeFilm,
+  orbitfall: makeOrbitfallFilm,
+  sunfall: makeSunfallFilm,
+  peakair: makePeakAirFilm,
+  fogclimb: makeFogClimbFilm,
+  garden: makeGardenFilm,
+  strand: makeStrandFilm,
+  fold: makeFoldFilm,
+  // the small-scale spine, quanta → drop
+  quantum: makeQuantumFilm,
+  confine: makeConfineFilm,
+  shell: makeShellFilm,
+  bond: makeBondFilm,
+  chain: makeChainFilm,
+  helix: makeHelixFilm,
+  chromatin: makeChromatinFilm,
+  membrane: makeMembraneFilm,
+  sheet: makeSheetFilm,
+  dissolve: makeDissolveFilm,
+  // the chart-to-sky hop, the living middle, and the top of the axis
+  starchart: makeStarChartFilm,
+  lamina: makeLaminaFilm,
+  tension: makeTensionFilm,
+  dew: makeDewFilm,
+  lift: makeLiftFilm,
+  shorewing: makeShorewingFilm,
+  massif: makeMassifFilm,
+  interfere: makeInterfereFilm,
+  curvature: makeCurvatureFilm,
+};
 
 // ——— The host and player ————————————————————————————————————————————
 

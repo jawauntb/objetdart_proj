@@ -221,6 +221,75 @@ assert.equal(H.parseSequence("A".repeat(500)).length, H.MAX_BASES, "pasted junk 
   assert.equal(H.openPairs(n, 0.5), 15);
 }
 
+// —— annealing: a fragment finds its own place, by sequence ——————————
+// The bug this catches: an "anneal" that snaps a fragment to whatever site
+// is nearest on screen. Recognition has to be a property of the letters —
+// a probe cut from position 5 must find position 5 and nowhere else.
+{
+  const template = H.sequenceFromSeed(0x51de, 40);
+  const probe = H.complement(template.slice(5, 15));
+  const site = H.bestAnnealSite(template, probe);
+  assert.ok(site, "a long enough probe has a best site");
+  assert.equal(site.index, 5, "and it is the place it was cut from");
+  assert.equal(site.score, 1, "a perfect complement scores perfectly");
+  assert.equal(
+    site.bonds,
+    H.hydrogenBonds(probe),
+    "the bonds it forms are the real ledger of its own bases",
+  );
+  // a probe of pure A finds only its best bad site, and knows it is bad
+  const junk = H.parseSequence("AAAAAAAA");
+  const bad = H.bestAnnealSite(template, junk);
+  assert.ok(bad.score < 1, "junk never scores as a match");
+  assert.equal(H.bestAnnealSite(template, H.parseSequence("AT")), null, "too short to be a site at all");
+  assert.equal(H.bestAnnealSite(H.parseSequence("ATGC"), H.parseSequence("ATGCATGC")), null, "nor longer than its template");
+  // a fragment cut with drift still finds home, but holds less well
+  const drifted = H.fragmentFrom(template, 12, 10, 2, 0xbee);
+  const ds = H.bestAnnealSite(template, drifted);
+  assert.equal(ds.index, 12, "two mismatches do not lose the site");
+  assert.ok(ds.score < 1 && ds.score >= 0.7, "but the match is visibly imperfect");
+  assert.deepEqual(H.fragmentFrom(template, 12, 10, 2, 0xbee), drifted, "and the same seed cuts the same patch");
+}
+
+// —— what holds and what melts is the bond density, not the length ————
+{
+  const gc = H.parseSequence("GCGCGCGC");
+  const at = H.parseSequence("ATATATAT");
+  assert.equal(gc.length, at.length, "same length, so only the bases can differ");
+  const gcB = H.hydrogenBonds(gc);
+  const atB = H.hydrogenBonds(at);
+  assert.ok(gcB > atB, "the g·c duplex is held by more bonds");
+  // the temperature where the weak one has already gone and the strong holds
+  let split = -1;
+  for (let temp = 0; temp <= 1; temp += 0.01) {
+    if (!H.annealHolds(atB, at.length, temp) && H.annealHolds(gcB, gc.length, temp)) {
+      split = temp;
+      break;
+    }
+  }
+  assert.ok(split > 0, "there is a heat that melts a·t and leaves g·c standing");
+  assert.equal(H.annealHolds(gcB, gc.length, 0), true, "cold holds everything");
+  assert.equal(H.annealHolds(gcB, gc.length, 1), false, "and enough heat melts everything");
+  assert.equal(H.annealHolds(0, 0, 0), false, "an empty duplex holds nothing");
+}
+
+// —— repair rewrites exactly the mismatches, and nothing else ————————
+{
+  const template = H.sequenceFromSeed(0x9a, 32);
+  const perfect = H.complement(template.slice(8, 16));
+  assert.deepEqual(
+    H.spliceInto(template, perfect, 8),
+    template,
+    "a correct patch changes nothing — repair is not rewriting",
+  );
+  const patched = H.spliceInto(template, H.mutate(perfect, 3, 7), 8);
+  assert.equal(patched.length, template.length, "repair never changes the strand's length");
+  const changed = patched.map((b, i) => (b === template[i] ? 0 : 1)).reduce((a, b) => a + b, 0);
+  assert.equal(changed, 1, "exactly the one mismatched site moved");
+  assert.notEqual(patched[11], template[11], "and it moved where the mismatch was");
+  assert.deepEqual(H.spliceInto(template, perfect, 30), template, "a patch hanging off the end is refused");
+}
+
 console.log(
-  "helix ok: sequence↔melody a true round trip over 10 strands, complement an involution, the transcript reversible, the bond ledger matching the bases with the zipper strictly ordered, melting monotone in heat and in gc, and every mutation a real substitution",
+  "helix ok: sequence↔melody a true round trip over 10 strands, complement an involution, the transcript reversible, the bond ledger matching the bases with the zipper strictly ordered, melting monotone in heat and in gc, every mutation a real substitution, a fragment finding its site by sequence alone, and repair touching only the mismatch",
 );

@@ -48,6 +48,10 @@ const {
   packOffsets,
   settlePopulation,
   symbolFor,
+  massNumber,
+  fissionBarrier,
+  promptFissionOnCapture,
+  inducedFission,
 } = loadTsModule("src/lib/nucleons.ts");
 
 // — The curve peaks at iron. This is the one fact the whole axis hinges on:
@@ -234,5 +238,68 @@ assert.equal(symbolFor(92), "U");
 assert.equal(symbolFor(26), "Fe");
 assert.equal(bindingEnergy(1, 0), 0, "a lone proton binds to nothing");
 assert.equal(bindingEnergy(0, 1), 0, "nor does a lone neutron");
+
+// — THE CHAIN REACTION, and the one distinction the whole nuclear age turns
+//   on: U-235 is fissile and U-238 is not. Nothing in src/lib/nucleons.ts
+//   names either nuclide. The difference falls entirely out of the SEMF's
+//   PAIRING term — U-235 is even-Z/odd-N, so the captured neutron pairs up
+//   and pays ~7.4 MeV into a drop whose barrier is ~5.8; U-238 is even-even,
+//   so the same neutron arrives unpaired, pays ~5.6 into a ~6.4 MeV barrier
+//   and only warms it. Drop the pairing term (a plausible "simplification")
+//   and both come out identical, which is the bug this catches.
+{
+  assert.ok(promptFissionOnCapture(92, 143), "U-235 + n splits on the spot: fissile");
+  assert.ok(!promptFissionOnCapture(92, 146), "U-238 + n only warms: fertile, not fissile");
+  assert.ok(promptFissionOnCapture(94, 145), "Pu-239 is fissile too");
+  assert.ok(promptFissionOnCapture(92, 141), "and so is U-233");
+  assert.ok(!promptFissionOnCapture(90, 142), "Th-232 is fertile, not fissile");
+  assert.ok(!promptFissionOnCapture(26, 30), "nothing in the iron group can be made to split");
+  assert.ok(!promptFissionOnCapture(1, 0), "and certainly not hydrogen");
+}
+
+// — The barrier is a real landscape, not a constant: it vanishes where the
+//   drop can no longer hold itself (x → 1) and climbs steeply below.
+{
+  assert.ok(fissionBarrier(26, 30) > fissionBarrier(92, 144), "iron holds far harder than uranium");
+  // walking the valley floor upward, the barrier falls the whole way: this
+  // is the shape of the landscape, and a constant barrier would pass every
+  // fissile/fertile check above while making the whole chart wrong
+  const valleyBarrier = (a) => {
+    const z = mostStableZ(a);
+    return fissionBarrier(z, a - z);
+  };
+  for (let a = 120; a <= 220; a += 10) {
+    assert.ok(
+      valleyBarrier(a) > valleyBarrier(a + 30),
+      `the barrier falls as the valley climbs (A=${a} vs ${a + 30})`,
+    );
+  }
+  assert.equal(fissionBarrier(0, 0), 0, "nothing has no barrier");
+}
+
+// — What the chain actually carries: an induced split must hand back real
+//   prompt neutrons (or the reaction stops at one drop and there is no
+//   chain), and it must conserve nucleons exactly.
+{
+  const split = inducedFission(92, 143, 5);
+  assert.ok(split, "a fissile drop struck by a neutron does split");
+  assert.ok(split.neutrons >= 2, "and throws enough neutrons forward to find the next drop");
+  assert.ok(split.q > 120, "an actinide split pays well over 100 MeV");
+  assert.equal(
+    split.a.z + split.a.n + split.b.z + split.b.n + split.neutrons,
+    massNumber(92, 143) + 1,
+    "nucleons conserved across the induced split, captured neutron included",
+  );
+  assert.equal(split.a.z + split.b.z, 92, "and charge with them");
+  assert.equal(inducedFission(92, 146, 5), null, "a fertile drop returns nothing to propagate");
+  assert.deepEqual(inducedFission(92, 143, 5), split, "the same drop and seed split the same way");
+  // the fragments land neutron-rich and want to beta down — the glow after
+  const modeA = decayMode(split.a.z, split.a.n);
+  const modeB = decayMode(split.b.z, split.b.n);
+  assert.ok(
+    modeA === "beta-minus" || modeB === "beta-minus",
+    "fission products come out neutron-rich and keep decaying",
+  );
+}
 
 console.log("nucleons: ok");

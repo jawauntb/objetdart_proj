@@ -38,6 +38,11 @@ const {
   reactionProductSeed,
   settlePopulation,
   hashSeed,
+  vibrationalModeCount,
+  vibrationalModes,
+  modeForStrength,
+  vibrationPitchHz,
+  isLinear,
 } = loadTsModule("src/lib/chemistry.ts");
 
 const SEEDS = Array.from({ length: 90 }, (_, i) => hashSeed(i + 1, 23, 7));
@@ -363,6 +368,77 @@ for (let i = 0; i < 40; i++) {
     assert.ok(field.length <= MAX_MOLECULES, "population must stay under the cap");
   }
   assert.equal(field.length, MAX_MOLECULES, "sustained condensation should hold the field full");
+}
+
+// — HOW MANY WAYS A MOLECULE CAN SHAKE. 3N − 6, or 3N − 5 if it is a
+//   straight line, because you cannot spin a line about its own axis. Water
+//   and carbon dioxide both hold three atoms and DO NOT get the same answer;
+//   an implementation that forgot the linear case would give both 3, and the
+//   room would then be missing exactly the CO₂ mode that warms the planet.
+{
+  assert.equal(vibrationalModeCount(compoundByKey("H2O")), 3, "water, bent: 3N − 6 = 3");
+  assert.equal(vibrationalModeCount(compoundByKey("CO2")), 4, "CO₂, straight: 3N − 5 = 4");
+  assert.equal(vibrationalModeCount(compoundByKey("N2")), 1, "a diatomic has exactly one stretch");
+  assert.equal(vibrationalModeCount(compoundByKey("NH3")), 6, "ammonia, four atoms, bent: 6");
+  assert.equal(vibrationalModeCount(compoundByKey("CH4")), 9, "methane, five atoms: 9");
+  for (const c of COMPOUNDS) {
+    let n = 0;
+    for (const part of c.formula) n += part.count;
+    const want = isLinear(c) ? 3 * n - 5 : 3 * n - 6;
+    assert.equal(vibrationalModeCount(c), want, `${c.key} counts its real degrees of freedom`);
+    assert.equal(vibrationalModes(c).length, want, `${c.key} lists as many modes as it has`);
+  }
+}
+
+// — The named modes are the measured ones, and the ordering is real: water
+//   bends far below where it stretches. CO₂'s symmetric stretch is the one
+//   mode that is INFRARED-DARK — the two oxygens move out together and the
+//   dipole never changes — and that asymmetry is why the asymmetric stretch
+//   at 2349 is the greenhouse band while 1333 is invisible.
+{
+  const water = vibrationalModes(compoundByKey("H2O"));
+  assert.ok(Math.abs(water[0].wavenumber - 1595) < 1, "water bends at 1595 cm⁻¹");
+  assert.equal(water[0].kind, "bend", "and the bend is the floppiest mode it has");
+  assert.ok(water[1].wavenumber > 3600, "its stretches sit above 3600");
+  assert.ok(water.every((m) => m.irActive), "every water mode absorbs infrared");
+  const co2 = vibrationalModes(compoundByKey("CO2"));
+  const dark = co2.filter((m) => !m.irActive);
+  assert.equal(dark.length, 1, "CO₂ has exactly one infrared-dark mode");
+  assert.ok(Math.abs(dark[0].wavenumber - 1333) < 1, "and it is the symmetric stretch at 1333");
+  assert.ok(
+    co2.some((m) => m.irActive && Math.abs(m.wavenumber - 2349) < 1),
+    "the greenhouse band at 2349 is active",
+  );
+  const n2 = vibrationalModes(compoundByKey("N2"));
+  assert.ok(!n2[0].irActive, "a homonuclear diatomic has no dipole to change and is IR-dark");
+  for (const c of COMPOUNDS) {
+    const modes = vibrationalModes(c);
+    for (let i = 1; i < modes.length; i++) {
+      assert.ok(modes[i].wavenumber >= modes[i - 1].wavenumber, `${c.key} lists modes lowest first`);
+    }
+  }
+}
+
+// — A strike picks a mode by how hard it landed, and never the same one at
+//   0.1 and 0.9: the axis is continuous, exactly as the grammar demands.
+{
+  const water = compoundByKey("H2O");
+  const soft = modeForStrength(water, 0.05);
+  const hard = modeForStrength(water, 0.98);
+  assert.ok(soft.wavenumber < hard.wavenumber, "a harder strike reaches a stiffer mode");
+  let prev = 0;
+  for (let u = 0; u <= 1.0001; u += 0.05) {
+    const m = modeForStrength(water, u);
+    assert.ok(m.wavenumber >= prev, "the mode ladder never steps back down");
+    prev = m.wavenumber;
+  }
+  assert.deepEqual(modeForStrength(water, 0.5), modeForStrength(water, 0.5), "and it is deterministic");
+  // pitch is monotone in the wavenumber and stays inside the audible register
+  assert.ok(vibrationPitchHz(3657) > vibrationPitchHz(1595), "a stiffer bond is a higher note");
+  for (const w of [100, 667, 1333, 2349, 3756, 9000]) {
+    const hz = vibrationPitchHz(w);
+    assert.ok(hz >= 110 - 1e-6 && hz <= 110 * 16 + 1e-6, `${w} cm⁻¹ sounds inside the register`);
+  }
 }
 
 console.log(

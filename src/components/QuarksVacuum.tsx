@@ -70,6 +70,9 @@ import {
   settlePopulation,
   shouldSnap,
   snapChildren,
+  recombineSeeds,
+  reconfineSeeds,
+  RECONNECT_REACH,
   tubesOf,
   vacuumPairsAt,
   type HadronMorph,
@@ -126,9 +129,27 @@ type HadronEnt = {
   charge: number;
   /** 0..1 post-snap / post-flick tremble, decays. */
   shiver: number;
+  /**
+   * An excited state: the tubes stretched past rest and the whole thing
+   * spinning, until it drops back to the ground state radiating light.
+   * `until` is when it falls; `strength` is how far up it was pushed.
+   */
+  resonance: { until: number; strength: number } | null;
+  /** When this hadron may next trade colour with a neighbour, ms. */
+  reconnectAt: number;
   birth: number;
   retiringAt: number;
 };
+
+/** A quark with no hadron — only ever inside the plasma, never on its own. */
+type FreeQuark = { nx: number; ny: number; vx: number; vy: number; color: number; anti: boolean };
+
+/**
+ * The deconfined state: for as long as it holds, colour is not confined and
+ * the quarks belong to no one. `seeds` is the census that went in, which is
+ * what has to freeze back out.
+ */
+type Plasma = { born: number; life: number; seeds: number[]; quarks: FreeQuark[]; heat: number };
 
 type Photon = { x: number; y: number; vx: number; vy: number; born: number; life: number; color: string };
 type SparkPair = { x: number; y: number; angle: number; sep: number; color: number; born: number; life: number };
@@ -198,6 +219,8 @@ function makeHadron(seed: number, cx: number, cy: number, growth: number): Hadro
     closed: growth >= 1,
     charge: 0,
     shiver: 0,
+    resonance: null,
+    reconnectAt: 0,
     birth: performance.now(),
     retiringAt: 0,
   };
@@ -255,6 +278,13 @@ export default function QuarksVacuum() {
 
     // ————— state —————
     let hadrons: HadronEnt[] = [];
+    let plasma: Plasma | null = null;
+    /** Which rarer vacuum event the tier-3 train summons next. */
+    let vacuumCycle = 0;
+    /** The highest rung this tap train has already fired; 0 between trains. */
+    let trainRung = 0;
+    /** The next seeded moment the vacuum does something with no hand on it. */
+    let nextAmbientAt = performance.now() + 7000;
     let seedCount = 0;
     const photons: Photon[] = [];
     const sparkPairs: SparkPair[] = [];
@@ -395,7 +425,7 @@ export default function QuarksVacuum() {
       seedCount = hadrons.length;
       save(true);
     }
-    const syncStanding = () => setStanding(!clearing && hadrons.some((h) => !h.retiringAt));
+    const syncStanding = () => setStanding(!clearing && (plasma != null || hadrons.some((h) => !h.retiringAt)));
     syncStanding();
 
     // ————— helpers —————
@@ -630,6 +660,127 @@ export default function QuarksVacuum() {
       useField.getState().recordTape("ripple", 0.3 + intensity * 0.4, "quarks/perturb");
     };
 
+    /**
+     * EXCITATION TO A RESONANCE — what a train of taps does to something
+     * already bound. Energy poured into a hadron cannot free a quark (the
+     * tube only pulls harder), so it goes into the tube itself: the strings
+     * stretch past rest, the whole thing spins up, and for a moment it is a
+     * heavier state of the same constituents. That is what a resonance IS —
+     * not a new particle, an excited one — and it does not last. When it
+     * falls it RADIATES the difference as light, one photon per quark, and
+     * comes back down with its colour assignment rotated: the gluon exchange
+     * that carried the energy away also carried colour between the quarks.
+     *
+     * `depth` is how far the ladder was climbed, and it is a continuous axis:
+     * a firmer, longer train pushes the state higher and holds it longer.
+     */
+    const exciteResonance = (h: HadronEnt, intensity: number, depth: number) => {
+      const strength = clamp01(0.35 + intensity * 0.45 + depth * 0.5);
+      const nowR = performance.now();
+      const already = h.resonance ? clamp01(h.resonance.strength) : 0;
+      h.resonance = {
+        until: nowR + 620 + strength * 900,
+        strength: clamp01(Math.max(already + 0.2, strength)),
+      };
+      h.shiver = Math.min(1, h.shiver + 0.4 + strength * 0.4);
+      // the tubes stretch: the constituents are kicked outward from the
+      // centre, which the confinement law will answer for
+      let cx = 0;
+      let cy = 0;
+      for (const q of h.quarks) {
+        cx += q.nx;
+        cy += q.ny;
+      }
+      cx /= h.quarks.length;
+      cy /= h.quarks.length;
+      for (const q of h.quarks) {
+        const rx = q.nx - cx;
+        const ry = q.ny - cy;
+        const r = Math.max(1e-4, Math.hypot(rx, ry));
+        q.vx += (rx / r) * 0.05 * strength;
+        q.vy += (ry / r) * 0.05 * strength;
+        // and it spins: angular momentum is what a resonance mostly is
+        q.vx += -ry * 0.5 * strength;
+        q.vy += rx * 0.5 * strength;
+      }
+      for (let qi = 0; qi < h.quarks.length; qi++) {
+        noteLater(qi * 70, midiOf(h.morph) + [0, 4, 7][qi % 3] + Math.round(strength * 7), 130);
+      }
+      try { audio().buzz(); } catch { /* noop */ }
+      try { haptics.ripple(0.35 + strength * 0.4); } catch { /* noop */ }
+      useField.getState().recordTape("object", clamp01(0.5 + strength * 0.4), "quarks/resonance");
+    };
+
+    /**
+     * The resonance falls. The light goes out along each quark's own colour,
+     * and the state that is left is the same constituents wearing a rotated
+     * assignment — the exchange that carried the energy off carried colour
+     * with it. Still white: it always is, that is the only law down here.
+     */
+    const dropFromResonance = (h: HadronEnt) => {
+      const strength = h.resonance ? h.resonance.strength : 0.4;
+      h.resonance = null;
+      for (let qi = 0; qi < h.quarks.length; qi++) {
+        const q = h.quarks[qi];
+        emitPhoton(q.sx, q.sy, twinkleHash(h.seed + qi * 7 + strength * 97) * Math.PI * 2, COLOR_TINTS[h.morph.colors[qi]]);
+      }
+      // the colour rotation, in place: the same kind, a new assignment
+      const rotated = seedForKind(hashSeed(h.seed, 0xc010, Math.round(strength * 97)), h.morph.kind);
+      h.seed = rotated;
+      h.morph = { ...hadronFromSeed(rotated), rest: h.morph.rest };
+      h.shiver = Math.min(1, h.shiver + 0.5);
+      try { audio().bell(); } catch { /* noop */ }
+      note(midiOf(h.morph) + 12, 200);
+      noteLater(130, midiOf(h.morph) + 7, 260);
+      try { haptics.bloom(); } catch { /* noop */ }
+      useField.getState().recordTape("sigil", clamp01(0.55 + strength * 0.35), "quarks/radiate");
+      save();
+    };
+
+    /**
+     * COLOUR RECONNECTION — the physics between hadrons, which is the thing
+     * a field of separately-drawn hadrons does not have. Each one is white,
+     * so at any distance they are invisible to each other; bring two inside
+     * RECONNECT_REACH and the colour fields overlap, a gluon crosses, and the
+     * strings re-form ACROSS the pair. What parts is two hadrons neither of
+     * which is either parent — the constituents have been traded.
+     */
+    const reconnect = (a: HadronEnt, b: HadronEnt) => {
+      const nowR = performance.now();
+      const [s1, s2] = recombineSeeds(a.seed, b.seed);
+      const ca = { x: a.quarks.reduce((s, q) => s + q.nx, 0) / a.quarks.length, y: a.quarks.reduce((s, q) => s + q.ny, 0) / a.quarks.length };
+      const cb = { x: b.quarks.reduce((s, q) => s + q.nx, 0) / b.quarks.length, y: b.quarks.reduce((s, q) => s + q.ny, 0) / b.quarks.length };
+      const mx = ((ca.x + cb.x) / 2) * width;
+      const my = ((ca.y + cb.y) / 2) * height;
+      hadrons = hadrons.filter((q) => q !== a && q !== b);
+      if (drag.hadronId === a.id || drag.hadronId === b.id) { drag.hadronId = null; drag.quarkIdx = -1; }
+      const c1 = makeHadron(s1, ca.x, ca.y, 1);
+      const c2 = makeHadron(s2, cb.x, cb.y, 1);
+      // they leave along the axis they met on, still trailing the tube that
+      // briefly ran between them
+      const ax = (cb.x - ca.x) || 0.001;
+      const ay = (cb.y - ca.y) || 0.001;
+      const al = Math.hypot(ax, ay);
+      for (const q of c1.quarks) { q.vx -= (ax / al) * 0.05; q.vy -= (ay / al) * 0.05; }
+      for (const q of c2.quarks) { q.vx += (ax / al) * 0.05; q.vy += (ay / al) * 0.05; }
+      c1.shiver = 1;
+      c2.shiver = 1;
+      c1.reconnectAt = nowR + 2600;
+      c2.reconnectAt = nowR + 2600;
+      hadrons.push(c1, c2);
+      retireOldest();
+      emitPhoton(mx, my, twinkleHash(s1) * Math.PI * 2, "#F7F3EA");
+      spraySparks(mx, my, 9, 40);
+      try { audio().bell(); } catch { /* noop */ }
+      note(FLOOR_MIDI + 12, 300);
+      noteLater(120, midiOf(c1.morph), 200);
+      noteLater(240, midiOf(c2.morph), 240);
+      try { haptics.detent(); } catch { /* noop */ }
+      useField.getState().recordTape("sigil", 0.8, "quarks/reconnect");
+      save();
+      syncStanding();
+    };
+
     /** The room's one great law, executed: the tube snaps into a new pair. */
     const snap = (h: HadronEnt, tubeIdx: number) => {
       const tubes = tubesOf(h.morph.kind);
@@ -693,12 +844,206 @@ export default function QuarksVacuum() {
       syncStanding();
     };
 
+    /**
+     * The rarer things the bare vacuum does, in a fixed cycle so a hand that
+     * keeps asking keeps being answered differently. Seeded, never random.
+     */
+    const vacuumEvent = (x: number, y: number, intensity: number, depth: number) => {
+      const which = vacuumCycle % 3;
+      vacuumCycle += 1;
+      const md = minDim();
+      const seed = hashSeed(Math.round(x), Math.round(y), vacuumCycle, 0x1e75);
+      const k = 0.6 + intensity * 0.7 + depth * 0.7;
+      if (which === 0) {
+        // A TWO-JET EVENT. A quark and an antiquark thrown apart back to back
+        // do not come apart: the tube between them stretches, snaps, snaps
+        // again, and what reaches the walls is two narrow SPRAYS of colourless
+        // hadrons along the original directions. You never see the quark —
+        // you see the jet it made, which is the only way anyone ever has.
+        const ang = twinkleHash(seed) * Math.PI * 2;
+        for (const sgn of [-1, 1]) {
+          for (let i = 0; i < 5; i++) {
+            const spread = (twinkleHash(seed + i * 13 + (sgn > 0 ? 71 : 7)) - 0.5) * 0.5;
+            const r = md * (0.06 + i * 0.05) * k;
+            const a2 = ang + spread * 0.5;
+            emitPhoton(x + Math.cos(a2) * r * sgn, y + Math.sin(a2) * r * sgn, a2 + (sgn > 0 ? 0 : Math.PI), COLOR_TINTS[i % 3]);
+            spraySparks(x + Math.cos(a2) * r * sgn, y + Math.sin(a2) * r * sgn, 3, 16 + i * 5);
+          }
+        }
+        // and one real hadron freezes out of each jet's hardest fragment
+        for (const sgn of [-1, 1]) {
+          const h = condense(x + Math.cos(ang) * md * 0.2 * sgn, y + Math.sin(ang) * md * 0.2 * sgn, depth * 0.7);
+          if (h) {
+            h.growth = 1;
+            h.closed = true;
+            h.shiver = 1;
+            for (const q of h.quarks) {
+              q.vx += Math.cos(ang) * 0.06 * sgn;
+              q.vy += Math.sin(ang) * 0.06 * sgn;
+            }
+          }
+        }
+        note(RING_MIDI - 7, 160);
+        noteLater(120, RING_MIDI, 200);
+        try { haptics.chop(); } catch { /* noop */ }
+        useField.getState().recordTape("region", clamp01(0.6 + depth * 0.3), "quarks/jets");
+        return;
+      }
+      if (which === 1) {
+        // A GLUON SHOWER. A gluon carries the colour it mediates, so it can
+        // radiate gluons itself — and those radiate more. The cascade is why
+        // the strong force is strong, and why a jet is a spray and not a line.
+        const gens = 3;
+        let front: Array<[number, number, number]> = [[x, y, twinkleHash(seed) * Math.PI * 2]];
+        for (let g = 0; g < gens; g++) {
+          const next: Array<[number, number, number]> = [];
+          for (const [px, py, pa] of front) {
+            for (const branch of [-1, 1]) {
+              const a2 = pa + branch * (0.5 - g * 0.08) + (twinkleHash(seed + g * 31 + px) - 0.5) * 0.3;
+              const r = md * (0.05 + g * 0.035) * k;
+              const nx2 = px + Math.cos(a2) * r;
+              const ny2 = py + Math.sin(a2) * r;
+              spraySparks(nx2, ny2, 2 + (gens - g), 12 + g * 8);
+              emitPhoton(px, py, a2, COLOR_TINTS[(g + (branch > 0 ? 1 : 2)) % 3]);
+              if (g < gens - 1) next.push([nx2, ny2, a2]);
+            }
+          }
+          front = next;
+          noteLater(g * 90, RING_MIDI - 12 + g * 5, 110);
+        }
+        rings.push({ x, y, r: md * 0.1 * k, born: performance.now(), life: 900 });
+        if (rings.length > 6) rings.splice(0, rings.length - 6);
+        try { audio().buzz(); } catch { /* noop */ }
+        try { haptics.roll(); } catch { /* noop */ }
+        useField.getState().recordTape("region", clamp01(0.5 + depth * 0.35), "quarks/gluon-shower");
+        return;
+      }
+      // A STRING SPONTANEOUSLY BREAKING in the bare vacuum: the field pulls a
+      // pair out of nothing, the tube between them stretches past what it can
+      // hold, and it snaps into two bound things instead of ever letting one
+      // go free. The room's whole law, performed with no hadron involved.
+      const ang = twinkleHash(seed * 1.9) * Math.PI * 2;
+      const reach = md * (0.12 + k * 0.09);
+      const ax = x - Math.cos(ang) * reach;
+      const ay = y - Math.sin(ang) * reach;
+      const bx = x + Math.cos(ang) * reach;
+      const by = y + Math.sin(ang) * reach;
+      for (let i = 0; i <= 10; i++) {
+        const u = i / 10;
+        spraySparks(ax + (bx - ax) * u, ay + (by - ay) * u, 2, 10);
+      }
+      const h1 = condense(ax, ay, 0);
+      const h2 = condense(bx, by, 0);
+      for (const h of [h1, h2]) {
+        if (!h) continue;
+        h.growth = 1;
+        h.closed = true;
+        h.shiver = 1;
+      }
+      rings.push({ x, y, r: reach, born: performance.now(), life: 800 });
+      if (rings.length > 6) rings.splice(0, rings.length - 6);
+      try { audio().spark(); } catch { /* noop */ }
+      note(FLOOR_MIDI + 7, 260);
+      noteLater(140, RING_MIDI, 200);
+      try { haptics.detent(); } catch { /* noop */ }
+      useField.getState().recordTape("object", clamp01(0.55 + depth * 0.3), "quarks/string-break");
+    };
+
+    /**
+     * DECONFINEMENT — the room's largest, rarest event, and the only state
+     * this material has ever been in where the room's own law is suspended.
+     * Heat the vacuum past the point where the strings can hold and colour
+     * stops being confined: the quarks stop belonging to any particular
+     * hadron and move as one hot liquid. The universe was in this state for
+     * its first microsecond and has never been in it since.
+     *
+     * It does not last, and the way it ends is the point: as the plasma cools
+     * every quark must find partners again, and what freezes out is a fresh
+     * set of white hadrons carrying the same census (`reconfineSeeds`). The
+     * things that come back are not the things that went in.
+     */
+    const deconfine = (intensity: number, depth: number) => {
+      const alive = hadrons.filter((h) => !h.retiringAt && h.closed);
+      if (alive.length === 0) return;
+      const nowD = performance.now();
+      const k = 0.5 + intensity * 0.6 + depth * 0.8;
+      const md = minDim();
+      const freed: FreeQuark[] = [];
+      for (const h of alive) {
+        for (let qi = 0; qi < h.quarks.length; qi++) {
+          const q = h.quarks[qi];
+          const a = twinkleHash(h.seed + qi * 17) * Math.PI * 2;
+          freed.push({
+            nx: q.nx,
+            ny: q.ny,
+            vx: Math.cos(a) * (0.22 + k * 0.22),
+            vy: Math.sin(a) * (0.22 + k * 0.22),
+            color: h.morph.colors[qi],
+            anti: h.morph.antis[qi],
+          });
+        }
+        spraySparks(
+          h.quarks.reduce((s, q) => s + q.sx, 0) / h.quarks.length,
+          h.quarks.reduce((s, q) => s + q.sy, 0) / h.quarks.length,
+          8, md * 0.06,
+        );
+      }
+      plasma = {
+        born: nowD,
+        life: 900 + k * 900,
+        seeds: alive.map((h) => h.seed),
+        quarks: freed,
+        heat: 1,
+      };
+      hadrons = hadrons.filter((h) => h.retiringAt);
+      drag.hadronId = null;
+      drag.quarkIdx = -1;
+      rings.push({ x: width * 0.5, y: height * 0.5, r: md * 0.06, born: nowD, life: 1400 });
+      if (rings.length > 6) rings.splice(0, rings.length - 6);
+      try { audio().thud(); } catch { /* noop */ }
+      try { audio().bell(); } catch { /* noop */ }
+      note(FLOOR_MIDI - 12, 700);
+      noteLater(200, FLOOR_MIDI, 500);
+      noteLater(460, RING_MIDI - 12, 420);
+      try { haptics.storm(); } catch { /* noop */ }
+      useField.getState().recordTape("sigil", clamp01(0.9 + depth * 0.1), "quarks/deconfine");
+      syncStanding();
+    };
+
+    /** The plasma cools and colour is confined again — into new partners. */
+    const reconfine = () => {
+      if (!plasma) return;
+      const p = plasma;
+      plasma = null;
+      const seeds = reconfineSeeds(p.seeds, hashSeed(Math.round(p.born), p.quarks.length));
+      // the freeze-out lands where the plasma actually is, so the new things
+      // come out of the hot liquid rather than appearing beside it
+      seeds.forEach((s, i) => {
+        const q = p.quarks[Math.min(p.quarks.length - 1, i * 2)] ?? p.quarks[0];
+        const h = makeHadron(s, clamp(q ? q.nx : 0.5, 0.08, 0.92), clamp(q ? q.ny : 0.5, 0.1, 0.92), 1);
+        h.shiver = 1;
+        h.reconnectAt = performance.now() + 2200;
+        hadrons.push(h);
+        noteLater(i * 110, midiOf(h.morph), 240);
+      });
+      retireOldest();
+      for (const q of p.quarks) spraySparks(q.nx * width, q.ny * height, 3, 20);
+      try { audio().chime(); } catch { /* noop */ }
+      try { haptics.bloom(); } catch { /* noop */ }
+      useField.getState().recordTape("sigil", 0.9, "quarks/reconfine");
+      save();
+      syncStanding();
+    };
+
     // the whole-vacuum parting (LetGo, §8c): one low word, then every bound
     // thing returns to light along the existing annihilation path, in
     // sequence — an exhale, never a blink. Storage is written empty at once:
     // a stilled vacuum is a remembered state, and the starters do not return.
     const letGo = () => {
       if (clearing) return;
+      // a plasma is a state of the room too: stilling the vacuum lets it
+      // freeze back out first, so nothing is left hanging with no hadron
+      if (plasma) reconfine();
       const alive = hadrons.filter((h) => !h.retiringAt);
       if (alive.length === 0) return;
       try { audio().thud(); } catch { /* noop */ }
@@ -771,16 +1116,33 @@ export default function QuarksVacuum() {
         if (e.fingers === 3) { tutti(e.intensity); return; }
         if (e.fingers !== 1) return; // anything else is gently absorbed
         const { x, y } = toLocal(e.x, e.y);
-        // the rapid-tap ladder (1 / 3 / 5 / n): perturb → the nearest
-        // hadron speaks its chord → it radiates real light → the field boils
+        // The site-wide tap ladder (gesture/core.ts: 1 / 3 / 5 / n) read in
+        // this material. One tap perturbs. Three excite what is bound into a
+        // resonance — or, on the bare vacuum, summon one of the rarer things
+        // colour does. Five DECONFINE: the room's own law suspended for a
+        // breath. Past seven the plasma is held open and reheated for as long
+        // as the hand keeps hammering, which is the rung with no ceiling.
         const trainTier = tapTrainTier(e.count);
         const depth = tapTrainDepth(e.count);
+        if (e.count <= 1) trainRung = 0;
         if (trainTier === "n") {
-          // crescendo: the whole vacuum boils over — a wavefront of pair
-          // production crosses the field and everything bound trembles
-          rings.push({ x, y, r: minDim() * (0.14 + depth * 0.1), born: performance.now(), life: 1100 });
+          // the sustained train: the plasma is held open and stirred hotter,
+          // and everything still bound trembles harder each time
+          trainRung = 7;
+          if (plasma) {
+            plasma.life += 260 + depth * 420;
+            plasma.heat = Math.min(2.2, plasma.heat + 0.25 + depth * 0.35);
+            for (const q of plasma.quarks) {
+              const a = twinkleHash(q.nx * 977 + q.ny * 883 + e.count) * Math.PI * 2;
+              q.vx += Math.cos(a) * 0.1 * (0.5 + depth);
+              q.vy += Math.sin(a) * 0.1 * (0.5 + depth);
+            }
+          } else {
+            deconfine(e.intensity, depth);
+          }
+          rings.push({ x, y, r: minDim() * (0.14 + depth * 0.14), born: performance.now(), life: 1100 });
           if (rings.length > 6) rings.splice(0, rings.length - 6);
-          spraySparks(x, y, 9 + Math.round(depth * 6), minDim() * 0.22);
+          spraySparks(x, y, 9 + Math.round(depth * 8), minDim() * (0.22 + depth * 0.1));
           for (const h of hadrons) h.shiver = Math.min(1, h.shiver + 0.5 + depth * 0.5);
           note(RING_MIDI, 140);
           noteLater(90, RING_MIDI + 7, 160);
@@ -790,57 +1152,35 @@ export default function QuarksVacuum() {
           return;
         }
         if (trainTier === 5) {
-          // five taps shake light loose: the hadron under the hand radiates
-          // a photon from every quark and stays whole — bremsstrahlung
-          const h = hadronAt(x, y);
-          if (h && h.closed) {
-            for (let qi = 0; qi < h.quarks.length; qi++) {
-              const q = h.quarks[qi];
-              emitPhoton(q.sx, q.sy, twinkleHash(h.seed + qi * 7) * Math.PI * 2, COLOR_TINTS[h.morph.colors[qi]]);
+          if (trainRung >= 5) {
+            // still inside the rung: stir the plasma hotter rather than
+            // starting a second one — the axis is continuous, not a switch
+            if (plasma) {
+              plasma.life += 180 + depth * 240;
+              plasma.heat = Math.min(2.2, plasma.heat + 0.2);
             }
-            h.shiver = Math.min(1, h.shiver + 0.6 + depth * 0.4);
-            try { audio().bell(); } catch { /* noop */ }
-            note(midiOf(h.morph) + 12, 200);
-            try { haptics.bloom(); } catch { /* noop */ }
-            useField.getState().recordTape("sigil", 0.7, "quarks/radiate");
-          } else {
-            // nothing bound under the hand: the vacuum rings a halo instead
-            rings.push({ x, y, r: 40 + depth * 24, born: performance.now(), life: 900 });
-            if (rings.length > 6) rings.splice(0, rings.length - 6);
-            spraySparks(x, y, 6, 44);
-            note(RING_MIDI - 3, 130);
-            try { haptics.ripple(0.5); } catch { /* noop */ }
+            spraySparks(x, y, 6, minDim() * 0.16);
+            try { haptics.chop(); } catch { /* noop */ }
+            return;
           }
+          trainRung = 5;
+          deconfine(e.intensity, depth);
           return;
         }
         if (trainTier === 3) {
-          // three taps ask the nearest hadron for its chord: each quark
-          // speaks in turn and the whole thing spins up for a breath
           const h = hadronAt(x, y);
-          if (h && h.closed) {
-            for (let qi = 0; qi < h.quarks.length; qi++) {
-              noteLater(qi * 70, midiOf(h.morph) + [0, 4, 7][qi % 3], 130);
-            }
-            let hcx = 0, hcy = 0;
-            for (const q of h.quarks) { hcx += q.nx; hcy += q.ny; }
-            hcx /= h.quarks.length;
-            hcy /= h.quarks.length;
-            const kick = 0.18 * (0.6 + depth);
-            for (const q of h.quarks) {
-              q.vx += -(q.ny - hcy) * kick;
-              q.vy += (q.nx - hcx) * kick;
-            }
-            h.shiver = Math.min(1, h.shiver + 0.3 + depth * 0.3);
-            try { haptics.ripple(0.4 + depth * 0.3); } catch { /* noop */ }
-            useField.getState().recordTape("object", 0.5, "quarks/chord");
-          } else {
-            spraySparks(x, y, 5 + Math.round(depth * 4), 34);
-            note(RING_MIDI - 5, 90);
-            noteLater(80, RING_MIDI, 110);
-            try { haptics.ripple(0.35); } catch { /* noop */ }
+          if (trainRung >= 3) {
+            // deepen what the rung already began
+            if (h && h.closed) exciteResonance(h, e.intensity, depth);
+            else spraySparks(x, y, 5 + Math.round(depth * 5), 34 + depth * 26);
+            return;
           }
+          trainRung = 3;
+          if (h && h.closed) exciteResonance(h, e.intensity, depth);
+          else vacuumEvent(x, y, e.intensity, depth);
           return;
         }
+        trainRung = 1;
         perturb(x, y, e.intensity);
       },
       hold: (e) => {
@@ -1425,6 +1765,20 @@ export default function QuarksVacuum() {
         stamp(CEREMONY_SPRITE, cx, cy, hr, 0.36 * h.charge * fade);
       }
 
+      // an excited state wears its energy: the whole thing glows hotter and
+      // the glow tightens as the moment to fall approaches
+      if (h.resonance && feltAlpha > 0.02) {
+        const left = clamp01((h.resonance.until - performance.now()) / 900);
+        const cx = h.quarks.reduce((s, q) => s + q.sx, 0) / h.quarks.length;
+        const cy = h.quarks.reduce((s, q) => s + q.sy, 0) / h.quarks.length;
+        stamp(
+          CORONA_SPRITE,
+          cx, cy,
+          md * 0.09 * (0.7 + left * 0.7) * (1 + h.resonance.strength * 0.5),
+          0.4 * h.resonance.strength * (0.35 + left * 0.65) * feltAlpha,
+        );
+      }
+
       // — flux tubes: luminous strings; brighter and thinner as they strain —
       for (let k = 0; k < tubes.length; k++) {
         const [i, j] = tubes[k];
@@ -1590,8 +1944,45 @@ export default function QuarksVacuum() {
       const quick = bt * Math.PI * 2 * REGISTER.lfoHz;
       const md = minDim();
 
-      // ————— physics: confinement, the anti-spring —————
       const stepDt = Math.min(0.05, dt) * timeScale;
+
+      // ————— the deconfined state, while it holds —————
+      //
+      // Colour is not confined in here. The quarks move as one hot liquid,
+      // pushed apart by their own pressure and pulled back by the vacuum's,
+      // and they belong to nothing. It cools, always — and when it has, the
+      // room's law returns and they must find partners again.
+      if (plasma) {
+        const age = (now - plasma.born) / plasma.life;
+        plasma.heat = Math.max(0, plasma.heat - dt * 0.55);
+        if (age >= 1) {
+          reconfine();
+        } else {
+          const pressure = (1 - age) * (0.6 + plasma.heat * 0.5);
+          for (let i = 0; i < plasma.quarks.length; i++) {
+            const q = plasma.quarks[i];
+            // the liquid's own seethe: deterministic in the quark's place
+            if (!reduce) {
+              q.vx += Math.sin(localT * 3.1 + i * 1.7) * 0.06 * pressure * stepDt;
+              q.vy += Math.cos(localT * 2.7 + i * 2.3) * 0.06 * pressure * stepDt;
+            }
+            q.vx += (windX + tiltLeanX * 0.5) * 0.05 * stepDt * 60;
+            q.vy += (windY + tiltLeanY * 0.5) * 0.05 * stepDt * 60;
+            q.nx += q.vx * stepDt;
+            q.ny += q.vy * stepDt;
+            // the walls of the field hold the liquid in
+            if (q.nx < 0.04) { q.nx = 0.04; q.vx = Math.abs(q.vx) * 0.7; }
+            if (q.nx > 0.96) { q.nx = 0.96; q.vx = -Math.abs(q.vx) * 0.7; }
+            if (q.ny < 0.06) { q.ny = 0.06; q.vy = Math.abs(q.vy) * 0.7; }
+            if (q.ny > 0.95) { q.ny = 0.95; q.vy = -Math.abs(q.vy) * 0.7; }
+            // as it cools every quark begins to feel the pull home again
+            q.vx *= Math.exp(-stepDt * (1.2 + age * 3.4));
+            q.vy *= Math.exp(-stepDt * (1.2 + age * 3.4));
+          }
+        }
+      }
+
+      // ————— physics: confinement, the anti-spring —————
       for (let hi = hadrons.length - 1; hi >= 0; hi--) {
         const h = hadrons[hi];
         if (h.retiringAt && now - h.retiringAt > RETIRE_MS) { hadrons.splice(hi, 1); dirty = true; continue; }
@@ -1601,6 +1992,11 @@ export default function QuarksVacuum() {
         }
         h.shiver = Math.max(0, h.shiver - dt * 1.1);
         if (hold.hadronId !== h.id && kbHadronId !== h.id) h.charge = Math.max(0, h.charge - dt * 1.6);
+        // an excited state does not keep: when its moment is up it falls,
+        // radiating the difference and coming back rotated in colour
+        if (h.resonance && now >= h.resonance.until) {
+          dropFromResonance(h);
+        }
 
         const tubes = tubesOf(h.morph.kind);
         const dragged = drag.hadronId === h.id;
@@ -1688,6 +2084,69 @@ export default function QuarksVacuum() {
           const damp = Math.exp(-stepDt * 3.4);
           q.vx *= damp;
           q.vy *= damp;
+        }
+      }
+
+      // ————— the physics BETWEEN hadrons: colour reconnection —————
+      //
+      // Each hadron is white, so at any distance the others are invisible to
+      // it — which is why the strong force is short-ranged even though it
+      // never falls off. Inside RECONNECT_REACH the colour fields overlap, a
+      // gluon crosses, and what parts is two things neither of which is
+      // either parent. This is the whole difference between a population and
+      // a set of separately-drawn decals.
+      if (!plasma) {
+        const reach = RECONNECT_REACH;
+        for (let i = 0; i < hadrons.length; i++) {
+          const a = hadrons[i];
+          if (a.retiringAt || !a.closed || now < a.reconnectAt) continue;
+          let done = false;
+          for (let j = i + 1; j < hadrons.length && !done; j++) {
+            const b = hadrons[j];
+            if (b.retiringAt || !b.closed || now < b.reconnectAt) continue;
+            let ax = 0, ay = 0, bx = 0, by = 0;
+            for (const q of a.quarks) { ax += q.nx; ay += q.ny; }
+            for (const q of b.quarks) { bx += q.nx; by += q.ny; }
+            ax /= a.quarks.length; ay /= a.quarks.length;
+            bx /= b.quarks.length; by /= b.quarks.length;
+            const d = Math.hypot(ax - bx, ay - by);
+            if (d > reach) continue;
+            // the fields overlapping is legible before anything happens: the
+            // two lean toward each other, hard, as the tube forms between them
+            const pull = (1 - d / reach) * 0.12;
+            for (const q of a.quarks) { q.vx += ((bx - ax) / Math.max(1e-4, d)) * pull * stepDt; q.vy += ((by - ay) / Math.max(1e-4, d)) * pull * stepDt; }
+            for (const q of b.quarks) { q.vx += ((ax - bx) / Math.max(1e-4, d)) * pull * stepDt; q.vy += ((ay - by) / Math.max(1e-4, d)) * pull * stepDt; }
+            a.shiver = Math.min(1, a.shiver + dt * 0.9);
+            b.shiver = Math.min(1, b.shiver + dt * 0.9);
+            if (d < reach * 0.45) {
+              reconnect(a, b);
+              done = true;
+            }
+          }
+          if (done) break;
+        }
+      }
+
+      // ————— the vacuum's own life, with no hand on it —————
+      //
+      // A room that is still when untouched has failed. On its own seeded
+      // clock the bare vacuum does what it does: a bound thing radiates and
+      // drops, or a string pulls a pair out of nothing and snaps.
+      if (!reduce && !plasma && now >= nextAmbientAt) {
+        const k = twinkleHash(Math.round(now / 1000) * 7.7);
+        nextAmbientAt = now + 9000 + k * 11000;
+        const bound = hadrons.filter((h) => h.closed && !h.retiringAt && !h.resonance);
+        if (k < 0.45 && bound.length > 0) {
+          // one of them was already excited and nobody noticed: it drops
+          const h = bound[Math.floor(k * 2.2 * bound.length) % bound.length];
+          h.resonance = { until: now + 500, strength: 0.35 };
+        } else if (hadrons.filter((h) => !h.retiringAt).length < MAX_HADRONS - 1) {
+          vacuumEvent(
+            width * (0.2 + twinkleHash(now * 0.013) * 0.6),
+            height * (0.2 + twinkleHash(now * 0.017) * 0.6),
+            0.3,
+            0,
+          );
         }
       }
 
@@ -1794,6 +2253,51 @@ export default function QuarksVacuum() {
         ctx.beginPath();
         ctx.arc(rg.x, rg.y, rg.r * (1 + age * 0.25), 0, Math.PI * 2);
         ctx.stroke();
+      }
+
+      // the plasma: quarks with no hadron, each still wearing its colour,
+      // and the field between them a glow instead of a set of strings
+      if (plasma) {
+        const age = clamp01((now - plasma.born) / plasma.life);
+        const env = Math.sin(Math.min(1, age * 1.08) * Math.PI);
+        const feltA = (1 - lens) * (0.5 + env * 0.5);
+        // the hot liquid itself: every quark reaches every other one, so the
+        // links are drawn as a haze rather than as tubes with ends
+        ctx.save();
+        ctx.globalCompositeOperation = "screen";
+        ctx.lineWidth = 0.7;
+        // O(visible), never O(everything): the haze is a budget, and the
+        // frame governor's tier spends it
+        let links = Math.round(90 * detail.particles);
+        for (let i = 0; i < plasma.quarks.length && links > 0; i++) {
+          const qa = plasma.quarks[i];
+          for (let j = i + 1; j < plasma.quarks.length && links > 0; j++) {
+            const qb = plasma.quarks[j];
+            const d = Math.hypot(qa.nx - qb.nx, qa.ny - qb.ny);
+            if (d > 0.34) continue;
+            links -= 1;
+            ctx.strokeStyle = colorAlpha(
+              mixHex(COLOR_TINTS[qa.color], COLOR_TINTS[qb.color], 0.5),
+              0.16 * (1 - d / 0.34) * feltA * (0.5 + plasma.heat * 0.5),
+            );
+            ctx.beginPath();
+            ctx.moveTo(qa.nx * width, qa.ny * height);
+            ctx.lineTo(qb.nx * width, qb.ny * height);
+            ctx.stroke();
+          }
+        }
+        ctx.restore();
+        for (const q of plasma.quarks) {
+          const cx = q.nx * width;
+          const cy = q.ny * height;
+          const tint = q.anti ? ANTI_TINTS[q.color] : COLOR_TINTS[q.color];
+          const glow = CORE_SPRITES.get(tint);
+          if (glow) stamp(glow, cx, cy, md * 0.045 * (0.7 + plasma.heat * 0.4), 0.5 * feltA);
+          ctx.fillStyle = colorAlpha(tint, 0.9 * feltA);
+          ctx.beginPath();
+          ctx.arc(cx, cy, md * 0.008, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
 
       // hadrons

@@ -255,6 +255,205 @@ export function peptideCondense(
   return { product: subFormula(addFormula(a, b), WATER), water: WATER };
 }
 
+// ——— polarity: why two chains care about each other ——————————————————
+
+/**
+ * Group dipole weights, in debye-ish units — hydroxyl and amine are the
+ * polar ones, a carbonyl the strongest, and a hydrocarbon is nothing at
+ * all. This is what makes hexane indifferent and glycine sticky.
+ */
+export const GROUP_DIPOLE: Record<GroupKey, number> = {
+  H: 0,
+  OH: 1.5,
+  NH2: 1.3,
+  CH3: 0,
+  O: 2.3,
+};
+
+/**
+ * A chain's net polarity, 0..1 — polar groups per backbone atom, saturating.
+ * Pure hydrocarbon is exactly zero: hexane feels no pull toward anything,
+ * which is the whole reason oil and water are two things.
+ */
+export function polarity(chain: Chain): number {
+  const n = Math.max(1, chain.atoms.length);
+  let d = 0;
+  for (const a of chain.atoms) {
+    if (a.el === "N") d += 0.6;
+    if (a.el === "O") d += 0.9;
+    for (const g of a.subs) d += GROUP_DIPOLE[g];
+  }
+  return 1 - Math.exp(-d / (n * 1.15));
+}
+
+/** Hydrogen-bond donors (N–H, O–H) a chain offers. */
+export function hbondDonors(chain: Chain): number {
+  let n = 0;
+  for (const a of chain.atoms) {
+    if (a.el === "N") n += a.subs.filter((g) => g === "H").length;
+    for (const g of a.subs) if (g === "OH") n += 1;
+    for (const g of a.subs) if (g === "NH2") n += 2;
+  }
+  return n;
+}
+
+/** Hydrogen-bond acceptors (lone pairs on N and O) a chain offers. */
+export function hbondAcceptors(chain: Chain): number {
+  let n = 0;
+  for (const a of chain.atoms) {
+    if (a.el === "O") n += 2;
+    if (a.el === "N") n += 1;
+    for (const g of a.subs) {
+      if (g === "OH") n += 2;
+      if (g === "O") n += 2;
+      if (g === "NH2") n += 1;
+    }
+  }
+  return n;
+}
+
+/** Range of the dipole attraction, in bond lengths. Beyond it, nothing. */
+export const DIPOLE_RANGE = 9;
+
+/**
+ * The attraction between two chains at distance `d` (bond lengths):
+ * dipole–dipole, so it goes as 1/d³ and vanishes entirely if either chain
+ * is nonpolar. Softened at short range so the integrator cannot explode,
+ * and cut to exactly zero past DIPOLE_RANGE so the room stays O(near).
+ */
+export function dipoleAttraction(a: Chain, b: Chain, d: number): number {
+  if (!(d > 0) || d > DIPOLE_RANGE) return 0;
+  const p = polarity(a) * polarity(b);
+  if (p <= 0) return 0;
+  const soft = Math.max(1, d);
+  return p / (soft * soft * soft);
+}
+
+/**
+ * How strongly two chains hydrogen-bond when they meet: donors of one to
+ * acceptors of the other, both ways, saturating. Zero for two hydrocarbons.
+ */
+export function hbondStrength(a: Chain, b: Chain): number {
+  const pairs = Math.min(hbondDonors(a), hbondAcceptors(b)) + Math.min(hbondDonors(b), hbondAcceptors(a));
+  return 1 - Math.exp(-pairs / 4);
+}
+
+// ——— ligation and hydrolysis: the third thing, and its undoing —————————
+
+/** Does this chain end in a carboxyl the next amine can attack? */
+export function hasAcidEnd(chain: Chain): boolean {
+  const last = chain.atoms[chain.atoms.length - 1];
+  return !!last && last.subs.includes("OH") && last.subs.includes("O");
+}
+
+/** Does this chain open with an amine willing to be attacked? */
+export function hasAmineEnd(chain: Chain): boolean {
+  const first = chain.atoms[0];
+  return !!first && first.el === "N" && first.subs.includes("H");
+}
+
+/**
+ * Ligation: a's acid end and b's amine end condense into ONE chain that is
+ * neither parent, and exactly one water walks away. Atom for atom —
+ * `chainFormula(product) + WATER === chainFormula(a) + chainFormula(b)` —
+ * which the suite recomputes rather than trusts. Two glycines make
+ * glycylglycine, and `recognize` says so.
+ *
+ * Returns null when the chemistry refuses: no acid, no amine, or a product
+ * longer than a backbone this room can hold.
+ */
+export function ligateChains(a: Chain, b: Chain): { chain: Chain; water: Formula } | null {
+  if (!hasAcidEnd(a) || !hasAmineEnd(b)) return null;
+  const n = a.atoms.length + b.atoms.length;
+  if (n > MAX_BACKBONE) return null;
+  const atoms: BackboneAtom[] = [];
+  for (let i = 0; i < a.atoms.length; i++) {
+    const at = a.atoms[i];
+    if (i !== a.atoms.length - 1) {
+      atoms.push({ el: at.el, subs: [...at.subs] });
+      continue;
+    }
+    // the acid loses its hydroxyl
+    const subs = [...at.subs];
+    subs.splice(subs.indexOf("OH"), 1);
+    atoms.push({ el: at.el, subs });
+  }
+  for (let i = 0; i < b.atoms.length; i++) {
+    const at = b.atoms[i];
+    if (i !== 0) {
+      atoms.push({ el: at.el, subs: [...at.subs] });
+      continue;
+    }
+    // the amine loses one hydrogen — together, exactly one water
+    const subs = [...at.subs];
+    subs.splice(subs.indexOf("H"), 1);
+    atoms.push({ el: at.el, subs });
+  }
+  const seed = hashSeed(a.seed, b.seed, n);
+  const rng = mulberry32(seed);
+  const angles: number[] = [];
+  for (let i = 0; i < Math.max(0, n - 2); i++) {
+    angles.push(i < a.angles.length ? a.angles[i] : TETRAHEDRAL + (rng() - 0.5) * 0.8);
+  }
+  const torsions: number[] = [];
+  for (let i = 0; i < Math.max(0, n - 3); i++) {
+    torsions.push(i < a.torsions.length ? a.torsions[i] : rng() * Math.PI * 2);
+  }
+  return {
+    chain: { seed, atoms, angles, torsions, fold: Math.min(a.fold, b.fold) * 0.5 },
+    water: WATER,
+  };
+}
+
+/**
+ * Hydrolysis: water goes back in at the peptide bond after backbone atom
+ * `i`, and the chain becomes two. The exact inverse of `ligateChains` on
+ * the formula ledger, so a chain that was joined can always be taken apart
+ * again with nothing lost or invented.
+ */
+export function hydrolyseChain(chain: Chain, i: number): [Chain, Chain] | null {
+  const n = chain.atoms.length;
+  if (i < 1 || i >= n - 1) return null;
+  const left = chain.atoms.slice(0, i).map((a) => ({ el: a.el, subs: [...a.subs] }));
+  const right = chain.atoms.slice(i).map((a) => ({ el: a.el, subs: [...a.subs] }));
+  const tail = left[left.length - 1];
+  const head = right[0];
+  // water splits across the break: OH to the acid side, H to the amine side
+  if (!tail.subs.includes("O")) return null;
+  if (head.el !== "N") return null;
+  if (freeValence({ el: tail.el, subs: [...tail.subs, "OH"] }, left.length > 1 ? 1 : 0) < 0) return null;
+  tail.subs = [...tail.subs, "OH"];
+  head.subs = [...head.subs, "H"];
+  const sa = hashSeed(chain.seed, i, 1);
+  const sb = hashSeed(chain.seed, i, 2);
+  const mk = (atoms: BackboneAtom[], seed: number, fromAngles: number[], fromTors: number[]): Chain => {
+    const rng = mulberry32(seed);
+    const m = atoms.length;
+    const angles: number[] = [];
+    for (let k = 0; k < Math.max(0, m - 2); k++) {
+      angles.push(k < fromAngles.length ? fromAngles[k] : TETRAHEDRAL + (rng() - 0.5) * 0.7);
+    }
+    const torsions: number[] = [];
+    for (let k = 0; k < Math.max(0, m - 3); k++) {
+      torsions.push(k < fromTors.length ? fromTors[k] : rng() * Math.PI * 2);
+    }
+    return { seed, atoms, angles, torsions, fold: 0 };
+  };
+  return [
+    mk(left, sa, chain.angles.slice(0, Math.max(0, i - 1)), chain.torsions.slice(0, Math.max(0, i - 2))),
+    mk(right, sb, chain.angles.slice(i), chain.torsions.slice(i)),
+  ];
+}
+
+/** Where a chain can actually be cut — the peptide bonds it contains. */
+export function peptideSites(chain: Chain): number[] {
+  const out: number[] = [];
+  for (let i = 1; i < chain.atoms.length - 1; i++) {
+    if (chain.atoms[i].el === "N" && chain.atoms[i - 1].subs.includes("O")) out.push(i);
+  }
+  return out;
+}
+
 // ——— what the hand can build ——————————————————————————————————————
 
 export type TargetKey = "hexane" | "glucose" | "glycine" | "glycylglycine";

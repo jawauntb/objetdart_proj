@@ -63,6 +63,27 @@ function saveMemory(mem: BeamMemory): void {
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
 
+// ── seeded PRNG — never Math random: the same formation and the same
+// run of meteors plays back the same way, so a kept sky replays true. ──
+function hashSeed(...parts: number[]): number {
+  let h = 0x811c9dc5;
+  for (const p of parts) {
+    h ^= Math.round(p) | 0;
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 // ── color weather ────────────────────────────────────────────────────────
 // four moments of day, each: background core, background edge, warm streak,
 // cool streak, tail ink. The cycle drifts through them; night is its own
@@ -720,15 +741,18 @@ export default function Beam() {
     const aSeed = new Float32Array(COUNT);
     const aSun = new Float32Array(COUNT);
     // petals arranged in loose rings, like the video: a few seeds per ring
-    // step, jittered so the formation is organic rather than mechanical
+    // step, jittered so the formation is organic rather than mechanical.
+    // Seeded, not Math random — the initial formation is what the room
+    // is, the same field every load, exactly like /stars' seeded PRNG.
+    const formRng = mulberry32(hashSeed(COUNT, 0x8eef));
     for (let i = 0; i < COUNT; i++) {
-      const ring = 0.14 + Math.pow(Math.random(), 0.72) * 1.05;
+      const ring = 0.14 + Math.pow(formRng(), 0.72) * 1.05;
       aRing[i] = ring;
-      aAng[i] = Math.random() * Math.PI * 2;
-      aDepth[i] = clamp(ring / 1.2 + (Math.random() - 0.5) * 0.3, 0, 1);
-      aPhase[i] = Math.random();
-      aSeed[i] = Math.random();
-      aSun[i] = Math.random() < 0.55 ? 0 : 1;
+      aAng[i] = formRng() * Math.PI * 2;
+      aDepth[i] = clamp(ring / 1.2 + (formRng() - 0.5) * 0.3, 0, 1);
+      aPhase[i] = formRng();
+      aSeed[i] = formRng();
+      aSun[i] = formRng() < 0.55 ? 0 : 1;
     }
     geo.setAttribute("aRing", new THREE.InstancedBufferAttribute(aRing, 1));
     geo.setAttribute("aAng", new THREE.InstancedBufferAttribute(aAng, 1));
@@ -802,7 +826,12 @@ export default function Beam() {
     let focusBreathing = true;
     const sep0 = clamp(memRef.current.sep ?? 0.66, 0.04, 0.9);
     let sep = sep0, sepTarget = sep0;
+    // meteorNext is scheduling only — how long until the next loose petal —
+    // and stays real entropy (declared in the registry); the meteor's own
+    // direction is seeded below via meteorSerial so the same run of breaks
+    // replays the same way.
     let meteorNext = 12 + Math.random() * 18;
+    let meteorSerial = 0;
     let bary = new THREE.Vector2(0, 0);
     const baryTarget = new THREE.Vector2(0, 0);
     let orbAng = 0;
@@ -854,6 +883,59 @@ export default function Beam() {
     let waveBurst = 0;
     let waltzBurst = 0;
 
+    // double tap: a petal cascade — a ripple runs outward, ring by ring, as
+    // if every ring let go and streamed after the one before it. Stages are
+    // fixed and evenly spaced in time — not Math.random — so the same tap
+    // always plays the same cascade.
+    let cascadeTimers: number[] = [];
+    const CASCADE_STAGES = 5;
+    const petalCascade = (wx: number, wy: number, intensity: number) => {
+      for (const t of cascadeTimers) window.clearTimeout(t);
+      cascadeTimers = [];
+      for (let i = 0; i < CASCADE_STAGES; i++) {
+        const id = window.setTimeout(() => {
+          const r = i / (CASCADE_STAGES - 1);
+          uniforms.uRipple.value.set(wx * (0.3 + r * 0.9), wy * (0.3 + r * 0.9), 0);
+          uniforms.uRippleAmp.value = 0.6 + intensity * 0.5 + r * 0.5;
+          waveBurst = Math.max(waveBurst, 1 - r * 0.3);
+          flash = Math.max(flash, 0.2 + intensity * 0.2);
+          try { audioRef.current?.chime(0.5 + r * 0.4); } catch { /* noop */ }
+          try { haptics.ripple(0.25 + r * 0.2); } catch { /* noop */ }
+        }, i * 140);
+        cascadeTimers.push(id);
+      }
+      try { audioRef.current?.whoosh(0.8); } catch { /* noop */ }
+      try { haptics.bloom(); } catch { /* noop */ }
+    };
+
+    // triple tap: the room's largest, rarest event — a shower, not one
+    // meteor. The single meteor slot the room already animates is reused in
+    // a fixed, deterministic rapid sequence rather than an array of streaks,
+    // so every meteor still gets the room's real ballistic shader path.
+    let showerTimers: number[] = [];
+    const METEOR_SHOWER_COUNT = 6;
+    const meteorShower = (intensity: number) => {
+      for (const t of showerTimers) window.clearTimeout(t);
+      showerTimers = [];
+      for (let i = 0; i < METEOR_SHOWER_COUNT; i++) {
+        const id = window.setTimeout(() => {
+          const ang = (i / METEOR_SHOWER_COUNT) * Math.PI * 2 + i * 0.73;
+          const wx2 = Math.cos(ang) * 0.9;
+          const wy2 = Math.sin(ang) * 0.9;
+          const dir = new THREE.Vector2(-wx2, -wy2);
+          if (dir.lengthSq() < 1e-6) dir.set(1, 0); else dir.normalize();
+          uniforms.uMeteorA.value.set(wx2, wy2);
+          uniforms.uMeteorD.value.copy(dir);
+          uniforms.uMeteorAge.value = 0;
+          flash = Math.max(flash, 0.5 + intensity * 0.3);
+          try { audioRef.current?.bell(); } catch { /* noop */ }
+          try { haptics.ripple(0.3 + intensity * 0.3); } catch { /* noop */ }
+        }, i * 260);
+        showerTimers.push(id);
+      }
+      try { haptics.storm(); } catch { /* noop */ }
+    };
+
     const detachGestures = attachGestures(renderer.domElement, {
       tap: (e) => {
         ensureAudio();
@@ -883,19 +965,19 @@ export default function Beam() {
         uniforms.uRippleAmp.value = 0.75 + e.intensity * 0.5;
         try { audioRef.current?.chime(1 - focusTarget); } catch { /* noop */ }
         try { haptics.tap(); } catch { /* noop */ }
-        // the train tiers (1 / 3 / 5 / n from gesture/core): rapid taps climb
-        // the formation's own ladder — the wind, the waltz, the blaze
+        // the site-wide tap train (gesture/core.ts): 1 / 3 / 5 / n. Tier 3 is
+        // the petal cascade — every ring letting go in turn; tier 5 is the
+        // room's biggest, rarest event — a full meteor shower; tier n keeps
+        // deepening.
         const trainTier = tapTrainTier(e.count);
-        if (trainTier === 3 && e.count === 3) {
-          // three taps send the shimmer-wind sprinting round the rings —
-          // the orbiting crest of light breaks into a run
-          waveBurst = 1;
-          flash = Math.max(flash, 0.25);
-          try { audioRef.current?.whoosh(0.9); } catch { /* noop */ }
-          try { haptics.ripple(0.5); } catch { /* noop */ }
-        } else if (trainTier === 5 && e.count === 5) {
-          // five taps quicken the waltz — the two suns swing hard around
-          // their barycenter, petals streaming to keep formation
+        if (trainTier === 3) {
+          petalCascade(wx, wy, e.intensity);
+          return;
+        } else if (trainTier === 5) {
+          // the room's biggest, rarest event: a shower of meteors, and the
+          // waltz quickens with it — the two suns swing hard around their
+          // barycenter, petals streaming to keep formation
+          meteorShower(e.intensity);
           waltzBurst = 1;
           flash = Math.max(flash, 0.4);
           try { audioRef.current?.bell(); } catch { /* noop */ }
@@ -1119,9 +1201,10 @@ export default function Beam() {
       // a loose petal, every so often
       if (uniforms.uMeteorAge.value < 90) uniforms.uMeteorAge.value += dt * speed;
       if (simT > meteorNext && !reduced) {
-        const ang = Math.random() * Math.PI * 2;
+        const mrng = mulberry32(hashSeed(meteorSerial++, 0x5eed));
+        const ang = mrng() * Math.PI * 2;
         const start = new THREE.Vector2(Math.cos(ang) * (aspect + 0.3), Math.sin(ang) * 1.3);
-        const jitter = (Math.random() - 0.5) * 0.9;
+        const jitter = (mrng() - 0.5) * 0.9;
         const dir = start.clone().multiplyScalar(-1).normalize().rotateAround(new THREE.Vector2(0, 0), jitter);
         uniforms.uMeteorA.value.copy(start);
         uniforms.uMeteorD.value.copy(dir);
@@ -1245,6 +1328,8 @@ export default function Beam() {
 
     return () => {
       cancelAnimationFrame(raf);
+      for (const t of cascadeTimers) window.clearTimeout(t);
+      for (const t of showerTimers) window.clearTimeout(t);
       window.removeEventListener("resize", resize);
       detachGestures();
       unvis();

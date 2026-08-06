@@ -33,6 +33,7 @@ const {
   snowLine,
   cairnStonesForHold,
   nearestCairnIndex,
+  screeCairnHits,
   CAIRN_DWELL_MS,
 } = loadTsModule("src/lib/mountain.ts");
 
@@ -119,6 +120,27 @@ const {
   assert.equal(nearestCairnIndex(cairns, 0.25, 0.50, 0.06, 2.25), -1, "wide frame: the same offset is out of reach");
 }
 
+// —— the physics between the two populations: scree strikes a cairn ————
+// The bug: a falling stone and a standing cairn never touching, so the
+// mountain's two populations are two independent decal layers rather than
+// one material acting on itself.
+{
+  const cairns = [placeCairn(1, 0.5, 0.5, 4), placeCairn(2, 0.9, 0.9, 4)];
+  const near = [{ x: 0.505, y: 0.5, vx: 0, vy: 0.1, seed: 1, life: 1 }];
+  const far = [{ x: 0.1, y: 0.1, vx: 0, vy: 0.1, seed: 2, life: 1 }];
+  const hitsNear = screeCairnHits(near, cairns, 1);
+  assert.equal(hitsNear.length, 1, "a stone passing right through a cairn strikes it");
+  assert.equal(hitsNear[0].cairnIdx, 0, "it strikes the cairn it actually passed, not some other one");
+  assert.equal(screeCairnHits(far, cairns, 1).length, 0, "a stone nowhere near a cairn does not strike it");
+  // aspect matters here exactly as it does for touch: the same offset reads
+  // as a strike on a square frame and a miss on a frame twice as wide
+  const side = [{ x: 0.5 + 0.025, y: 0.5, vx: 0, vy: 0.1, seed: 3, life: 1 }];
+  assert.equal(screeCairnHits(side, cairns, 1).length, 1, "square frame: within the strike radius");
+  assert.equal(screeCairnHits(side, cairns, 2.5).length, 0, "wide frame: the same offset reads further and misses");
+  assert.equal(screeCairnHits([], cairns, 1).length, 0, "no falling stones, no strikes");
+  assert.equal(screeCairnHits(near, [], 1).length, 0, "no standing cairns, nothing to strike");
+}
+
 console.log(
-  "mountain ok: ridge deterministic and peaked, scree retiring, cairns capped, the hold continuous in both duration and pressure, and cairn reach measured in real pixels",
+  "mountain ok: ridge deterministic and peaked, scree retiring, cairns capped, the hold continuous in both duration and pressure, cairn reach measured in real pixels, and falling scree actually strikes a standing cairn",
 );

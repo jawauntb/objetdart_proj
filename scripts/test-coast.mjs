@@ -40,6 +40,16 @@ const {
   SEA_BAND,
   WET_BAND,
   DRY_MIN,
+  createSandProfile,
+  sandProfileAt,
+  breakerRunup,
+  breakerLifeSec,
+  breakerReach,
+  breakerSandRate,
+  applyBreakerToProfile,
+  relaxSandProfile,
+  SAND_PROFILE_N,
+  SAND_PROFILE_MAX,
 } = loadTsModule("src/lib/coast.ts");
 
 const {
@@ -291,6 +301,45 @@ const {
   const left = getNaturalsInZone("coast");
   assert.equal(left.length, before - 1, "the sea takes exactly one");
   assert.ok(left.some((n) => n.id === b.id), "and leaves the other standing");
+}
+
+// ——— breakers move real sand, and it isn't a symmetric decal ———
+// The bug this catches: a breaker that erodes and deposits the same place
+// (a static bump under the strike point) instead of a real asymmetric swash
+// — erosion at the break, deposition further up the run.
+{
+  assert.equal(breakerRunup(0, 0.5), 0, "a breaker that hasn't broken yet has no run-up");
+  const rise = breakerRunup(0.3, 0.5);
+  const peak = breakerRunup(0.30 + 0.5 * 0.16, 0.5); // at the rise/fall boundary for power 0.5
+  assert.ok(rise > 0 && rise < 1, "run-up climbs continuously, not a switch");
+  assert.ok(peak > 0.9, "run-up crests near the rise→fall boundary");
+  const life = breakerLifeSec(0.5);
+  assert.ok(breakerRunup(life, 0.5) < 0.05, "the swash has drained by its own lifetime");
+  assert.ok(breakerReach(1) > breakerReach(0), "harder taps reach further up the beach");
+
+  // early (low runup): erosion should dominate near the break point
+  const early = breakerSandRate(0.5, 0.5, 0.1, 1, 0.05);
+  assert.ok(early < 0, "right after breaking, the strike point erodes");
+  // late (high runup): deposition should dominate at the same point
+  const late = breakerSandRate(0.5, 0.5, 0.1, 1, 0.95);
+  assert.ok(late > 0, "at peak run-up, sand is deposited, not stripped");
+  // far from the breaker, nothing happens regardless of phase
+  assert.equal(breakerSandRate(0.95, 0.5, 0.05, 1, 0.5), 0, "the swash doesn't reach the far shore");
+
+  const profile = createSandProfile();
+  assert.equal(profile.length, SAND_PROFILE_N);
+  assert.equal(sandProfileAt(profile, 0.5), 0, "a fresh beach is flat");
+  applyBreakerToProfile(profile, 0.5, 0.15, 1, 0.95, 1, 1); // one full second at deposition phase
+  assert.ok(sandProfileAt(profile, 0.5) > 0, "sustained deposition raises the local profile");
+  const raised = sandProfileAt(profile, 0.5);
+  assert.ok(sandProfileAt(profile, 0.05) < raised, "the effect fades with lateral distance");
+  for (let i = 0; i < 500; i++) applyBreakerToProfile(profile, 0.5, 0.15, 1, 0.95, 1, 1);
+  for (const v of profile) assert.ok(Math.abs(v) <= SAND_PROFILE_MAX + 1e-6, "the profile never runs away unbounded");
+
+  const before = sandProfileAt(profile, 0.5);
+  relaxSandProfile(profile, 30, 30);
+  const after = sandProfileAt(profile, 0.5);
+  assert.ok(after < before && after > 0, "the berm relaxes toward flat, but not in one step");
 }
 
 console.log("coast ok");

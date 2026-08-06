@@ -385,6 +385,136 @@ export function covalentBond(a: number, b: number): CovalentBond {
   };
 }
 
+// ————————————————————————————————————————————————— the light a fall gives off
+
+/** Rydberg energy, eV — the depth of hydrogen's ground state. */
+export const RYDBERG_EV = 13.605693;
+/** hc in eV·nm — the one constant that turns an energy into a colour. */
+export const HC_EV_NM = 1239.8419;
+
+/**
+ * The QUANTUM DEFECT of a ring in this element, in units of n. The one
+ * correction that turns hydrogen's formula into every other atom's: an outer
+ * electron in a many-electron atom sees a screened core of charge ≈ +1, but
+ * the part of its orbit that dives THROUGH the core sees more, and the whole
+ * effect is bookkept as a shrunken effective quantum number n* = n − δ.
+ *
+ * The defect grows with the number of inner shells there are to penetrate —
+ * lithium's 2s is 0.41, sodium's 3s is 1.35, potassium's 4s is 2.23, one
+ * step of ≈0.92 per shell — and it is smaller for the outer ring an excited
+ * electron lands on, which is higher-ℓ and barely penetrates at all. That
+ * single line is why the sodium D line comes out at ≈600 nm here against a
+ * measured 589, and why hydrogen (nothing to penetrate) stays exact.
+ */
+export function quantumDefect(element: ElementDef, ring: number): number {
+  const inner = element.shells.length - 1;
+  if (inner <= 0) return 0;
+  const core = 0.92 * inner - 0.5;
+  if (ring > element.shells.length) {
+    // the ring an electron is excited INTO sits outside its own valence
+    // shell: high angular momentum, almost no penetration, almost no defect
+    return Math.max(0, core * 0.35);
+  }
+  // inside the valence shell the sub-shell decides: an s electron dives
+  // straight through the core and takes the whole defect, a p electron far
+  // less, a d electron essentially none. The occupancy says which it is,
+  // because that is the order the shell fills in.
+  const occ = element.shells[element.shells.length - 1];
+  const penetration = occ <= 2 ? 1 : occ <= 8 ? 0.62 : 0.08;
+  return Math.max(0, core * penetration);
+}
+
+/**
+ * The wavelength of the photon an electron gives up falling from ring
+ * `nHigh` to ring `nLow`, nm — Rydberg's formula in effective quantum
+ * numbers:
+ *
+ *   1/λ = R·(1/(n_low − δ_low)² − 1/(n_high − δ_high)²)
+ *
+ * For hydrogen every defect is zero and this IS the Balmer series: 3→2 lands
+ * on 656.1 nm, the red line every spectroscope opens with; 4→2 on 486.0 cyan;
+ * 5→2 on 434 violet. Returns Infinity for a fall that isn't one
+ * (n_high ≤ n_low): nothing is emitted. Strictly decreasing in the size of
+ * the jump — a longer fall is bluer, which is the whole reason a room can
+ * colour a transition truthfully instead of picking a pretty hue.
+ */
+export function emissionWavelengthNm(element: ElementDef, nHigh: number, nLow: number): number {
+  const hi = Math.floor(nHigh);
+  const lo = Math.floor(nLow);
+  if (!(hi > lo) || lo < 1) return Infinity;
+  const nLoEff = Math.max(0.4, lo - quantumDefect(element, lo));
+  const nHiEff = Math.max(nLoEff + 1e-6, hi - quantumDefect(element, hi));
+  const dE = RYDBERG_EV * (1 / (nLoEff * nLoEff) - 1 / (nHiEff * nHiEff));
+  if (!(dE > 0)) return Infinity;
+  return HC_EV_NM / dE;
+}
+
+/**
+ * A wavelength rendered as the colour an eye would call it, 0..255 per
+ * channel. The classic piecewise CIE approximation over 380–780 nm, with
+ * the ends rolled off; anything outside the visible band returns the nearest
+ * visible edge dimmed toward the room's parchment, because an ultraviolet
+ * line still has to be SEEN — it simply reads as a cold white flash rather
+ * than lying about being violet.
+ */
+export function wavelengthRgb(nm: number): [number, number, number] {
+  const w = nm;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  if (w < 380) {
+    // ultraviolet: the eye's honest answer is a colourless flash
+    return [214, 224, 236];
+  }
+  if (w > 780) {
+    // infrared: felt as heat, drawn as the deepest ember the palette holds
+    return [96, 26, 18];
+  }
+  if (w < 440) {
+    r = -(w - 440) / 60;
+    b = 1;
+  } else if (w < 490) {
+    g = (w - 440) / 50;
+    b = 1;
+  } else if (w < 510) {
+    g = 1;
+    b = -(w - 510) / 20;
+  } else if (w < 580) {
+    r = (w - 510) / 70;
+    g = 1;
+  } else if (w < 645) {
+    r = 1;
+    g = -(w - 645) / 65;
+  } else {
+    r = 1;
+  }
+  // the eye dims at both ends of its own band
+  let f = 1;
+  if (w < 420) f = 0.3 + (0.7 * (w - 380)) / 40;
+  else if (w > 700) f = 0.3 + (0.7 * (780 - w)) / 80;
+  const g8 = (v: number) => Math.round(255 * Math.pow(Math.max(0, Math.min(1, v * f)), 0.8));
+  return [g8(r), g8(g), g8(b)];
+}
+
+/** The same colour as a canvas hex string — the room's only use of it. */
+export function emissionHex(element: ElementDef, nHigh: number, nLow: number): string {
+  const [r, g, b] = wavelengthRgb(emissionWavelengthNm(element, nHigh, nLow));
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`;
+}
+
+/**
+ * How hard this element holds the electron a cascade is trying to take,
+ * 0..1. Not a new constant: it is the table's own Pauling
+ * ELECTRONEGATIVITY, which is precisely the measured willingness to hold
+ * charge, normalized by fluorine's. The nobles return 1 — their χ is zero
+ * because they pull on nothing in a bond, but nothing loosens an electron
+ * from a closed shell either, and the valence column is what says so.
+ */
+export function ionisationResistance(element: ElementDef): number {
+  if (element.valence <= 0) return 1;
+  return Math.max(0, Math.min(1, element.electronegativity / 3.98));
+}
+
 // ——————————————————————————————————————————————————————————————————— fusion
 
 /**

@@ -906,6 +906,35 @@ export default function Signal() {
       void playFreq(freqAtX(x));
     };
 
+    // tier 5: the room's biggest, rarest event — a signal lock. A wobbling
+    // sweep narrows onto the exact bin under the finger over fixed, evenly
+    // spaced steps (never Math.random, so the same tap always plays the
+    // same lock), and resolves in the room's own "station locked" register
+    // — a felt detent, not a decorative chime.
+    let lockTimers: number[] = [];
+    const signalLock = (x: number) => {
+      for (const t of lockTimers) window.clearTimeout(t);
+      lockTimers = [];
+      const target = freqAtX(x);
+      const steps = 5;
+      for (let i = 0; i < steps; i += 1) {
+        const id = window.setTimeout(() => {
+          const wobble = 1 + (1 - i / (steps - 1)) * 0.22 * (i % 2 === 0 ? 1 : -1);
+          void playFreq(Math.min(6400, target * wobble), 0.16);
+          tuttiRef.current = Math.max(tuttiRef.current, 0.4 + (i / steps) * 0.4);
+          haptics.ripple(0.2 + (i / steps) * 0.3);
+        }, i * 130);
+        lockTimers.push(id);
+      }
+      const id = window.setTimeout(() => {
+        void playFreq(target, 0.55);
+        tuttiRef.current = 1;
+        haptics.detent();
+        recordTape("sigil", 1, "signal/lock");
+      }, steps * 130);
+      lockTimers.push(id);
+    };
+
     const detachGestures = attachGestures(
       cv,
       {
@@ -1032,13 +1061,11 @@ export default function Signal() {
             tuttiRef.current = Math.max(tuttiRef.current, 0.45);
             haptics.ripple(0.5);
             recordTape("sigil", 0.5, "signal/train-overtones");
-          } else if (trainTier === 5 && e.count === 5) {
-            // five taps ask the room to state a whole phrase — the current
-            // sigil weights sung through the spectrum
+          } else if (trainTier === 5) {
+            // the room's biggest, rarest event: the spectrum locks onto the
+            // exact bin under the finger, then states its whole phrase
+            signalLock(x);
             void playPhraseRef.current(phraseIdxRef.current);
-            tuttiRef.current = Math.max(tuttiRef.current, 0.8);
-            haptics.lens();
-            recordTape("sigil", 0.66, "signal/train-phrase");
           } else if (trainTier === "n") {
             // seven and beyond: the crescendo — each further strike climbs
             // the bins and pulses every layer brighter
@@ -1387,6 +1414,7 @@ export default function Signal() {
       offVisibility();
       detachGestures();
       detachVessel();
+      for (const t of lockTimers) window.clearTimeout(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

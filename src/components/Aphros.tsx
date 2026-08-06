@@ -325,10 +325,60 @@ export default function Aphros() {
           const nx = e.x / Math.max(1, width);
           const ny = e.y / Math.max(1, height);
           const AR = width / Math.max(1, height);
-          // the rapid-tap ladder climbs the court: foam → the pod leaps →
-          // the shell rings → a squall breaks
           const trainTier = tapTrainTier(e.count);
           const depth = tapTrainDepth(e.count);
+
+          // a bloom under the finger answers its own ladder before the
+          // court's: tier 3 bursts it into daughters — a real, volume-
+          // conserving surface-tension breakup, not a decal — and the
+          // biggest rungs bloom the whole sea at once.
+          let hitBloom: Bloom | null = null;
+          {
+            let bestD = Infinity;
+            for (const b of bloomsRef.current) {
+              if (b.ascendAt !== 0) continue;
+              const d = Math.hypot((nx - b.nx) * AR, ny - b.ny);
+              if (d < b.size * 1.4 && d < bestD) { bestD = d; hitBloom = b; }
+            }
+          }
+          if (hitBloom && trainTier !== 1) {
+            const parent = hitBloom;
+            const n = trainTier === 3 ? 2 : trainTier === 5 ? 3 : 4;
+            // area (∝ size²) is conserved across the split, the same law
+            // the drop and the coast breaker use for their own breakups
+            const childSize = Math.max(0.018, Math.sqrt((parent.size * parent.size) / n));
+            const idx = bloomsRef.current.indexOf(parent);
+            if (idx >= 0) bloomsRef.current.splice(idx, 1);
+            for (let i = 0; i < n; i++) {
+              if (bloomsRef.current.length >= MAX_BLOOMS) {
+                // the cap gives way visibly: the oldest ascends rather than
+                // vanishing silently
+                let oldest = bloomsRef.current[0];
+                for (const b of bloomsRef.current) if (b.born < oldest.born) oldest = b;
+                oldest.ascendAt = performance.now();
+                bloomsRef.current = bloomsRef.current.filter((b) => b !== oldest);
+              }
+              const ang = (i / n) * Math.PI * 2 + (hashSeed(parent.seed, i) % 1000) / 1000;
+              const off = parent.size * 0.9;
+              bloomsRef.current.push({
+                nx: Math.max(0.03, Math.min(0.97, parent.nx + Math.cos(ang) * off)),
+                ny: Math.max(HORIZON + 0.05, Math.min(SHORE + 0.06, parent.ny + Math.sin(ang) * off * 0.6)),
+                size: childSize,
+                seed: hashSeed(parent.seed, i, trainTier === "n" ? 9 : trainTier),
+                born: performance.now(),
+                ascendAt: 0,
+              });
+            }
+            save();
+            flash = Math.min(1, flash + 0.35 + depth * 0.25);
+            audio.bell();
+            audio.playNote(76 + n * 2, 180);
+            haptics.bloom();
+            return;
+          }
+
+          // the rapid-tap ladder climbs the court: foam → the pod leaps →
+          // the shell rings and the sea blooms in full → a squall breaks
           if (trainTier === "n") {
             flash = Math.min(1, 0.7 + depth * 0.3);
             agitation = Math.min(1, agitation + 0.5 + depth * 0.5);
@@ -340,11 +390,32 @@ export default function Aphros() {
             return;
           }
           if (trainTier === 5) {
-            // the shell rings and the whole court turns toward it
+            // the shell rings, the whole court turns toward it, and the
+            // sea itself blooms — foam scattered across the whole surface
+            // at once, the room's largest reachable event
             galateaGlow = 1;
             silkBoost = 1;
             flash = Math.min(1, flash + 0.45 + depth * 0.3);
             pushWake(SHELL_X, SHELL_Y + 0.06, 0.8 + depth * 0.2);
+            const rng = mulberry32(hashSeed(Math.round(nx * 4093), Math.round(ny * 8191), bloomsRef.current.length));
+            const spawnN = Math.min(5, MAX_BLOOMS);
+            for (let i = 0; i < spawnN; i++) {
+              if (bloomsRef.current.length >= MAX_BLOOMS) {
+                let oldest = bloomsRef.current[0];
+                for (const b of bloomsRef.current) if (b.born < oldest.born) oldest = b;
+                oldest.ascendAt = performance.now();
+                bloomsRef.current = bloomsRef.current.filter((b) => b !== oldest);
+              }
+              bloomsRef.current.push({
+                nx: 0.06 + rng() * 0.88,
+                ny: HORIZON + 0.06 + rng() * (SHORE - HORIZON),
+                size: 0.03 + rng() * 0.02,
+                seed: hashSeed(i, Math.round(nx * 4093), Math.round(ny * 8191)),
+                born: performance.now(),
+                ascendAt: 0,
+              });
+            }
+            save();
             audio.bell();
             haptics.bloom();
             return;

@@ -50,6 +50,11 @@ const {
   blastMagnitude,
   settlePopulation,
   hashSeed,
+  emissionWavelengthNm,
+  emissionHex,
+  wavelengthRgb,
+  quantumDefect,
+  ionisationResistance,
 } = loadTsModule("src/lib/atomics.ts");
 
 const SEEDS = Array.from({ length: 80 }, (_, i) => hashSeed(i + 1, 31, 13));
@@ -392,6 +397,81 @@ for (let i = 0; i < 40; i++) {
     assert.ok(field.length <= MAX_ATOMS, "population must stay under the cap");
   }
   assert.equal(field.length, MAX_ATOMS, "sustained condensation should hold the field full");
+}
+
+// — THE EMISSION LINE. Hydrogen's Balmer series is the most-measured thing
+//   in physics and it is not a parameter here: it falls out of the Rydberg
+//   formula with a zero quantum defect. If anyone ever "tidies" the constant
+//   or drops the defect correction, these three numbers move and the room
+//   starts colouring transitions with a lie.
+{
+  const H = elementOf(1);
+  assert.ok(Math.abs(emissionWavelengthNm(H, 3, 2) - 656.3) < 1.5, "H-alpha lands on 656 nm");
+  assert.ok(Math.abs(emissionWavelengthNm(H, 4, 2) - 486.1) < 1.5, "H-beta on 486 nm");
+  assert.ok(Math.abs(emissionWavelengthNm(H, 5, 2) - 434.0) < 1.5, "H-gamma on 434 nm");
+  assert.ok(Math.abs(emissionWavelengthNm(H, 2, 1) - 121.6) < 1.0, "Lyman-alpha on 121.6 nm");
+  assert.equal(emissionWavelengthNm(H, 2, 3), Infinity, "a climb emits nothing");
+  assert.equal(emissionWavelengthNm(H, 2, 2), Infinity, "and neither does standing still");
+  // a longer fall is bluer, always
+  let prev = Infinity;
+  for (let n = 3; n <= 8; n++) {
+    const w = emissionWavelengthNm(H, n, 2);
+    assert.ok(w < prev, "a longer fall gives a shorter wavelength");
+    prev = w;
+  }
+  // and the series converges on its own limit, never past it
+  assert.ok(emissionWavelengthNm(H, 400, 2) > 364, "the Balmer limit is 364.6 nm");
+  assert.ok(emissionWavelengthNm(H, 400, 2) < 366, "and the series never crosses it");
+}
+
+// — The quantum defect is the correction that makes every OTHER atom work:
+//   measured values are lithium 2s 0.41, sodium 3s 1.35, potassium 4s 2.23.
+//   Hydrogen has nothing to penetrate and must stay exactly zero.
+{
+  assert.equal(quantumDefect(elementOf(1), 1), 0, "hydrogen has no defect at all");
+  assert.ok(Math.abs(quantumDefect(elementOf(3), 2) - 0.41) < 0.06, "lithium 2s ≈ 0.41");
+  assert.ok(Math.abs(quantumDefect(elementOf(11), 3) - 1.35) < 0.06, "sodium 3s ≈ 1.35");
+  assert.ok(Math.abs(quantumDefect(elementOf(19), 4) - 2.23) < 0.06, "potassium 4s ≈ 2.23");
+  // a p electron penetrates less than an s electron of the same period
+  assert.ok(
+    quantumDefect(elementOf(13), 3) < quantumDefect(elementOf(11), 3),
+    "aluminium's p valence penetrates less than sodium's s valence",
+  );
+  // the ring an electron is excited INTO barely penetrates at all
+  assert.ok(
+    quantumDefect(elementOf(11), 5) < quantumDefect(elementOf(11), 3),
+    "the outer ring takes far less defect than the valence shell",
+  );
+}
+
+// — The colour. H-alpha must read RED and H-beta cyan; an ultraviolet line
+//   must not lie about being violet. This is what the room paints with.
+{
+  const H = elementOf(1);
+  const [r, g, b] = wavelengthRgb(emissionWavelengthNm(H, 3, 2));
+  assert.ok(r > 200 && g < 60 && b < 60, "H-alpha is red");
+  const [r2, g2, b2] = wavelengthRgb(emissionWavelengthNm(H, 4, 2));
+  assert.ok(b2 > 180 && g2 > 150 && r2 < 60, "H-beta is cyan");
+  const uv = wavelengthRgb(100);
+  assert.ok(uv[0] > 180 && uv[1] > 180 && uv[2] > 180, "ultraviolet reads as a colourless flash");
+  const ir = wavelengthRgb(2000);
+  assert.ok(ir[0] > ir[2] && ir[0] < 150, "infrared reads as a dim ember, never as light");
+  assert.ok(/^#[0-9a-f]{6}$/.test(emissionHex(H, 3, 2)), "and the hex is a hex");
+}
+
+// — Ionisation resistance reads the table's own electronegativity column,
+//   and the nobles hold hardest of all.
+{
+  assert.equal(ionisationResistance(elementOf(2)), 1, "helium gives up nothing");
+  assert.equal(ionisationResistance(elementOf(10)), 1, "neither does neon");
+  assert.ok(
+    ionisationResistance(elementOf(9)) > ionisationResistance(elementOf(3)),
+    "fluorine holds its electrons far harder than lithium",
+  );
+  for (const e of ELEMENTS) {
+    const r = ionisationResistance(e);
+    assert.ok(r >= 0 && r <= 1, `${e.symbol} resistance stays in 0..1`);
+  }
 }
 
 console.log(

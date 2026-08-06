@@ -726,6 +726,83 @@ assert.equal(F.seedFlock(1, 900).pos.length, 900 * 3, "three numbers per bird, n
   assert.ok(F.isAirActivity(F.ACTIVITIES[st.activityOf[launchIdx]]), "launch yields an air activity");
 }
 
+// —— the predator field: a real repulsion, not a scripted dodge ————
+// The bug: a predator wired with the wrong sign (attracts instead of
+// repels), or one so weak/narrow the flock never actually answers it — the
+// evasion would then be decoration, exactly what the spec forbids.
+{
+  const st = F.seedFlock(0x9e4d, 240);
+  F.stepFlock(st, params(), 0); // no-op guard: dt<=0 must not throw
+  // Scramble to a coherent, centred sky first, then measure only birds that
+  // start well inside the predator's reach.
+  for (let i = 0; i < 30; i++) F.advanceFlock(st, params(), 1 / 60);
+  const predator = { x: 0, y: 0, z: 0 };
+  const near = [];
+  for (let i = 0; i < st.n; i++) {
+    const dx = st.pos[i * 3] - predator.x;
+    const dy = st.pos[i * 3 + 1] - predator.y;
+    const dz = st.pos[i * 3 + 2] - predator.z;
+    const d = Math.hypot(dx, dy, dz);
+    if (d < F.PREDATOR_REACH * 0.6 && F.isAirActivity(F.ACTIVITIES[st.activityOf[i]])) near.push(i);
+  }
+  assert.ok(near.length > 0, "the seeded sky has birds inside the predator's reach to test");
+  const d0 = near.map((i) => Math.hypot(
+    st.pos[i * 3] - predator.x, st.pos[i * 3 + 1] - predator.y, st.pos[i * 3 + 2] - predator.z,
+  ));
+  const hunted = params({ predator, predatorStrength: 40 });
+  for (let i = 0; i < 20; i++) F.advanceFlock(st, hunted, 1 / 60);
+  const d1 = near.map((i) => Math.hypot(
+    st.pos[i * 3] - predator.x, st.pos[i * 3 + 1] - predator.y, st.pos[i * 3 + 2] - predator.z,
+  ));
+  let fled = 0;
+  for (let k = 0; k < near.length; k++) if (d1[k] > d0[k]) fled += 1;
+  assert.ok(
+    fled >= Math.ceil(near.length * 0.6),
+    `a predator repels most nearby birds outward (${fled}/${near.length} fled)`,
+  );
+  // Outside the reach, the field must not act at all — a bird a world away
+  // from the predator is untouched, which catches a reach that leaked global.
+  const far = F.seedFlock(0x9e4d, 240);
+  const untouched = params({ predator: { x: 900, y: 900, z: 900 }, predatorStrength: 40 });
+  for (let i = 0; i < 20; i++) F.advanceFlock(far, untouched, 1 / 60);
+  const plain = F.seedFlock(0x9e4d, 240);
+  for (let i = 0; i < 20; i++) F.advanceFlock(plain, params(), 1 / 60);
+  let maxDiff = 0;
+  for (let i = 0; i < far.n * 3; i++) maxDiff = Math.max(maxDiff, Math.abs(far.pos[i] - plain.pos[i]));
+  assert.ok(maxDiff < 1e-6, `a predator far outside PREDATOR_REACH must not act at all (diff ${maxDiff})`);
+}
+
+// —— the thermal: lift, bounded to its column ————————————————————
+{
+  const st = F.seedFlock(0x71a2, 120);
+  for (let i = 0; i < st.n; i++) {
+    // put everyone right in the thermal's column so the lift is unambiguous
+    st.pos[i * 3] = (i % 5) - 2;
+    st.pos[i * 3 + 2] = ((i * 3) % 5) - 2;
+    st.pos[i * 3 + 1] = -2;
+    st.activityOf[i] = F.activityIndex("flock");
+  }
+  const y0 = F.centroid(st.pos, st.n).y;
+  const lifted = params({ thermal: { x: 0, y: 0, z: 0 }, thermalStrength: 6 });
+  for (let i = 0; i < 40; i++) F.advanceFlock(st, lifted, 1 / 60);
+  const y1 = F.centroid(st.pos, st.n).y;
+  assert.ok(y1 > y0 + 0.5, `a thermal lifts the birds inside its column (${y0} -> ${y1})`);
+}
+
+// —— roostSeveral: a roost call lands a group, not a silent no-op ————
+{
+  const st = F.seedFlock(0x3c11, 300);
+  for (let i = 0; i < 20; i++) F.advanceFlock(st, params(), 1 / 60);
+  const before = st.n > 0 ? Array.from({ length: st.n }, (_, i) => F.ACTIVITIES[st.activityOf[i]]) : [];
+  const landed = F.roostSeveral(st, { x: 0, y: 0, z: 0 }, 5);
+  assert.equal(landed.length, 5, "roostSeveral lands exactly the count asked for");
+  assert.equal(new Set(landed).size, 5, "roostSeveral never lands the same bird twice");
+  let grounded = 0;
+  for (const i of landed) if (!F.isAirActivity(F.ACTIVITIES[st.activityOf[i]])) grounded += 1;
+  assert.equal(grounded, 5, "every called bird actually lands");
+  void before;
+}
+
 console.log(
-  "flock ok: order checked against the ring, the pair at cos(θ/2) and one animal; 60 Hz and 120 Hz landing every bird in the same place; alignment strictly ordering, cohesion strictly gathering, separation holding a floor, the wind blowing downwind, the sky closed under any wind, the order→harmonic map monotone, bounded and readable back to 1e-9; and the aviary catalog (thirteen kinds) covers perch/drink/swim/hop/strut residents the hand can flush, roost and launch",
+  "flock ok: order checked against the ring, the pair at cos(θ/2) and one animal; 60 Hz and 120 Hz landing every bird in the same place; alignment strictly ordering, cohesion strictly gathering, separation holding a floor, the wind blowing downwind, the sky closed under any wind, the order→harmonic map monotone, bounded and readable back to 1e-9; the aviary catalog (thirteen kinds) covers perch/drink/swim/hop/strut residents the hand can flush, roost and launch; the predator field repels nearby birds outward and never acts past its reach; the thermal lifts a column; and a roost call lands a named group at once",
 );

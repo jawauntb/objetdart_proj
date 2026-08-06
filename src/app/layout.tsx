@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Cormorant_Garamond, JetBrains_Mono, Fraunces } from "next/font/google";
 import "@/styles/globals.css";
 import SoundToggle from "@/components/SoundToggle";
+import RoomHelp from "@/components/RoomHelp";
 import CandleMark from "@/components/CandleMark";
 import Tape from "@/components/Tape";
 import FieldWatch from "@/components/FieldWatch";
@@ -70,6 +71,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <FieldWatch />
         <CandleMark />
         <SoundToggle />
+        {/* The `?` sits one step above the sound toggle in the same corner. It
+            is the only surface that explains, it never opens itself, and it
+            renders the current route's own field-guide entry — see
+            src/components/RoomHelp.tsx and AGENTS.md, "no instructions". */}
+        <RoomHelp />
         <ConcernTint />
         {/* The passage host lives in the root layout so a band-crossing film
             survives the route change it plays over (App Router never remounts

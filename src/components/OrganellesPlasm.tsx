@@ -57,9 +57,16 @@ import {
   KIND_BASE_HZ,
   MAX_ORGANELLES,
   MEMBRANE_KINDS,
+  VESICLE_AREA,
+  advanceCargo,
   brightness,
+  budVesicle,
+  cargoDestination,
   cellWellPull,
+  fissionOrganelle,
   foldedness,
+  freeMembrane,
+  fuseVesicle,
   harmonicsFor,
   hasFullSet,
   hashSeed,
@@ -73,6 +80,7 @@ import {
   settlePopulation,
   surfaceArea,
   totalArea,
+  type CargoStage,
   type MembraneKind,
   type Organelle,
 } from "@/lib/membrane";
@@ -182,6 +190,37 @@ export default function OrganellesPlasm() {
     let lastSpanToneAt = 0;
     const lit = new Float32Array(MAX_ORGANELLES);
     const vel = new Float32Array(MAX_ORGANELLES * 2);
+
+    // ——— membrane in transit ———
+    // A vesicle is membrane that has left one organ and not yet arrived at
+    // another: it carries an area out of the ledger and puts exactly that
+    // back where it fuses. Cargo walks the real pathway — ribosome makes it
+    // raw, the er folds it, the golgi matures it, and mature cargo leaves
+    // the cell at the ghost membrane.
+    type Vesicle = {
+      nx: number;
+      ny: number;
+      vx: number;
+      vy: number;
+      area: number;
+      cargo: CargoStage;
+      seed: number;
+      lit: number;
+      /** seconds since it budded — a vesicle that finds no station dissolves */
+      age: number;
+    };
+    const MAX_VESICLES = 10;
+    const vesicles: Vesicle[] = [];
+    let vesicleCount = 0;
+    /** the double-tap-on-plasm cycle */
+    let plasmEventIdx = 0;
+    /** an atp pulse, drawn as a ring leaving its mitochondrion */
+    const pulses: { x: number; y: number; t0: number; tint: string; gain: number }[] = [];
+    /** the room's own metabolism, on seeded timers with no hand present */
+    let lifeCount = 0;
+    let nextLifeAt = 0;
+    /** the triple tap: a cascade walking the organs in pitch order */
+    let cascade: { at: number; step: number; gain: number } | null = null;
 
     // ————— performance contract —————
     const gov = createFrameGovernor();
@@ -315,6 +354,256 @@ export default function OrganellesPlasm() {
       } catch {
         /* noop */
       }
+    };
+
+    /** Membrane currently riding in vesicles — not free, not folded. */
+    const inTransit = () => {
+      let a = 0;
+      for (const v of vesicles) a += v.area;
+      return a;
+    };
+
+    /** One vesicle enters the plasm, carrying real area from somewhere. */
+    const addVesicle = (nx: number, ny: number, area: number, cargo: CargoStage, seedBase: number) => {
+      if (area <= 0) return;
+      if (vesicles.length >= MAX_VESICLES) {
+        const gone = vesicles.shift();
+        // at the cap the eldest gives its membrane back to the plasm, visibly
+        if (gone) pulses.push({ x: gone.nx * width, y: gone.ny * height, t0: performance.now(), tint: "150, 190, 172", gain: 0.4 });
+      }
+      vesicleCount += 1;
+      const rng = mulberry32(hashSeed(seedBase, vesicleCount));
+      const ang = rng() * Math.PI * 2;
+      vesicles.push({
+        nx: clamp01(nx),
+        ny: clamp01(ny),
+        vx: Math.cos(ang) * 0.05,
+        vy: Math.sin(ang) * 0.05,
+        area,
+        cargo,
+        seed: hashSeed(seedBase, vesicleCount, 7),
+        lit: 1,
+        age: 0,
+      });
+    };
+
+    /**
+     * An organ buds a vesicle: the membrane comes OUT of it, so the organ
+     * visibly smooths in the same frame the vesicle appears. Refused when
+     * the organ has nothing to spare — the ledger is the law.
+     */
+    const budFrom = (i: number, cargo: CargoStage): boolean => {
+      const list = listRef.current;
+      const o = list[i];
+      if (!o) return false;
+      const bud = budVesicle(o, VESICLE_AREA);
+      if (!bud) return false;
+      listRef.current = list.map((q, k) => (k === i ? bud.parent : q));
+      addVesicle(o.nx, o.ny, bud.area, cargo, hashSeed(o.seed, i));
+      lit[i] = 1;
+      pulses.push({ x: o.nx * width, y: o.ny * height, t0: performance.now(), tint: KIND_TINT[o.kind], gain: 0.5 });
+      try {
+        audio.playNote(58 + (cargo === "raw" ? 0 : cargo === "folded" ? 4 : 7), 140);
+        haptics.tap();
+      } catch {
+        /* noop */
+      }
+      save();
+      return true;
+    };
+
+    /**
+     * Fusion: the vesicle's membrane goes back into the target organ, its
+     * cargo advances one real station, and the organ answers in its own
+     * timbre. What comes out of a golgi handed folded cargo is a mature
+     * granule — neither the vesicle that arrived nor the organ it met.
+     */
+    const fuseInto = (k: number, i: number) => {
+      const v = vesicles[k];
+      const list = listRef.current;
+      const o = list[i];
+      if (!v || !o) return;
+      const next = advanceCargo(v.cargo, o.kind);
+      listRef.current = list.map((q, j) => (j === i ? fuseVesicle(q, v.area) : q));
+      vesicles.splice(k, 1);
+      lit[i] = 1;
+      pulses.push({ x: o.nx * width, y: o.ny * height, t0: performance.now(), tint: KIND_TINT[o.kind], gain: 0.8 });
+      try {
+        haptics.detent();
+      } catch {
+        /* noop */
+      }
+      ring(i, 0.6);
+      save();
+      if (next !== v.cargo) {
+        // the station did its work: the parcel leaves again, changed
+        window.setTimeout(() => {
+          if (listRef.current[i]) budFrom(i, next);
+        }, 420);
+        try {
+          audio.chime();
+          haptics.bloom();
+        } catch {
+          /* noop */
+        }
+      }
+    };
+
+    /** Mature cargo reaching the rim is released — the cell speaks outward. */
+    const exocytose = (k: number) => {
+      const v = vesicles[k];
+      if (!v) return;
+      vesicles.splice(k, 1);
+      pulses.push({ x: v.nx * width, y: v.ny * height, t0: performance.now(), tint: "242, 238, 230", gain: 1 });
+      churn = Math.min(1, churn + 0.16);
+      try {
+        audio.spark();
+        audio.playNote(72, 180);
+        haptics.bloom();
+      } catch {
+        /* noop */
+      }
+    };
+
+    /**
+     * A double tap on an organ makes it do what it is for, visibly: a
+     * mitochondrion large enough divides, a smaller one fires atp, and the
+     * pathway organs bud the parcel they are responsible for.
+     */
+    const performFunction = (i: number, intensity: number) => {
+      const list = listRef.current;
+      const o = list[i];
+      if (!o) return;
+      lit[i] = 1;
+      if (o.kind === "mitochondrion") {
+        const pair = surfaceArea(o) > 12 ? fissionOrganelle(o) : null;
+        if (pair) {
+          // fission: one organ becomes two, and the membrane is halved
+          const off = 0.035 + intensity * 0.02;
+          listRef.current = settlePopulation([
+            ...list.filter((_, k) => k !== i),
+            { ...pair[0], nx: clamp01(o.nx - off), ny: clamp01(o.ny + off * 0.4) },
+            { ...pair[1], nx: clamp01(o.nx + off), ny: clamp01(o.ny - off * 0.4) },
+          ]);
+          pulses.push({ x: o.nx * width, y: o.ny * height, t0: performance.now(), tint: KIND_TINT.mitochondrion, gain: 1 });
+          try {
+            audio.bell();
+            haptics.bloom();
+          } catch {
+            /* noop */
+          }
+          save();
+          return;
+        }
+        // atp: a bright pulse that visibly speeds the whole cytoplasm
+        streamingTarget = clamp01(streamingTarget + 0.2 + intensity * 0.3);
+        pulses.push({ x: o.nx * width, y: o.ny * height, t0: performance.now(), tint: "231, 172, 82", gain: 0.6 + intensity * 0.4 });
+        ring(i, 0.8 + intensity * 0.4);
+        try {
+          audio.playNote(64, 200);
+          haptics.roll();
+        } catch {
+          /* noop */
+        }
+        return;
+      }
+      if (o.kind === "ribosome") {
+        // translation: a raw parcel comes off it
+        if (!budFrom(i, "raw")) ring(i, 0.7);
+        return;
+      }
+      if (o.kind === "er" || o.kind === "golgi") {
+        if (!budFrom(i, o.kind === "er" ? "folded" : "mature")) ring(i, 0.7);
+        return;
+      }
+      if (o.kind === "vacuole") {
+        // it contracts, and what it held goes back to the plasm as a parcel
+        if (!budFrom(i, "mature")) ring(i, 0.7);
+        pulses.push({ x: o.nx * width, y: o.ny * height, t0: performance.now(), tint: KIND_TINT.vacuole, gain: 0.7 });
+        return;
+      }
+      // the nucleus: transcription — a raw parcel leaves for the ribosomes
+      if (!budFrom(i, "raw")) ring(i, 0.7);
+      pulses.push({ x: o.nx * width, y: o.ny * height, t0: performance.now(), tint: KIND_TINT.nucleus, gain: 0.8 });
+    };
+
+    /**
+     * A double tap on open plasm cycles the traffic in: a parcel from
+     * outside, an acid vesicle for the vacuole, a folded parcel already
+     * halfway down the pathway, then an atp wave through everything.
+     */
+    const summonTraffic = (nx: number, ny: number, intensity: number) => {
+      const kind = plasmEventIdx % 5;
+      plasmEventIdx += 1;
+      const list = listRef.current;
+      const seed = hashSeed(plasmEventIdx, Math.round(nx * 4093), Math.round(ny * 8191));
+      if (kind === 0) {
+        // the organ the cell is still missing condenses here — the rung's
+        // own creation, kept, and the first answer of the cycle
+        condenseMissing(nx, ny);
+        return;
+      }
+      if (kind === 4) {
+        // an atp wave: every mitochondrion answers, and the plasm races
+        streamingTarget = clamp01(streamingTarget + 0.25 + intensity * 0.35);
+        list.forEach((o, i) => {
+          if (o.kind !== "mitochondrion") return;
+          lit[i] = 1;
+          pulses.push({ x: o.nx * width, y: o.ny * height, t0: performance.now() + i * 60, tint: "231, 172, 82", gain: 0.7 });
+        });
+        churn = Math.min(1, churn + 0.2 + intensity * 0.2);
+        try {
+          audio.playNote(60, 200);
+          haptics.ripple(0.3 + intensity * 0.35);
+        } catch {
+          /* noop */
+        }
+        return;
+      }
+      // the parcel's membrane is drawn from what the plasm has not spent;
+      // if the plasm is full, the largest organ gives it up instead
+      const want = VESICLE_AREA * (0.7 + intensity * 0.6);
+      const free = freeMembrane(list, inTransit());
+      let area = Math.min(free, want);
+      if (area < want * 0.4) {
+        let big = -1;
+        let bigA = 0;
+        list.forEach((o, i) => {
+          const a = surfaceArea(o);
+          if (a > bigA) {
+            bigA = a;
+            big = i;
+          }
+        });
+        if (big >= 0) {
+          const bud = budVesicle(list[big], want - area);
+          if (bud) {
+            listRef.current = list.map((q, k) => (k === big ? bud.parent : q));
+            lit[big] = 1;
+            area += bud.area;
+          }
+        }
+      }
+      if (area <= 0.05) {
+        churn = Math.min(1, churn + 0.2);
+        try {
+          audio.refuse();
+          haptics.chop();
+        } catch {
+          /* noop */
+        }
+        return;
+      }
+      const cargo: CargoStage = kind === 1 ? "raw" : kind === 2 ? "mature" : "folded";
+      addVesicle(nx, ny, area, cargo, seed);
+      pulses.push({ x: nx * width, y: ny * height, t0: performance.now(), tint: "150, 190, 172", gain: 0.5 });
+      try {
+        audio.playNote(50 + kind * 5, 170);
+        haptics.tap();
+      } catch {
+        /* noop */
+      }
+      save();
     };
 
     // the raised-lens marker ScaleTravel reads before a step-back nudge
@@ -501,11 +790,17 @@ export default function OrganellesPlasm() {
             return;
           }
           if (tier === 3) {
-            // draw membrane into the organ, or condense what the cell still lacks
+            // The 3-rung is the room's transformation rung. On an organ: the
+            // plasm feeds it membrane (the shipped meaning) and the organ
+            // spends it doing what it is FOR — a mitochondrion large enough
+            // divides, a smaller one fires atp, the pathway organs bud the
+            // parcel they are responsible for. On open plasm: the next
+            // traffic of the cycle, whose first answer is the organ the cell
+            // still lacks condensing there.
             if (i >= 0) {
               selIdx = i;
               draw_(i, 0.1 + amp * 0.16 + deepen * 0.08);
-              ring(i, 0.75 + deepen * 0.25);
+              performFunction(i, e.intensity + deepen * 0.3);
               try {
                 haptics.detent();
               } catch {
@@ -513,7 +808,7 @@ export default function OrganellesPlasm() {
               }
               save();
             } else {
-              condenseMissing(x / width, y / height);
+              summonTraffic(clamp01(x / width), clamp01(y / height), e.intensity + deepen * 0.3);
             }
             return;
           }
@@ -555,7 +850,19 @@ export default function OrganellesPlasm() {
             }
             save();
           }
-          tutti();
+          // ...and the top rung's own act, the largest thing this room does:
+          // a METABOLIC CASCADE walking the organs from the lowest voice to
+          // the highest — every mitochondrion firing, every maker budding a
+          // fresh parcel, and every parcel in transit lit at the close.
+          cascade = { at: performance.now(), step: 0, gain: e.intensity + deepen * 0.4 };
+          streamingTarget = clamp01(streamingTarget + 0.25 + e.intensity * 0.3);
+          stirTurbulence(0.12 + deepen * 0.12);
+          try {
+            audio.bell();
+            haptics.roll();
+          } catch {
+            /* noop */
+          }
         },
         hold: (e) => {
           lastInteractionAt = performance.now();
@@ -1002,6 +1309,149 @@ export default function OrganellesPlasm() {
         }
       }
 
+      // ——— the physics BETWEEN organs: vesicle traffic ———
+      // Every parcel knows which station it needs next (membrane.cargoDestination)
+      // and goes there; mature cargo makes for the rim and is released. Fusion
+      // is where the room's ledger closes: the area the parcel carried goes
+      // into the organ it met, in the same frame the eye and ear are told.
+      {
+        const cur = listRef.current;
+        for (let k = vesicles.length - 1; k >= 0; k--) {
+          const v = vesicles[k];
+          v.lit = Math.max(0, v.lit - dt * 1.1);
+          v.age += dt;
+          const want = cargoDestination(v.cargo);
+          let ti = -1;
+          let tD = Infinity;
+          if (want) {
+            for (let i = 0; i < cur.length; i++) {
+              if (cur[i].kind !== want) continue;
+              const d = Math.hypot(cur[i].nx - v.nx, cur[i].ny - v.ny);
+              if (d < tD) {
+                tD = d;
+                ti = i;
+              }
+            }
+          }
+          if (ti >= 0) {
+            const o = cur[ti];
+            const seek = Math.min(1, dt * (0.9 + streaming * 1.2));
+            v.nx += (o.nx - v.nx) * seek;
+            v.ny += (o.ny - v.ny) * seek;
+            const reach = Math.max(0.03, (o.radius * unit() * 1.3) / Math.max(1, Math.min(width, height)));
+            if (tD < reach + 0.012) {
+              fuseInto(k, ti);
+              continue;
+            }
+          } else {
+            // mature cargo makes for the rim: exocytosis at the ghost membrane
+            const ang = Math.atan2(v.ny - 0.5, v.nx - 0.5) || (v.seed % 628) / 100;
+            const seek = Math.min(1, dt * (0.4 + streaming * 0.6));
+            v.nx += (0.5 + Math.cos(ang) * 0.52 - v.nx) * seek;
+            v.ny += (0.5 + Math.sin(ang) * 0.52 - v.ny) * seek;
+            if (Math.hypot(v.nx - 0.5, v.ny - 0.5) > 0.46) {
+              exocytose(k);
+              continue;
+            }
+          }
+          if (!reduced) {
+            v.nx += v.vx * dt * (0.4 + streaming);
+            v.ny += v.vy * dt * (0.4 + streaming);
+            v.vx *= Math.exp(-dt * 1.4);
+            v.vy *= Math.exp(-dt * 1.4);
+          }
+          v.nx = clamp(v.nx, 0.02, 0.98);
+          v.ny = clamp(v.ny, 0.02, 0.98);
+          // a parcel with nowhere to go eventually gives its membrane back
+          if (v.age > 26 && ti < 0) {
+            const big = cur.length > 0 ? 0 : -1;
+            if (big >= 0) {
+              listRef.current = listRef.current.map((q, j) => (j === big ? fuseVesicle(q, v.area) : q));
+              lit[big] = Math.max(lit[big], 0.5);
+            }
+            vesicles.splice(k, 1);
+          }
+        }
+      }
+
+      // ——— the cascade: the whole cell lit, organ by organ ———
+      if (cascade && now >= cascade.at) {
+        const order = [...listRef.current.keys()].sort(
+          (a, b) => KIND_BASE_HZ[listRef.current[b].kind] - KIND_BASE_HZ[listRef.current[a].kind],
+        );
+        if (cascade.step >= order.length) {
+          // the last rung: everything in transit jumps a station at once
+          streamingTarget = clamp01(streamingTarget + 0.2);
+          churn = Math.min(1, churn + 0.3 + cascade.gain * 0.3);
+          for (const v of vesicles) v.lit = 1;
+          try {
+            audio.bell();
+            haptics.bloom();
+          } catch {
+            /* noop */
+          }
+          cascade = null;
+        } else {
+          const idx = order[cascade.step];
+          const o = listRef.current[idx];
+          if (o) {
+            lit[idx] = 1;
+            ring(idx, 0.4 + cascade.gain * 0.5);
+            pulses.push({
+              x: o.nx * width,
+              y: o.ny * height,
+              t0: now,
+              tint: KIND_TINT[o.kind],
+              gain: 0.5 + cascade.gain * 0.4,
+            });
+            if (o.kind === "mitochondrion") streamingTarget = clamp01(streamingTarget + 0.06);
+            if (o.kind === "ribosome" || o.kind === "nucleus") budFrom(idx, "raw");
+          }
+          cascade.step += 1;
+          cascade.at = now + 170;
+        }
+      }
+
+      // ——— aliveness: the cell metabolises with nobody here ———
+      if (nextLifeAt === 0) nextLifeAt = now + 5000;
+      if (now >= nextLifeAt && !reduced && !cascade) {
+        const rng = mulberry32(hashSeed(lifeCount, 0x0b1e));
+        const roll = rng();
+        lifeCount += 1;
+        nextLifeAt = now + 7000 + rng() * 11000;
+        const cur = listRef.current;
+        if (cur.length > 0) {
+          if (roll < 0.5) {
+            // a station buds of its own accord, and the traffic starts
+            const makers = cur
+              .map((o, i) => ({ o, i }))
+              .filter(({ o }) => o.kind === "ribosome" || o.kind === "nucleus" || o.kind === "er");
+            if (makers.length > 0) {
+              const pick = makers[Math.floor(rng() * makers.length) % makers.length];
+              budFrom(pick.i, pick.o.kind === "er" ? "folded" : "raw");
+            }
+          } else if (roll < 0.82) {
+            // a mitochondrion fires on its own — the cell's own pulse
+            const mitos = cur.map((o, i) => ({ o, i })).filter(({ o }) => o.kind === "mitochondrion");
+            if (mitos.length > 0) {
+              const pick = mitos[Math.floor(rng() * mitos.length) % mitos.length];
+              lit[pick.i] = 1;
+              ring(pick.i, 0.35);
+              streamingTarget = clamp01(streamingTarget + 0.1);
+              pulses.push({
+                x: pick.o.nx * width,
+                y: pick.o.ny * height,
+                t0: now,
+                tint: "231, 172, 82",
+                gain: 0.45,
+              });
+            }
+          } else {
+            churn = Math.min(1, churn + 0.18);
+          }
+        }
+      }
+
       // ——— render ———
       // season (three-finger twist) drifts the plasm's own slow cycle, a
       // faint warmth independent of anything the hand is doing
@@ -1162,6 +1612,44 @@ export default function OrganellesPlasm() {
           ctx.arc(cx, cy, o.radius * scale * (1 + o.amplitude) + 17, -Math.PI / 2, -Math.PI / 2 + clamp01(l) * Math.PI * 2);
           ctx.stroke();
         }
+      }
+
+      // the parcels in transit: a smooth sac (one sine, and drawn as one
+      // circle), tinted by how far down the pathway its cargo has come, with
+      // a thread back toward the station it is making for
+      for (const v of vesicles) {
+        const vx = v.nx * width;
+        const vy = v.ny * height;
+        const r = Math.max(2.4, Math.sqrt(Math.max(0.2, v.area)) * U * 0.34);
+        const tint = v.cargo === "raw" ? "150, 178, 226" : v.cargo === "folded" ? "134, 186, 168" : "231, 172, 82";
+        ctx.strokeStyle = `rgba(${tint}, ${0.3 + v.lit * 0.5})`;
+        ctx.lineWidth = 0.9;
+        ctx.beginPath();
+        ctx.arc(vx, vy, r * (1 + breath * 0.06), 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = `rgba(${tint}, ${0.08 + v.lit * 0.28})`;
+        ctx.fill();
+        // the cargo inside it, a mark that changes at every station
+        ctx.fillStyle = `rgba(${tint}, ${0.45 + v.lit * 0.4})`;
+        ctx.beginPath();
+        ctx.arc(vx, vy, r * (v.cargo === "mature" ? 0.5 : v.cargo === "folded" ? 0.38 : 0.26), 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // fusions, buds and releases: one soft ring each, where it happened
+      for (let k = pulses.length - 1; k >= 0; k--) {
+        const p = pulses[k];
+        const u = (now - p.t0) / 780;
+        if (u < 0) continue;
+        if (u >= 1) {
+          pulses.splice(k, 1);
+          continue;
+        }
+        ctx.strokeStyle = `rgba(${p.tint}, ${(1 - u) * 0.5 * p.gain})`;
+        ctx.lineWidth = 1.3 * (1 - u) + 0.4;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, U * (0.5 + u * 3.6 * (0.6 + p.gain)), 0, Math.PI * 2);
+        ctx.stroke();
       }
 
       // the span's membrane tubule: a contact site sustained between two

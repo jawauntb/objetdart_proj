@@ -475,11 +475,11 @@ export default function Storm() {
     // A hand plants a localized cell of weather in the sea with a dwell
     // hold; ceremony hold on an existing cell snuffs it; the eye (ceremony
     // on open water) remains the room's other solemn act.
-    type StormCell = { id: number; x: number; y: number; t0: number; strength: number };
+    type StormCell = { id: number; x: number; y: number; t0: number; strength: number; fed: boolean };
     const cells: StormCell[] = [];
     let nextCellId = 1;
     const addCell = (x: number, y: number, strength: number) => {
-      cells.push({ id: ++nextCellId, x, y, t0: simNow, strength });
+      cells.push({ id: ++nextCellId, x, y, t0: simNow, strength, fed: false });
       if (cells.length > 6) cells.shift();
       setHasBuilt(true);
     };
@@ -780,6 +780,24 @@ export default function Storm() {
           else { try { audio.thud(); } catch { /* noop */ } }
           try { haptics.storm(); } catch { /* noop */ }
           useField.getState().recordTape("ripple", 0.8 + depth * 0.2, "storm/crescendo");
+          return;
+        }
+        if (tier === 5 && maelstromTargetRef.current < 0.5) {
+          // tier 5 — the room's biggest reachable event: the eye of the
+          // storm opens, the same act the ceremony hold owns, now also
+          // reachable by hand at the top of the tap ladder
+          maelstromTargetRef.current = 1;
+          setMaelstromOn(true);
+          try { audio.thud(); } catch { /* noop */ }
+          window.setTimeout(() => { try { audio.bell(); } catch { /* noop */ } }, 220);
+          try { haptics.bloom(); } catch { /* noop */ }
+          useField.getState().recordTape("ripple", 1.0, "storm/eye");
+          // and the sky still answers where the hand struck
+          if (sky) {
+            lastStrikeXFracRef.current = x / Math.max(1, w);
+            chargeRef.current = Math.max(chargeRef.current, 0.3 + depth * 0.4);
+            dischargeAt(lastStrikeXFracRef.current);
+          }
           return;
         }
         if (tier >= 3 && sky) {
@@ -1195,6 +1213,28 @@ export default function Storm() {
       if (gyre < 0.005) gyre = 0;
       panX += (panXTarget - panX) * Math.min(1, frameDt * 3);
       panY += (panYTarget - panY) * Math.min(1, frameDt * 3);
+
+      // storm cells act on each other: two whose patches of sea overlap
+      // merge into one stronger cell (a third cell that is neither
+      // parent), and a cell strong enough sheds a downdraft that seeds a
+      // fresh, weaker cell beside it — a chain rather than isolated bumps.
+      for (let i = 0; i < cells.length; i++) {
+        const a = cells[i];
+        for (let j = cells.length - 1; j > i; j--) {
+          const b = cells[j];
+          if (Math.abs(a.x - b.x) > 46) continue;
+          a.strength = Math.min(1.4, a.strength + b.strength * 0.7);
+          a.x = (a.x + b.x) / 2;
+          a.t0 = Math.min(a.t0, b.t0);
+          cells.splice(j, 1);
+          manualCrestsRef.current.push({ x: a.x, t0: simNow, strength: 22 * a.strength });
+          try { haptics.bloom(); } catch { /* noop */ }
+        }
+        if (a.strength > 0.9 && !a.fed && (simNow - a.t0) > 900) {
+          a.fed = true;
+          cells.push({ id: ++nextCellId, x: a.x + (a.x > w / 2 ? -70 : 70), y: a.y, t0: simNow, strength: a.strength * 0.45, fed: false });
+        }
+      }
 
       // storm cells: each keeps bumping its patch of sea until it decays
       // (~14s) or a ceremony hold snuffs it out early.

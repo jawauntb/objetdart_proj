@@ -221,6 +221,14 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+/** A seeded 0..1 draw for anything that becomes a persisted natural (its
+ *  kind, its drawing seed, an animal trail's path) — never Math random, so
+ *  the same paused touch always leaves the same mark. */
+function hash01(n: number): number {
+  const x = Math.sin(n * 127.1 + 311.7) * 43758.5453123;
+  return x - Math.floor(x);
+}
+
 function measureMap(width: number, height: number): MapMetrics {
   const aspect = width <= MOBILE_BREAKPOINT ? MOBILE_MAP_ASPECT : DESKTOP_MAP_ASPECT;
   if (width / height > aspect) {
@@ -900,11 +908,11 @@ export default function Atlas() {
     // An animal trail is a short curved series of small footprints
     // stored as offsets in normalized map coords — so the whole path
     // scales with the plane when the user zooms.
-    const genTrail = (): Array<{ dx: number; dy: number }> => {
-      const heading = Math.random() * Math.PI * 2;
-      const count = 6 + Math.floor(Math.random() * 4);
-      const step = 0.010 + Math.random() * 0.008;
-      const curve = (Math.random() - 0.5) * 0.35;
+    const genTrail = (seed: number): Array<{ dx: number; dy: number }> => {
+      const heading = hash01(seed) * Math.PI * 2;
+      const count = 6 + Math.floor(hash01(seed + 0.31) * 4);
+      const step = 0.010 + hash01(seed + 0.62) * 0.008;
+      const curve = (hash01(seed + 0.83) - 0.5) * 0.35;
       const pts: Array<{ dx: number; dy: number }> = [];
       let hx = 0;
       let hy = 0;
@@ -919,15 +927,44 @@ export default function Atlas() {
     };
     const addNatural = (kind: AtlasNaturalKind, nx: number, ny: number) => {
       const nowMs = Date.now();
+      // The map's one real force between what a hand plants: same-kind
+      // naturals crowd. A cairn planted too close to an existing cairn (or
+      // flower near flower, trail near trail) is nudged clear of every
+      // neighbour of its own kind within reach, summed exactly as
+      // lib/orbfield's disc separation is — so two cairns never stack
+      // invisibly on the same ground, and a hand that keeps planting the
+      // same kind in one spot watches the cluster visibly spread out.
+      const REACH = 0.03;
+      let px = Math.max(0.02, Math.min(0.98, nx));
+      let py = Math.max(0.02, Math.min(0.98, ny));
+      let dxSum = 0;
+      let dySum = 0;
+      for (const other of naturals) {
+        if (other.kind !== kind) continue;
+        const dx = px - other.nx;
+        const dy = py - other.ny;
+        const d = Math.hypot(dx, dy);
+        if (d >= REACH || d <= 1e-6) continue;
+        const push = (REACH - d) / REACH;
+        dxSum += (dx / d) * push;
+        dySum += (dy / d) * push;
+      }
+      px = Math.max(0.02, Math.min(0.98, px + dxSum * REACH * 0.6));
+      py = Math.max(0.02, Math.min(0.98, py + dySum * REACH * 0.6));
+      // the drawing seed and (for a trail) its whole path are seeded from
+      // where and when the mark landed, not Math random — both are
+      // persisted (objetdart:atlas:naturals:v1), so a reload draws the
+      // same cairn/flower/trail it left
+      const drawSeed = Math.floor(hash01(nowMs * 0.001 + px * 997 + py * 431) * 0xFFFFFFFF);
       const n: AtlasNatural = {
         id: `nat-${nowMs}-${Math.random().toString(36).slice(2, 8)}`,
         kind,
-        nx: Math.max(0.02, Math.min(0.98, nx)),
-        ny: Math.max(0.02, Math.min(0.98, ny)),
-        seed: Math.floor(Math.random() * 0xFFFFFFFF),
+        nx: px,
+        ny: py,
+        seed: drawSeed,
         createdAt: nowMs,
         lastSeen: nowMs,
-        trail: kind === "trail" ? genTrail() : undefined,
+        trail: kind === "trail" ? genTrail(drawSeed) : undefined,
       };
       naturals.push(n);
       while (naturals.length > MAX_NATURALS) naturals.shift();
@@ -1363,7 +1400,7 @@ export default function Atlas() {
           if (nx < 0 || ny < 0 || nx > 1 || ny > 1) return;
           // Cairn is the default surprise; a wildflower shows up often
           // enough to feel warm; a trail is a rare gift.
-          const roll = Math.random();
+          const roll = hash01(Date.now() * 0.001 + nx * 997 + ny * 431);
           const kind: AtlasNaturalKind =
             roll < 0.70 ? "cairn" :
             roll < 0.95 ? "flower" :
@@ -2698,7 +2735,7 @@ export default function Atlas() {
         if (nx < 0 || ny < 0 || nx > 1 || ny > 1) return;
         // Cairn is the default surprise; a wildflower shows up often
         // enough to feel warm; a trail is a rare gift.
-        const roll = Math.random();
+        const roll = hash01(Date.now() * 0.001 + nx * 997 + ny * 431);
         const kind: AtlasNaturalKind =
           roll < 0.70 ? "cairn" :
           roll < 0.95 ? "flower" :

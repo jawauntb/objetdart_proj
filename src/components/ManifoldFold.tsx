@@ -72,15 +72,20 @@ import {
   boundFraction,
   buildCosmicWeb,
   foldPoint,
+  mergeBodies,
+  mergeRadiusFor,
   placeMotes,
+  ringdownEnvelope,
   rimSteerRay,
   scaleFactor,
   seasonAccelAt,
   seasonGeodesicStep,
+  stepMutualGravity,
   timeDilation,
   wellDepth,
   type LawSeason,
   type MassPoint,
+  type OrbitBody,
   type Ray,
 } from "@/lib/manifold-field";
 import {
@@ -110,6 +115,15 @@ const WEB_SEED = 3126; // the sky's one seed — the web never rolls dice
 const WEB_SUB = 6; // segments per filament polyline
 const WRAP = 2; // comoving wrap ratio: one epoch per doubling of a(t)
 const WEB_DISP = 0.85; // the web rides the mesh's field, slightly supple
+/** Physics BETWEEN the masses: every settled mass pulls every other one,
+ *  softened exactly like the field they well. Small enough that a single
+ *  planted pair drifts rather than snaps together — the fold is patient. */
+const MUTUAL_G = 1400;
+const MASS_SPEED_CAP = 220; // px/s — a close pass bends hard but never flings
+const MERGE_UNIT = 9; // px per sqrt(mass) of contact radius
+/** How the same mass compacts, stage by stage: neutron star, then hole. */
+const STAGE_COMPACTION: readonly number[] = [1, 0.68, 0.42];
+const STAGE_MASS_GAIN: readonly number[] = [1, 1.7, 2.1];
 /**
  * Gyroscopic parallax (the vessel's tilt): max shift in px at full lean.
  * The fold hangs in real space beyond the glass — layers shift by depth
@@ -138,6 +152,12 @@ type Mass = {
   charge: number;
   /** performance.now() when evaporation began; 0 = present. */
   evapAt: number;
+  /** px/s, in the room's own frame — a settled mass pulls, and is pulled. */
+  vx: number;
+  vy: number;
+  /** 0 star, 1 neutron star, 2 black hole — a double-tap collapse ladder,
+   *  compacting the same mass into a smaller, denser, darker presence. */
+  stage: 0 | 1 | 2;
 };
 
 type RayState = {
@@ -400,6 +420,9 @@ export default function ManifoldFold() {
         settled: true,
         charge: 0,
         evapAt: 0,
+        vx: 0,
+        vy: 0,
+        stage: 0,
       }));
       massSerial = masses.length;
     } else {
@@ -415,6 +438,9 @@ export default function ManifoldFold() {
         settled: true,
         charge: 0,
         evapAt: 0,
+        vx: 0,
+        vy: 0,
+        stage: 0,
       }];
       massSerial = 1;
       save(true);
@@ -534,7 +560,7 @@ export default function ManifoldFold() {
       if (pulses.length > 7) pulses.shift();
     };
 
-    const placeMass = (x: number, y: number, settled: boolean): Mass => {
+    const placeMass = (x: number, y: number, settled: boolean, vx = 0, vy = 0): Mass => {
       const m: Mass = {
         id: `ms-${massSerial++}-${Date.now().toString(36)}`,
         nx: clamp(x / width, 0.05, 0.95),
@@ -545,6 +571,9 @@ export default function ManifoldFold() {
         settled,
         charge: 0,
         evapAt: 0,
+        vx,
+        vy,
+        stage: 0,
       };
       masses.push(m);
       // the cap: the oldest presence lets go, gracefully
@@ -586,6 +615,161 @@ export default function ManifoldFold() {
       useField.getState().recordTape("sigil", 0.85, "manifold/evaporate");
       save();
       syncStanding();
+    };
+
+    // ————— physics BETWEEN the masses: mutual gravity, merger, ringdown —————
+    // A merged remnant's quasi-normal ringing: a handful of struck notes at
+    // the damped-sinusoid's own cadence, loud then soft — ringdownEnvelope
+    // decides which beats still speak.
+    const playRingdown = (freqHz: number, strength: number) => {
+      const damping = 2.1;
+      let k = 0;
+      const beats = 6;
+      const step = () => {
+        if (k >= beats) return;
+        const env = Math.abs(ringdownEnvelope(k * 0.16, freqHz, damping));
+        if (env > 0.04) note(Math.max(14, Math.round(20 + strength * 8 - k * 0.7)), 260);
+        k += 1;
+        window.setTimeout(step, 150);
+      };
+      step();
+    };
+
+    /** Two masses close their gap and become one — mass and momentum exactly
+     *  conserved (mergeBodies), landing in sight, sound and haptics at once. */
+    const mergeMasses = (a: Mass, b: Mass, into: OrbitBody) => {
+      a.m = into.m;
+      a.nx = clamp01(into.x / width);
+      a.ny = clamp01(into.y / height);
+      a.vx = into.vx;
+      a.vy = into.vy;
+      a.stage = Math.max(a.stage, b.stage) as 0 | 1 | 2;
+      a.settled = true;
+      a.growth = 1;
+      a.charge = 0;
+      const bi = masses.indexOf(b);
+      if (bi >= 0) masses.splice(bi, 1);
+      firePulse(a.nx * width, a.ny * height, 1.4 + into.m * 0.3);
+      try { audio().bell(); } catch { /* noop */ }
+      try { haptics.storm(); } catch { /* noop */ }
+      playRingdown(22 + Math.round(clamp01(into.m / 3) * 10), clamp01(into.m / 3));
+      staticRaysStale = true;
+      useField.getState().recordTape("sigil", 0.9, "manifold/merge");
+      save();
+      syncStanding();
+    };
+
+    /** One step of mutual gravity among every settled mass, then a merge
+     *  pass. This is the room's law, not a decal: it runs every frame,
+     *  gestured or not — masses orbit and inspiral on their own timers. */
+    const stepMassPhysics = (dt: number) => {
+      const alive = masses.filter((m) => !m.evapAt && m.settled);
+      if (alive.length < 2) return;
+      const dtG = dt * timeScale;
+      if (!(dtG > 0)) return;
+      const bodies: OrbitBody[] = alive.map((m) => ({ x: m.nx * width, y: m.ny * height, m: m.m, vx: m.vx, vy: m.vy }));
+      const stepped = stepMutualGravity(bodies, dtG, MUTUAL_G, SOFTENING * 1.5, MASS_SPEED_CAP);
+      stepped.forEach((b, i) => {
+        const m = alive[i];
+        m.nx = clamp(b.x / width, 0.03, 0.97);
+        m.ny = clamp(b.y / height, 0.05, 0.95);
+        m.vx = b.vx;
+        m.vy = b.vy;
+      });
+      const { merges } = mergeBodies(stepped, MERGE_UNIT);
+      if (merges.length === 0) return;
+      const findIdx = (body: OrbitBody) => stepped.findIndex((s) => s.x === body.x && s.y === body.y && s.m === body.m);
+      for (const ev of merges) {
+        const ia = findIdx(ev.a);
+        const ib = findIdx(ev.b);
+        if (ia < 0 || ib < 0 || ia === ib) continue;
+        mergeMasses(alive[ia], alive[ib], ev.into);
+      }
+    };
+
+    /** Double-tap on a mass: collapse it one step denser — star, neutron
+     *  star, black hole — the same mass compacting, never a new object. */
+    const collapseStage = (m: Mass) => {
+      if (m.evapAt) return;
+      if (m.stage >= 2) {
+        firePulse(m.nx * width, m.ny * height, 0.6);
+        note(16, 260);
+        try { haptics.tap(); } catch { /* noop */ }
+        return;
+      }
+      const next = (m.stage + 1) as 0 | 1 | 2;
+      m.m *= STAGE_MASS_GAIN[next] / STAGE_MASS_GAIN[m.stage];
+      m.stage = next;
+      m.settled = true;
+      m.growth = 1;
+      firePulse(m.nx * width, m.ny * height, 0.9 + next * 0.5);
+      note(next === 1 ? 26 : 15, 520);
+      try { haptics.roll(); } catch { /* noop */ }
+      staticRaysStale = true;
+      useField.getState().recordTape("sigil", 0.75, next === 1 ? "manifold/neutron-star" : "manifold/black-hole");
+      save();
+    };
+
+    /** Double-tap on empty fabric: the next rarity in a fixed, deterministic
+     *  cycle — a passing body (real gravity, may be captured or fly off), a
+     *  gravitational-wave burst, or a light ray sent out to bend. */
+    let emptySummonIdx = 0;
+    const summonEmpty = (x: number, y: number, intensity: number) => {
+      const kinds = ["passing-body", "gravitational-wave", "bent-ray"] as const;
+      const kind = kinds[emptySummonIdx % kinds.length];
+      emptySummonIdx += 1;
+      if (kind === "passing-body") {
+        const edge = Math.floor(hash01(massSerial * 7 + 3) * 4);
+        let sx = x;
+        let sy = y;
+        if (edge === 0) sx = -30;
+        else if (edge === 1) sx = width + 30;
+        else if (edge === 2) sy = -30;
+        else sy = height + 30;
+        const toward = Math.atan2(y - sy, x - sx) + (hash01(massSerial * 13 + 1) - 0.5) * 0.5;
+        const speed = 55 + intensity * 60;
+        placeMass(sx, sy, true, Math.cos(toward) * speed, Math.sin(toward) * speed);
+        return;
+      }
+      if (kind === "gravitational-wave") {
+        // the quadrupole pattern: two wavefronts, a beat apart
+        firePulse(x, y, 0.7 + intensity * 0.6);
+        window.setTimeout(() => firePulse(x, y, 0.5 + intensity * 0.4), 90);
+        note(30, 900);
+        try { haptics.ripple(0.5); } catch { /* noop */ }
+        return;
+      }
+      const angle = hash01(massSerial * 19 + 7) * Math.PI * 2;
+      rays.push({ x, y, vx: Math.cos(angle) * lightSpeed, vy: Math.sin(angle) * lightSpeed, trail: [] });
+      if (rays.length > RAY_COUNT * 2) rays.shift();
+      note(44, 200);
+      try { haptics.tap(); } catch { /* noop */ }
+    };
+
+    /** Triple-tap: a binary inspiral and merger, run to completion in a few
+     *  seconds — the two nearest settled masses are given a mutual velocity
+     *  kick that dooms them to spiral together, the /stars merger done at
+     *  this scale, with a real ringdown when they finally touch. */
+    const forceInspiral = (x: number, y: number) => {
+      const alive = masses.filter((m) => !m.evapAt && m.settled);
+      if (alive.length < 2) return false;
+      alive.sort((a, b) => Math.hypot(a.nx * width - x, a.ny * height - y) - Math.hypot(b.nx * width - x, b.ny * height - y));
+      const a = alive[0];
+      const b = alive[1];
+      const dx = b.nx * width - a.nx * width;
+      const dy = b.ny * height - a.ny * height;
+      const d = Math.hypot(dx, dy) || 1;
+      // a tangential kick, opposite senses — the initial orbit a real
+      // inspiral decays from, tuned to close within a handful of seconds
+      const speed = 70 + Math.min(d, 260) * 0.42;
+      a.vx += (-dy / d) * speed * (a.m > b.m ? 0.4 : 1);
+      a.vy += (dx / d) * speed * (a.m > b.m ? 0.4 : 1);
+      b.vx += (dy / d) * speed * (b.m > a.m ? 0.4 : 1);
+      b.vy += (-dx / d) * speed * (b.m > a.m ? 0.4 : 1);
+      note(24, 500);
+      try { haptics.ripple(0.6); } catch { /* noop */ }
+      useField.getState().recordTape("sigil", 0.85, "manifold/inspiral");
+      return true;
     };
 
     // the whole-fold parting (LetGo, §8c): every mass evaporates oldest-
@@ -711,9 +895,12 @@ export default function ManifoldFold() {
         if (e.fingers !== 1) return; // anything else is gently absorbed
         const { x, y } = toLocal(e.x, e.y);
         const k = beadAt(x, y);
-        // the rapid-tap ladder (tiers 1/3/5/n) in the fold's material: one
-        // rings a pulse (or a bead), three sound the neighborhood of bands,
-        // five catch the light into orbit, n is the whole axis's crescendo
+        // the site-wide rapid-tap ladder (tiers 1/3/5/n from tapTrainTier):
+        // one rings a pulse (or a bead); three transforms a standing mass a
+        // step denser, or on open fabric summons the next rarity in a fixed
+        // cycle; five is the room's largest event — a real binary inspiral
+        // and merger where two or more masses stand; n is the axis's
+        // sustained crescendo, deepening continuously with the train
         const trainTier = tapTrainTier(e.count);
         const depth = tapTrainDepth(e.count);
         if (trainTier === "n") {
@@ -724,8 +911,10 @@ export default function ManifoldFold() {
           return;
         }
         if (trainTier === 5) {
-          // five taps catch the light: the rays near the strike wind into
-          // closed orbits for a breath — lensing without a mass
+          // the room's biggest, rarest event: a real inspiral and merger
+          // when two or more masses stand; otherwise the light itself is
+          // caught into a closed orbit for a breath — lensing without a mass
+          if (forceInspiral(x, y)) return;
           orbit = { x, y, omega: 3 + depth * 3, until: performance.now() + 2200 };
           firePulse(x, y, 0.5 + depth * 0.3);
           note(38, 220);
@@ -733,19 +922,12 @@ export default function ManifoldFold() {
           return;
         }
         if (trainTier === 3) {
-          // three taps sound the neighborhood: the nearest bead and the two
-          // bands it touches answer as one chord — the axis heard locally
-          let nearest = 0;
-          let bestD = Infinity;
-          for (let i = 0; i < beadPos.length; i++) {
-            const d = Math.hypot(x - beadPos[i].x, y - beadPos[i].y);
-            if (d < bestD) { bestD = d; nearest = i; }
-          }
-          for (const off of [0, -1, 1]) {
-            const i = nearest + off;
-            if (i >= 0 && i < SCALE_BANDS.length) chimeBead(i, off !== 0);
-          }
-          try { haptics.ripple(0.4 + depth * 0.3); } catch { /* noop */ }
+          // on a standing mass: its own transformation — one step denser,
+          // star to neutron star to black hole
+          const m3 = massAt(x, y);
+          if (m3 && !m3.evapAt) { collapseStage(m3); return; }
+          // on open fabric: the next rarity in a fixed, deterministic cycle
+          summonEmpty(x, y, e.intensity);
           return;
         }
         if (k >= 0) { chimeBead(k); return; }
@@ -1269,6 +1451,10 @@ export default function ManifoldFold() {
       parY += (parGoalY - parY) * Math.min(1, dt * 5);
       night += (nightTarget - night) * Math.min(1, dt * 2.4);
 
+      // the law between the masses runs whether or not a hand is present —
+      // this is what makes the fold alive at rest, not merely decorated
+      if (!reduce) stepMassPhysics(dt);
+
       const pts = livePoints();
 
       // masses: growth settles on its own if the hand wanders; charges decay
@@ -1462,7 +1648,10 @@ export default function ManifoldFold() {
         const mx = mfold.x;
         const my = mfold.y;
         const grow = m.settled ? 1 : 0.3 + 0.7 * m.growth;
-        let R = (10 + m.m * 16) * grow;
+        // the collapse ladder compacts the same mass into a smaller,
+        // denser presence — a neutron star reads tight and hard-rimmed, a
+        // black hole tighter still, with a violet rather than cold-blue rim
+        let R = (10 + m.m * 16) * grow * STAGE_COMPACTION[m.stage];
         let evapP = 0;
         if (m.evapAt) {
           evapP = clamp01((now - m.evapAt) / EVAP_MS);
@@ -1481,12 +1670,22 @@ export default function ManifoldFold() {
         ctx.beginPath();
         ctx.arc(mx, my, R, 0, Math.PI * 2);
         ctx.fill();
-        // a thin cold rim — the horizon's edge, brighter while forming
-        ctx.strokeStyle = `rgba(150, 175, 225, ${(m.settled ? 0.13 : 0.3) * (1 - evapP)})`;
+        // a thin rim — cold blue for a star, pale for a neutron star, a
+        // violet horizon for a black hole
+        const rimColor = m.stage === 2 ? "192, 150, 255" : m.stage === 1 ? "205, 220, 245" : "150, 175, 225";
+        ctx.strokeStyle = `rgba(${rimColor}, ${(m.settled ? 0.13 : 0.3) + m.stage * 0.09 * (1 - evapP)})`;
         ctx.lineWidth = m.settled ? 0.8 : 1.2;
         ctx.beginPath();
         ctx.arc(mx, my, R, 0, Math.PI * 2);
         ctx.stroke();
+        // a black hole keeps a second, wider ring — the photon sphere
+        if (m.stage === 2 && !m.evapAt) {
+          ctx.strokeStyle = `rgba(231, 172, 82, ${0.22 * (1 - evapP)})`;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(mx, my, R * 1.55, 0, Math.PI * 2);
+          ctx.stroke();
+        }
         // collapse charge: a warm arc closing around the presence
         if (m.charge > 0 && !m.evapAt) {
           ctx.strokeStyle = `rgba(231, 172, 82, ${0.25 + m.charge * 0.5})`;

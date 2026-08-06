@@ -755,6 +755,37 @@ export default function SineWaveExplorer() {
     let lastScrubCueAt = 0;
     let lastVoiceHapticAt = 0;
 
+    // tier 5: the room's biggest, rarest event — a full harmonic build-up.
+    // The overtone knob resets to bare fundamental and climbs to its ceiling
+    // in fixed steps (never Math.random), so the ribbon genuinely thickens
+    // from waveSample's own running sum, term by term, not a redrawn shape.
+    let buildTimers: number[] = [];
+    const harmonicBuildUp = (intensity: number) => {
+      for (const t of buildTimers) window.clearTimeout(t);
+      buildTimers = [];
+      harmonicRef.current = 0;
+      setHarmonic(0);
+      const cfgB = MODES.find((item) => item.id === modeRef.current) ?? MODES[0];
+      const steps = 8;
+      for (let i = 1; i <= steps; i += 1) {
+        const id = window.setTimeout(() => {
+          const next = Number(clamp((i / steps) * 0.82, 0, 0.82).toFixed(2));
+          harmonicRef.current = next;
+          setHarmonic(next);
+          try { audio.playNote(cfgB.midi + 12 + i, 90); } catch { /* noop */ }
+          try { haptics.ripple(0.2 + (i / steps) * 0.3); } catch { /* noop */ }
+        }, i * 220);
+        buildTimers.push(id);
+      }
+      const id = window.setTimeout(() => {
+        try { audio.bell(); } catch { /* noop */ }
+        try { haptics.storm(); } catch { /* noop */ }
+        recordTape("sigil", 1, "sine/build-complete");
+      }, steps * 220);
+      buildTimers.push(id);
+      void intensity;
+    };
+
     const detach = attachGestures(canvas, {
       voice: (e) => {
         lastGestureAtRef.current = performance.now();
@@ -891,17 +922,9 @@ export default function SineWaveExplorer() {
           try { audio.playNote(cfg.midi + 19, 190); } catch { /* noop */ }
           try { haptics.ripple(0.44); } catch { /* noop */ }
           recordTape("sigil", 0.5, "sine/train-bloom");
-        } else if (trainTier === 5 && e.count === 5) {
-          // five taps turn the wave to its next nature — source becomes
-          // interference becomes standing, the whole ribbon reshaping
-          const idx = MODES.findIndex((item) => item.id === modeRef.current);
-          const nextMode = MODES[(idx + 1) % MODES.length];
-          modeRef.current = nextMode.id;
-          setMode(nextMode.id);
-          try { audio.playNote(nextMode.midi + 12, 170); } catch { /* noop */ }
-          try { audio.chime(); } catch { /* noop */ }
-          try { haptics.lens(); } catch { /* noop */ }
-          recordTape("sigil", 0.66, `sine/train-${nextMode.id}`);
+        } else if (trainTier === 5) {
+          // the room's biggest, rarest event: a full harmonic build-up
+          harmonicBuildUp(e.intensity);
         } else if (trainTier === "n") {
           // seven and beyond: the crescendo — every further tap swells the
           // amplitude and climbs the scale until the hand relents
@@ -1061,6 +1084,7 @@ export default function SineWaveExplorer() {
     return () => {
       detach();
       detachVessel();
+      for (const t of buildTimers) window.clearTimeout(t);
       for (const id of heldVoices.keys()) engine.noteOff(`sine:${id}`);
       heldVoices.clear();
     };

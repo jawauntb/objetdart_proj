@@ -55,7 +55,10 @@ import {
   H_BONDS,
   MAX_BASES,
   MIN_BASES,
+  annealHolds,
+  bestAnnealSite,
   complement,
+  fragmentFrom,
   gcContent,
   hashSeed,
   hydrogenBonds,
@@ -69,6 +72,7 @@ import {
   rungAt,
   sequenceFromSeed,
   settleLength,
+  spliceInto,
   transcribe,
   type Base,
 } from "@/lib/helix";
@@ -178,6 +182,43 @@ export default function HelixLadder() {
     // three-finger twist = season: the strand's own slow cycle
     let season = 0;
     let lastSeasonSoundAt = 0;
+
+    // ——— the other strands in the nucleoplasm ———
+    // Loose fragments drift, find their own site on the ladder BY SEQUENCE
+    // (helix.bestAnnealSite — nothing here snaps to whatever is nearest),
+    // hold there while the heat is below what their bonds can stand, and a
+    // fragment that holds long enough is read into the template: the strand
+    // that comes out is neither the strand that was there nor the patch.
+    type Frag = {
+      seq: Base[];
+      nx: number;
+      ny: number;
+      vx: number;
+      vy: number;
+      seed: number;
+      /** site on the template, and how well it fits there */
+      site: number;
+      score: number;
+      bonds: number;
+      /** 0..1 — how far it has settled onto its site */
+      bound: number;
+      /** seconds it has been fully bound */
+      held: number;
+      lit: number;
+    };
+    const MAX_FRAGS = 5;
+    const frags: Frag[] = [];
+    let fragCount = 0;
+    /** the double-tap-on-empty cycle: fork, bubble, repair, primer */
+    let eventIdx = 0;
+    /** the room's own life, on seeded timers with no hand present */
+    let lifeCount = 0;
+    let nextLifeAt = 0;
+    /** the triple tap: replication running the whole length of the strand */
+    let replicating: { u: number; speed: number; gain: number } | null = null;
+    /** a transcription bubble opened by the room rather than by two fingers */
+    let autoBubble: { lo: number; hi: number; open: number; target: number } | null = null;
+    let lastTranscriptAt = 0;
 
     // vessel flip: face-down is night
     let night = 0;
@@ -311,6 +352,143 @@ export default function HelixLadder() {
       }
     };
 
+    /**
+     * A fragment enters the nucleoplasm. `drift` is how many bases of it are
+     * wrong — 0 is a clean primer, 2 is a patch that will rewrite what it
+     * lands on. Where it belongs is never passed in: the sequence decides.
+     */
+    const spawnFragment = (drift: number, at?: { nx: number; ny: number }) => {
+      const seq = seqRef.current;
+      if (seq.length < 12) return;
+      fragCount += 1;
+      const seed = hashSeed(0xf7a6, fragCount, seq.length);
+      const rng = mulberry(seed);
+      const len = 6 + Math.floor(rng() * 5);
+      const from = Math.floor(rng() * Math.max(1, seq.length - len));
+      const fseq = fragmentFrom(seq, from, len, drift, seed);
+      const site = bestAnnealSite(seq, fseq);
+      if (!site) return;
+      if (frags.length >= MAX_FRAGS) {
+        // at the cap the eldest visibly washes out rather than a silent no
+        const gone = frags.shift();
+        if (gone) {
+          try {
+            audio.playNote(30, 120);
+          } catch {
+            /* noop */
+          }
+        }
+      }
+      frags.push({
+        seq: fseq,
+        nx: at ? at.nx : 0.12 + rng() * 0.76,
+        ny: at ? at.ny : 0.12 + rng() * 0.76,
+        vx: (rng() - 0.5) * 0.05,
+        vy: (rng() - 0.5) * 0.05,
+        seed,
+        site: site.index,
+        score: site.score,
+        bonds: site.bonds,
+        bound: 0,
+        held: 0,
+        lit: 1,
+      });
+      try {
+        audio.playNote(46 + Math.round(site.score * 10), 140);
+        haptics.tap();
+      } catch {
+        /* noop */
+      }
+    };
+
+    /** A bound fragment is read into the template — repair, and a strand
+     *  that is neither the one that stood there nor the patch that landed. */
+    const spliceFragment = (k: number) => {
+      const f = frags[k];
+      if (!f) return;
+      const before = seqRef.current;
+      const after = spliceInto(before, f.seq, f.site);
+      frags.splice(k, 1);
+      let changed = 0;
+      for (let i = 0; i < after.length; i++) if (after[i] !== before[i]) changed += 1;
+      seqRef.current = after;
+      for (let i = 0; i < f.seq.length; i++) litRung[f.site + i] = 1;
+      try {
+        if (changed > 0) {
+          audio.bell();
+          haptics.bloom();
+        } else {
+          audio.chime();
+          haptics.detent();
+        }
+        audio.playNote(melodyOf(after)[f.site], 240);
+      } catch {
+        /* noop */
+      }
+      save();
+    };
+
+    /** The transcript of one stretch, played as the bubble opens. */
+    const soundTranscript = (lo: number, hi: number) => {
+      const seq = seqRef.current;
+      const midis = melodyOf(complement(seq));
+      const step = clamp(900 / Math.max(1, hi - lo), 30, 110);
+      for (let i = lo; i <= hi && i < seq.length; i++) {
+        window.setTimeout(() => {
+          try {
+            audio.playNote(midis[i], 120);
+          } catch {
+            /* noop */
+          }
+          litRung[i] = 1;
+        }, (i - lo) * step);
+      }
+    };
+
+    /**
+     * A double tap on the open nucleoplasm calls in the next real event of
+     * the cycle: a replication fork, a transcription bubble, a repair
+     * enzyme, then a clean primer. Deterministic — the same order, always.
+     */
+    const summonEvent = (x: number, y: number, intensity: number) => {
+      const seq = seqRef.current;
+      const n = seq.length;
+      const kind = eventIdx % 4;
+      eventIdx += 1;
+      if (n === 0) return;
+      if (kind === 0) {
+        // a replication fork opens and a polymerase starts down it
+        unzipTarget = clamp01(0.25 + intensity * 0.35);
+        holdingOpen = true;
+        if (polymerase < 0) polymerase = 0;
+        try {
+          audio.playNote(36, 260);
+          haptics.roll();
+        } catch {
+          /* noop */
+        }
+      } else if (kind === 1) {
+        // a transcription bubble: a stretch melts open and is read off as rna
+        const span = Math.max(4, Math.round(n * (0.16 + intensity * 0.16)));
+        const lo = Math.max(0, Math.min(n - span - 1, Math.floor((y / height) * n) - Math.floor(span / 2)));
+        autoBubble = { lo, hi: lo + span, open: 0, target: 0.6 + intensity * 0.35 };
+        soundTranscript(lo, lo + span);
+        try {
+          haptics.ripple(0.3 + intensity * 0.3);
+        } catch {
+          /* noop */
+        }
+      } else if (kind === 2) {
+        // a repair enzyme: a patch that is deliberately imperfect, so what
+        // it splices in genuinely changes the code
+        spawnFragment(1 + Math.round(intensity * 2), { nx: clamp01(x / width), ny: clamp01(y / height) });
+      } else {
+        // a clean primer — perfect complement, and it holds
+        spawnFragment(0, { nx: clamp01(x / width), ny: clamp01(y / height) });
+      }
+      stirTurbulence(0.05 + intensity * 0.08);
+    };
+
     // the raised-lens marker ScaleTravel reads before a step-back nudge
     const markLens = (raised: boolean) => {
       if (raised) wrap.dataset.lensRaised = "1";
@@ -436,8 +614,17 @@ export default function HelixLadder() {
             return;
           }
           if (tier === 3) {
-            // rewrite: cycle the nucleotide A→T→G→C (was double-tap)
-            const t = i >= 0 ? i : Math.floor(seqRef.current.length / 2);
+            // Off the ladder, the 3-rung calls in the next real event of the
+            // nucleus: a replication fork, a transcription bubble, a repair
+            // enzyme carrying a deliberately imperfect patch, then a clean
+            // primer. Struck ON a rung it keeps its shipped meaning — the
+            // ordered A→T→G→C rewrite, the nucleotide felt changing.
+            if (i < 0) {
+              summonEvent(x, y, e.intensity + deepen * 0.3);
+              return;
+            }
+            // rewrite: cycle the nucleotide A→T→G→C
+            const t = i;
             if (t < 0 || t >= seqRef.current.length) return;
             selIdx = t;
             const next = cycleBase(seqRef.current, t);
@@ -500,14 +687,23 @@ export default function HelixLadder() {
           }
           seqRef.current = next;
           save();
+          // ...and then the top rung's own act, the largest thing this room
+          // does: the whole strand REPLICATES. The fork runs its full length,
+          // the polymerase riding it base by base, and a complete daughter
+          // chromatid peels off and condenses beside the parent.
+          replicating = { u: 0, speed: 0.16 + e.intensity * 0.22 + deepen * 0.1, gain: e.intensity };
+          holdingOpen = true;
+          polymerase = 0;
+          chromatid = 0;
+          chromatidCoil = 0;
           stirTurbulence(0.15 + deepen * 0.2);
           try {
+            audio.bell();
             audio.playNote(31, 300);
             haptics.bloom();
           } catch {
             /* noop */
           }
-          playStrand(false);
         },
         hold: (e) => {
           lastInteractionAt = performance.now();
@@ -922,7 +1118,7 @@ export default function HelixLadder() {
 
       // the polymerase runs the complement while the ladder is held open
       if (holdingOpen && polymerase >= 0 && n > 0) {
-        if (now - lastPolyAt > 120) {
+        if (now - lastPolyAt > (replicating ? 60 : 120)) {
           lastPolyAt = now;
           if (polymerase < opened) {
             soundBase(polymerase, 130, true);
@@ -946,6 +1142,144 @@ export default function HelixLadder() {
         const target = holdingOpen && polymerase < opened ? 0.2 : 1;
         chromatidCoil += (target - chromatidCoil) * Math.min(1, dt * 1.4);
         if (chromatidFlash > 0) chromatidFlash = Math.max(0, chromatidFlash - dt * 1.6);
+      }
+
+      // ——— replication: the fork runs the whole length of the strand ———
+      if (replicating && n > 0) {
+        replicating.u = Math.min(1, replicating.u + dt * timeScale * replicating.speed);
+        unzipTarget = Math.max(unzipTarget, replicating.u);
+        holdingOpen = true;
+        if (polymerase < 0) polymerase = 0;
+        if (replicating.u >= 1) {
+          chromatid = n;
+          chromatidCoil = Math.max(chromatidCoil, 0.12);
+          chromatidFlash = 1;
+          replicating = null;
+          holdingOpen = false;
+          polymerase = -1;
+          unzipTarget = 0;
+          try {
+            audio.bell();
+            audio.chime();
+            haptics.bloom();
+          } catch {
+            /* noop */
+          }
+        }
+      }
+
+      // ——— the transcription bubble the room opens for itself ———
+      if (autoBubble) {
+        autoBubble.open += (autoBubble.target - autoBubble.open) * Math.min(1, dt * 2.2);
+        autoBubble.target *= Math.exp(-dt * 0.22); // it closes again, as they do
+        if (autoBubble.target < 0.02 && autoBubble.open < 0.02) autoBubble = null;
+      }
+
+      // ——— the physics BETWEEN strands ———
+      // A fragment seeks the site its own letters name, holds while its bond
+      // ledger can stand the heat, and melts off when it cannot. One that
+      // holds long enough is read into the template.
+      for (let k = frags.length - 1; k >= 0; k--) {
+        const f = frags[k];
+        f.lit = Math.max(0, f.lit - dt * 1.2);
+        if (n === 0 || f.site + f.seq.length > n) {
+          // the ladder moved under it: find the site again, or drift free
+          const again = n > 0 ? bestAnnealSite(seq, f.seq) : null;
+          if (!again) {
+            frags.splice(k, 1);
+            continue;
+          }
+          f.site = again.index;
+          f.score = again.score;
+          f.bonds = again.bonds;
+          f.bound = 0;
+          f.held = 0;
+        }
+        const holds = annealHolds(f.bonds, f.seq.length, temperature) && f.score > 0.55;
+        if (!holds) {
+          // denaturation: the duplex lets go, and it is heard letting go
+          if (f.bound > 0.5) {
+            f.lit = 1;
+            try {
+              audio.playNote(29, 140);
+              haptics.tap();
+            } catch {
+              /* noop */
+            }
+          }
+          f.bound = Math.max(0, f.bound - dt * 1.8);
+          f.held = 0;
+          if (!reduced) {
+            f.nx += f.vx * dt;
+            f.ny += f.vy * dt;
+            f.vx += Math.sin(localT * 0.7 + f.seed % 7) * 0.02 * dt;
+            f.vy += Math.cos(localT * 0.5 + f.seed % 5) * 0.02 * dt;
+            if (f.nx < 0.06 || f.nx > 0.94) f.vx = -f.vx;
+            if (f.ny < 0.06 || f.ny > 0.94) f.vy = -f.vy;
+            f.nx = clamp(f.nx, 0.05, 0.95);
+            f.ny = clamp(f.ny, 0.05, 0.95);
+          }
+          continue;
+        }
+        // its site, in field coordinates — the strand's own geometry
+        const mid = (f.site + f.seq.length / 2) / n;
+        const tx = clamp01((axisX() + helixW() * 3.1) / width);
+        const ty = clamp01((height / 2 - halfH() + mid * halfH() * 2) / height);
+        const near = Math.hypot(f.nx - tx, f.ny - ty);
+        if (!reduced) {
+          const seek = Math.min(1, dt * (1.1 + f.score * 1.6));
+          f.nx += (tx - f.nx) * seek;
+          f.ny += (ty - f.ny) * seek;
+        } else {
+          f.nx = tx;
+          f.ny = ty;
+        }
+        if (near < 0.06) {
+          const was = f.bound;
+          f.bound = Math.min(1, f.bound + dt * (0.7 + f.score));
+          if (was < 0.5 && f.bound >= 0.5) {
+            f.lit = 1;
+            for (let i = 0; i < f.seq.length; i++) litRung[f.site + i] = Math.max(litRung[f.site + i], 0.6);
+            try {
+              audio.playNote(52 + Math.round(f.score * 12), 150);
+              haptics.detent();
+            } catch {
+              /* noop */
+            }
+          }
+          if (f.bound >= 1) {
+            f.held += dt;
+            // a mismatched patch is read in sooner — that is what repair is
+            if (f.held > 1.6 + f.score * 2.4) {
+              spliceFragment(k);
+              continue;
+            }
+          }
+        }
+      }
+
+      // ——— aliveness: the nucleus works whether or not a hand is here ———
+      if (nextLifeAt === 0) nextLifeAt = now + 5200;
+      if (now >= nextLifeAt && !reduced && n > 0 && !replicating) {
+        const rng = mulberry(hashSeed(lifeCount, 0x11fe));
+        const roll = rng();
+        lifeCount += 1;
+        nextLifeAt = now + 9000 + rng() * 13000;
+        if (roll < 0.42 && frags.length < MAX_FRAGS) {
+          spawnFragment(roll < 0.16 ? 1 : 0);
+        } else if (roll < 0.8) {
+          // a gene is read: a bubble opens somewhere and the rna comes off
+          const span = Math.max(4, Math.round(n * 0.18));
+          const lo = Math.floor(rng() * Math.max(1, n - span - 1));
+          autoBubble = { lo, hi: lo + span, open: 0, target: 0.55 };
+          if (now - lastTranscriptAt > 4000) {
+            lastTranscriptAt = now;
+            soundTranscript(lo, lo + span);
+          }
+        } else if (frags.length > 0) {
+          // ...or the heat spikes and whatever was bound comes off
+          temperatureTarget = clamp01(temperatureTarget + 0.35);
+        }
       }
 
       // the world rewrites the code at its own rate — never at rest
@@ -1016,9 +1350,17 @@ export default function HelixLadder() {
         // a raised-cosine bubble held open between the two spanned pairs:
         // pinned (0) at each held rung, widest in the middle of the stretch
         const bubbleAt = (idx: number) => {
-          if (spanOpen <= 0.001 || spanLo < 0 || spanHi <= spanLo || idx < spanLo || idx > spanHi) return 0;
-          const u = (idx - spanLo) / (spanHi - spanLo);
-          return (0.5 - 0.5 * Math.cos(u * Math.PI * 2)) * spanOpen;
+          let v = 0;
+          if (!(spanOpen <= 0.001 || spanLo < 0 || spanHi <= spanLo || idx < spanLo || idx > spanHi)) {
+            const u = (idx - spanLo) / (spanHi - spanLo);
+            v = (0.5 - 0.5 * Math.cos(u * Math.PI * 2)) * spanOpen;
+          }
+          // ...and the bubble the room opens for itself, to read a gene
+          if (autoBubble && autoBubble.open > 0.001 && idx >= autoBubble.lo && idx <= autoBubble.hi) {
+            const u = (idx - autoBubble.lo) / Math.max(1, autoBubble.hi - autoBubble.lo);
+            v = Math.max(v, (0.5 - 0.5 * Math.cos(u * Math.PI * 2)) * autoBubble.open);
+          }
+          return v;
         };
 
         const pts1: number[] = [];
@@ -1128,6 +1470,47 @@ export default function HelixLadder() {
             ctx.lineTo(b.x, b.y);
             ctx.stroke();
           }
+        }
+
+        // the loose fragments: short ladders of their own, drifting until
+        // they find the letters that match them, then lying alongside the
+        // template with their pairing drawn rung by rung
+        for (const f of frags) {
+          const fx = f.nx * width - cx;
+          const fy = f.ny * height - cy;
+          const m = f.seq.length;
+          const rise = (halfH() * 2) / Math.max(1, n);
+          const half = (m * rise) / 2;
+          ctx.save();
+          ctx.translate(fx, fy);
+          // free, it tumbles; bound, it lies straight along the ladder
+          ctx.rotate((1 - f.bound) * (Math.sin(localT * 0.5 + (f.seed % 11)) * 0.7 + 0.4));
+          const a0 = (0.4 + f.bound * 0.4 + f.lit * 0.4) * (1 - leaving);
+          ctx.strokeStyle = `rgba(206, 222, 250, ${a0 * 0.8})`;
+          ctx.lineWidth = 1.1 + f.bound * 0.6;
+          ctx.beginPath();
+          ctx.moveTo(0, -half);
+          ctx.lineTo(0, half);
+          ctx.stroke();
+          for (let i = 0; i < m; i++) {
+            const y = -half + (i + 0.5) * rise;
+            const b = f.seq[i];
+            // the pairing itself: a matched base reaches for the template,
+            // a mismatched one sits stubbed and unpaired
+            const matched = f.site + i < n && complement(seq)[f.site + i] === b;
+            const reach = matched ? -helixW() * 0.55 * f.bound : -helixW() * 0.18 * f.bound;
+            ctx.strokeStyle = `rgba(${BASE_TINT[b]}, ${a0 * (matched ? 0.6 : 0.25)})`;
+            ctx.lineWidth = H_BONDS[b] === 3 ? 1.5 : 0.9;
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(reach, y);
+            ctx.stroke();
+            ctx.fillStyle = `rgba(${BASE_TINT[b]}, ${a0 * 0.85})`;
+            ctx.beginPath();
+            ctx.arc(0, y, 1.8 + f.lit * 1.2, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          ctx.restore();
         }
 
         // the polymerase: a small bright thing walking the open strand

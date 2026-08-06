@@ -36,7 +36,45 @@ export type PassageEdgeKey =
   | "earth->coast"
   | "coast->earth"
   | "space->manifold"
-  | "manifold->space";
+  | "manifold->space"
+  // ——— The small-scale spine, quanta → drop (both directions) ———
+  | "quanta->quarks"
+  | "quarks->quanta"
+  | "quarks->nucleons"
+  | "nucleons->quarks"
+  | "nucleons->atoms"
+  | "atoms->nucleons"
+  | "atoms->molecules"
+  | "molecules->atoms"
+  | "molecules->organics"
+  | "organics->molecules"
+  | "organics->dna"
+  | "dna->organics"
+  | "dna->organelles"
+  | "organelles->dna"
+  | "organelles->cells"
+  | "cells->organelles"
+  | "cells->tissue"
+  | "tissue->cells"
+  | "tissue->drop"
+  | "drop->tissue"
+  // ——— The living middle and the top of the axis (both directions) ———
+  | "tissue->flowers"
+  | "flowers->tissue"
+  | "drop->coast"
+  | "coast->drop"
+  | "drop->flowers"
+  | "flowers->drop"
+  | "flowers->birds"
+  | "birds->flowers"
+  | "birds->coast"
+  | "coast->birds"
+  | "olympus->earth"
+  | "earth->olympus"
+  | "space->beyond"
+  | "beyond->space"
+  | "beyond->manifold"
+  | "manifold->beyond";
 
 export type PassageFilm =
   | "planet"
@@ -51,7 +89,28 @@ export type PassageFilm =
   | "garden"
   | "chartland"
   | "strand"
-  | "fold";
+  | "fold"
+  // ——— The small-scale spine ———
+  | "quantum"
+  | "confine"
+  | "shell"
+  | "bond"
+  | "chain"
+  | "helix"
+  | "chromatin"
+  | "membrane"
+  | "sheet"
+  | "dissolve"
+  // ——— The living middle and the top of the axis ———
+  | "starchart"
+  | "lamina"
+  | "tension"
+  | "dew"
+  | "lift"
+  | "shorewing"
+  | "massif"
+  | "interfere"
+  | "curvature";
 
 export type PassageSpec = {
   durationMs: number;
@@ -166,6 +225,8 @@ export const PASSAGES: Partial<Record<PassageEdgeKey, PassageSpec>> = {
     out: false,
     film: "orbitfall",
   },
+  // The album's busiest hop, and the one that used to play the default
+  // planet: a chart of one world re-projected into a sky of many suns.
   "atlas->stars": {
     durationMs: 3500,
     reducedMs: 1200,
@@ -173,6 +234,7 @@ export const PASSAGES: Partial<Record<PassageEdgeKey, PassageSpec>> = {
     bellAt: 0.4,
     detentAt: 0.62,
     out: true,
+    film: "starchart",
   },
   "stars->atlas": {
     durationMs: 3500,
@@ -181,6 +243,7 @@ export const PASSAGES: Partial<Record<PassageEdgeKey, PassageSpec>> = {
     bellAt: 0.5,
     detentAt: 0.28,
     out: false,
+    film: "starchart",
   },
   "stars->galaxy": {
     durationMs: 3600,
@@ -326,6 +389,336 @@ export const PASSAGES: Partial<Record<PassageEdgeKey, PassageSpec>> = {
     detentAt: 0.3,
     out: false,
     film: "fold",
+  },
+  // ——— The small-scale spine, quanta → drop ———
+  // Quicker than the astronomical trunk: nothing here needs 3.5s to read.
+  "quanta->quarks": {
+    durationMs: 2200,
+    reducedMs: 850,
+    navigateAt: 0.5,
+    bellAt: 0.42,
+    detentAt: 0.6,
+    out: true,
+    film: "quantum",
+  },
+  "quarks->quanta": {
+    durationMs: 2200,
+    reducedMs: 850,
+    navigateAt: 0.45,
+    bellAt: 0.55,
+    detentAt: 0.3,
+    out: false,
+    film: "quantum",
+  },
+  "quarks->nucleons": {
+    durationMs: 2000,
+    reducedMs: 800,
+    navigateAt: 0.5,
+    bellAt: 0.44,
+    detentAt: 0.6,
+    out: true,
+    film: "confine",
+  },
+  "nucleons->quarks": {
+    durationMs: 2000,
+    reducedMs: 800,
+    navigateAt: 0.45,
+    bellAt: 0.52,
+    detentAt: 0.3,
+    out: false,
+    film: "confine",
+  },
+  "nucleons->atoms": {
+    durationMs: 2450,
+    reducedMs: 900,
+    navigateAt: 0.5,
+    bellAt: 0.4,
+    detentAt: 0.62,
+    out: true,
+    film: "shell",
+  },
+  "atoms->nucleons": {
+    durationMs: 2450,
+    reducedMs: 900,
+    navigateAt: 0.45,
+    bellAt: 0.55,
+    detentAt: 0.3,
+    out: false,
+    film: "shell",
+  },
+  "atoms->molecules": {
+    durationMs: 2150,
+    reducedMs: 850,
+    navigateAt: 0.5,
+    bellAt: 0.46,
+    detentAt: 0.62,
+    out: true,
+    film: "bond",
+  },
+  "molecules->atoms": {
+    durationMs: 2150,
+    reducedMs: 850,
+    navigateAt: 0.45,
+    bellAt: 0.5,
+    detentAt: 0.3,
+    out: false,
+    film: "bond",
+  },
+  "molecules->organics": {
+    durationMs: 2300,
+    reducedMs: 880,
+    navigateAt: 0.5,
+    bellAt: 0.42,
+    detentAt: 0.6,
+    out: true,
+    film: "chain",
+  },
+  "organics->molecules": {
+    durationMs: 2300,
+    reducedMs: 880,
+    navigateAt: 0.45,
+    bellAt: 0.55,
+    detentAt: 0.3,
+    out: false,
+    film: "chain",
+  },
+  "organics->dna": {
+    durationMs: 2500,
+    reducedMs: 900,
+    navigateAt: 0.5,
+    bellAt: 0.42,
+    detentAt: 0.62,
+    out: true,
+    film: "helix",
+  },
+  "dna->organics": {
+    durationMs: 2500,
+    reducedMs: 900,
+    navigateAt: 0.45,
+    bellAt: 0.55,
+    detentAt: 0.3,
+    out: false,
+    film: "helix",
+  },
+  "dna->organelles": {
+    durationMs: 2450,
+    reducedMs: 900,
+    navigateAt: 0.5,
+    bellAt: 0.44,
+    detentAt: 0.62,
+    out: true,
+    film: "chromatin",
+  },
+  "organelles->dna": {
+    durationMs: 2450,
+    reducedMs: 900,
+    navigateAt: 0.45,
+    bellAt: 0.55,
+    detentAt: 0.3,
+    out: false,
+    film: "chromatin",
+  },
+  "organelles->cells": {
+    durationMs: 2300,
+    reducedMs: 880,
+    navigateAt: 0.5,
+    bellAt: 0.42,
+    detentAt: 0.62,
+    out: true,
+    film: "membrane",
+  },
+  "cells->organelles": {
+    durationMs: 2300,
+    reducedMs: 880,
+    navigateAt: 0.45,
+    bellAt: 0.55,
+    detentAt: 0.3,
+    out: false,
+    film: "membrane",
+  },
+  "cells->tissue": {
+    durationMs: 2300,
+    reducedMs: 880,
+    navigateAt: 0.5,
+    bellAt: 0.44,
+    detentAt: 0.62,
+    out: true,
+    film: "sheet",
+  },
+  "tissue->cells": {
+    durationMs: 2300,
+    reducedMs: 880,
+    navigateAt: 0.45,
+    bellAt: 0.55,
+    detentAt: 0.3,
+    out: false,
+    film: "sheet",
+  },
+  "tissue->drop": {
+    durationMs: 2500,
+    reducedMs: 900,
+    navigateAt: 0.5,
+    bellAt: 0.44,
+    detentAt: 0.62,
+    out: true,
+    film: "dissolve",
+  },
+  "drop->tissue": {
+    durationMs: 2500,
+    reducedMs: 900,
+    navigateAt: 0.45,
+    bellAt: 0.55,
+    detentAt: 0.3,
+    out: false,
+    film: "dissolve",
+  },
+  // ——— The living middle: the doors a hand actually walks ———
+  // Slower than the small-scale spine (there is a place to arrive at, not
+  // just a structure to read) and quicker than the astronomical trunk.
+  "tissue->flowers": {
+    durationMs: 2700,
+    reducedMs: 950,
+    navigateAt: 0.5,
+    bellAt: 0.44,
+    detentAt: 0.62,
+    out: true,
+    film: "lamina",
+  },
+  "flowers->tissue": {
+    durationMs: 2700,
+    reducedMs: 950,
+    navigateAt: 0.45,
+    bellAt: 0.55,
+    detentAt: 0.3,
+    out: false,
+    film: "lamina",
+  },
+  "drop->coast": {
+    durationMs: 2900,
+    reducedMs: 1050,
+    navigateAt: 0.5,
+    bellAt: 0.46,
+    detentAt: 0.64,
+    out: true,
+    film: "tension",
+  },
+  "coast->drop": {
+    durationMs: 2900,
+    reducedMs: 1050,
+    navigateAt: 0.45,
+    bellAt: 0.52,
+    detentAt: 0.3,
+    out: false,
+    film: "tension",
+  },
+  "drop->flowers": {
+    durationMs: 2700,
+    reducedMs: 950,
+    navigateAt: 0.5,
+    bellAt: 0.42,
+    detentAt: 0.62,
+    out: true,
+    film: "dew",
+  },
+  "flowers->drop": {
+    durationMs: 2700,
+    reducedMs: 950,
+    navigateAt: 0.45,
+    bellAt: 0.56,
+    detentAt: 0.3,
+    out: false,
+    film: "dew",
+  },
+  "flowers->birds": {
+    durationMs: 2800,
+    reducedMs: 1000,
+    navigateAt: 0.5,
+    bellAt: 0.44,
+    detentAt: 0.62,
+    out: true,
+    film: "lift",
+  },
+  "birds->flowers": {
+    durationMs: 2800,
+    reducedMs: 1000,
+    navigateAt: 0.45,
+    bellAt: 0.54,
+    detentAt: 0.3,
+    out: false,
+    film: "lift",
+  },
+  "birds->coast": {
+    durationMs: 2800,
+    reducedMs: 1000,
+    navigateAt: 0.5,
+    bellAt: 0.46,
+    detentAt: 0.62,
+    out: true,
+    film: "shorewing",
+  },
+  "coast->birds": {
+    durationMs: 2800,
+    reducedMs: 1000,
+    navigateAt: 0.45,
+    bellAt: 0.52,
+    detentAt: 0.3,
+    out: false,
+    film: "shorewing",
+  },
+  "olympus->earth": {
+    durationMs: 3100,
+    reducedMs: 1100,
+    navigateAt: 0.52,
+    bellAt: 0.44,
+    detentAt: 0.62,
+    out: true,
+    film: "massif",
+  },
+  "earth->olympus": {
+    durationMs: 3100,
+    reducedMs: 1100,
+    navigateAt: 0.45,
+    bellAt: 0.54,
+    detentAt: 0.3,
+    out: false,
+    film: "massif",
+  },
+  // ——— The top of the axis ———
+  "space->beyond": {
+    durationMs: 3200,
+    reducedMs: 1150,
+    navigateAt: 0.55,
+    bellAt: 0.5,
+    detentAt: 0.66,
+    out: true,
+    film: "interfere",
+  },
+  "beyond->space": {
+    durationMs: 3200,
+    reducedMs: 1150,
+    navigateAt: 0.45,
+    bellAt: 0.48,
+    detentAt: 0.3,
+    out: false,
+    film: "interfere",
+  },
+  "beyond->manifold": {
+    durationMs: 3200,
+    reducedMs: 1150,
+    navigateAt: 0.55,
+    bellAt: 0.48,
+    detentAt: 0.64,
+    out: true,
+    film: "curvature",
+  },
+  "manifold->beyond": {
+    durationMs: 3200,
+    reducedMs: 1150,
+    navigateAt: 0.45,
+    bellAt: 0.52,
+    detentAt: 0.3,
+    out: false,
+    film: "curvature",
   },
 };
 

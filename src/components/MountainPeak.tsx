@@ -75,6 +75,7 @@ import {
   placeCairn,
   cairnStonesForHold,
   nearestCairnIndex,
+  screeCairnHits,
   mulberry32,
   mix32,
   type Scree,
@@ -557,6 +558,8 @@ export default function MountainPeak() {
     let raf = 0;
     let running = true;
     let screeSerial = 0;
+    /** open-slope tier-3 tap: the next weather in a fixed, seeded cycle */
+    let mtnEmptyCycleIdx = 0;
     let windAt = 0;
     /** the hand's tempo, entrained into the fog's own breath for a while */
     let rhythmBpm = 0;
@@ -861,20 +864,68 @@ export default function MountainPeak() {
             return;
           }
           if (tier === 5) {
+            // the room's biggest, rarest event: a full avalanche down the
+            // face — scree kicked from high on the slope in several bands,
+            // guaranteed to find any cairn standing in its path (the same
+            // scree/cairn collision the ordinary rockfall uses)
             callOut(x, y, Math.min(1, e.intensity + 0.35 + depth * 0.3));
-            scree = scree.concat(
-              kickScree(mix32(screeSerial++, 17), x / Math.max(1, width), y / Math.max(1, height), 0.4 + depth * 0.3),
-            );
+            const bands = 5 + Math.floor(depth * 3);
+            for (let b = 0; b < bands; b++) {
+              const bx = (b + 0.5) / bands;
+              scree = scree.concat(
+                kickScree(mix32(screeSerial++, 23 + b), bx, 0.08 + (b % 2) * 0.05, 0.7 + depth * 0.4),
+              );
+            }
             if (scree.length > 120) scree = scree.slice(-120);
-            fogLiftTarget = Math.min(0.35, fogLiftTarget + 0.04 + depth * 0.06);
-            haptics.ripple(0.35 + depth * 0.25);
+            fogLiftTarget = Math.min(0.4, fogLiftTarget + 0.08 + depth * 0.06);
+            try { audio.thud(); } catch { /* noop */ }
+            haptics.storm();
             return;
           }
           if (tier === 3) {
-            callOut(x, y, Math.min(1, e.intensity + 0.2 + depth * 0.25));
-            scree = scree.concat(
-              kickScree(mix32(screeSerial++, 19), x / Math.max(1, width), y / Math.max(1, height), 0.28 + depth * 0.25),
+            const ci = nearestCairnIndex(
+              cairns,
+              x / Math.max(1, width),
+              y / Math.max(1, height),
+              CAIRN_TOUCH_R,
+              width / Math.max(1, height),
             );
+            if (ci >= 0) {
+              // its own transformation: toppled, then rebuilt on the same
+              // spot a beat later — the same stones, a fresh stand
+              const c = cairns[ci];
+              topple(ci);
+              window.setTimeout(() => {
+                cairns = cairns.concat(placeCairn(mix32(c.seed, 99), c.x, c.y, c.stones));
+                setHasKept(cairns.length > 0);
+                writer.schedule();
+              }, 650);
+              return;
+            }
+            // open slope: the next weather in a fixed, deterministic cycle
+            const kinds = ["rockfall", "avalanche", "inversion"] as const;
+            const kind = kinds[mtnEmptyCycleIdx % kinds.length];
+            mtnEmptyCycleIdx += 1;
+            callOut(x, y, Math.min(1, e.intensity + 0.2 + depth * 0.25));
+            if (kind === "rockfall") {
+              scree = scree.concat(
+                kickScree(mix32(screeSerial++, 19), x / Math.max(1, width), y / Math.max(1, height), 0.28 + depth * 0.25),
+              );
+            } else if (kind === "avalanche") {
+              for (let b = 0; b < 3; b++) {
+                scree = scree.concat(
+                  kickScree(
+                    mix32(screeSerial++, 29 + b),
+                    x / Math.max(1, width) + (b - 1) * 0.05,
+                    y / Math.max(1, height) - 0.05,
+                    0.4 + depth * 0.2,
+                  ),
+                );
+              }
+            } else {
+              fogLiftTarget = Math.min(0.35, fogLiftTarget + 0.12 + depth * 0.1);
+              try { audio.playNote(30, 900); } catch { /* noop */ }
+            }
             if (scree.length > 120) scree = scree.slice(-120);
             haptics.tap();
             return;
@@ -1217,6 +1268,18 @@ export default function MountainPeak() {
       roomTime += dt;
       const t = roomTime;
       if (!asleep) scree = stepScree(scree, dt).slice(-Math.floor(120 * detail.particles));
+      // the physics between the mountain's two populations: falling scree
+      // strikes a standing cairn, and a struck cairn topples — consumed,
+      // producing its own fresh cascade, felt in the same frame it lands
+      if (!asleep && scree.length > 0 && cairns.length > 0) {
+        const hits = screeCairnHits(scree, cairns, width / Math.max(1, height));
+        if (hits.length > 0) {
+          const removedScree = new Set(hits.map((h) => h.screeIdx));
+          scree = scree.filter((_, i) => !removedScree.has(i));
+          const struck = Array.from(new Set(hits.map((h) => h.cairnIdx))).sort((a, b) => b - a);
+          for (const idx of struck) topple(idx);
+        }
+      }
 
       yaw += (yawTarget - yaw) * Math.min(1, wall * 3);
       pitch += (pitchTarget - pitch) * Math.min(1, wall * 4);

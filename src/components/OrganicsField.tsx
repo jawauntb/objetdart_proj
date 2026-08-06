@@ -54,6 +54,7 @@ import {
   GROUPS,
   MAX_CHAINS,
   TARGETS,
+  TETRAHEDRAL,
   backbonePoints,
   beatHz,
   chainFormula,
@@ -61,10 +62,17 @@ import {
   chainFromTarget,
   chainHz,
   canAccept,
+  dipoleAttraction,
   foldPhase,
   foldStage,
   hashSeed,
+  hbondStrength,
+  hydrolyseChain,
+  ligateChains,
   mulberry32,
+  nearestStaggered,
+  peptideSites,
+  polarity,
   recognize,
   relaxChain,
   settlePopulation,
@@ -220,6 +228,24 @@ export default function OrganicsField() {
 
     // span: the sustained interval — which chain the two still fingers hold
     let spanIdx = -1;
+
+    // the reagent cycle: a double tap on open solvent pours the next thing
+    // in, and the hand that keeps asking keeps being answered differently
+    let reagentIdx = 0;
+    let reagentFx: { x: number; y: number; t0: number; tint: string; ring: number } | null = null;
+    // the polymerisation cascade, run one join per beat so the eye can
+    // follow the chain getting longer rather than seeing it teleport
+    let cascade: { at: number; left: number; gain: number } | null = null;
+    // the room's own life: it condenses and it hydrolyses with no hand here
+    let eventCount = 0;
+    let nextEventAt = 0;
+    // hydrogen bonds standing between chains this frame — preallocated, the
+    // pairs are rewritten in place and never reallocated per frame
+    const HB_MAX = (MAX_CHAINS * (MAX_CHAINS - 1)) / 2;
+    const hbonds = Array.from({ length: HB_MAX }, () => ({
+      i: -1, j: -1, s: 0, age: 0, sa: 0, sb: 0,
+    }));
+    let hbondCount = 0;
 
     // vessel flip: face-down is night
     let night = 0;
@@ -514,6 +540,209 @@ export default function OrganicsField() {
       soundChain(p, 0.6);
     };
 
+    /** Reagent arriving from off-field: atoms of one element, poured in. */
+    const pourReagent = (el: OrganicElement, n: number, nx: number, ny: number, seedBase: number) => {
+      for (let i = 0; i < n; i++) {
+        if (loose.length >= MAX_LOOSE) {
+          // at the cap the eldest visibly gives way rather than a silent no
+          loose.shift();
+        }
+        const rng = mulberry32(hashSeed(seedBase, i, el.charCodeAt(0)));
+        const ang = rng() * Math.PI * 2;
+        const subs: GroupKey[] = [];
+        for (let k = 0; k < COVALENCE[el] - 1; k++) subs.push("H");
+        loose.push({
+          el,
+          nx: clamp01(nx + Math.cos(ang) * 0.05),
+          ny: clamp01(ny + Math.sin(ang) * 0.05),
+          vx: Math.cos(ang) * 0.09,
+          vy: Math.sin(ang) * 0.09,
+          seed: hashSeed(seedBase, i, 13),
+          subs,
+        });
+      }
+    };
+
+    /**
+     * Ligation: two chains condense into ONE that is neither of them, and a
+     * water walks off as a loose oxygen. Light, bell and bloom in the same
+     * frame — the merge is felt, never merely computed.
+     */
+    const ligateAt = (ai: number, bi: number, gain = 1): boolean => {
+      const list = placedRef.current;
+      const a = list[ai];
+      const b = list[bi];
+      if (!a || !b || a === b) return false;
+      const made = ligateChains(a.chain, b.chain);
+      if (!made) return false;
+      const p: Placed = {
+        nx: (a.nx + b.nx) / 2,
+        ny: (a.ny + b.ny) / 2,
+        seed: made.chain.seed,
+        target: recognize(chainFormula(made.chain))?.key ?? a.target,
+        chain: made.chain,
+        spin: a.spin,
+        spinVel: (a.spinVel + b.spinVel) * 0.5,
+        vx: (a.vx + b.vx) * 0.4,
+        vy: (a.vy + b.vy) * 0.4,
+        heldMs: 0,
+        lit: 1,
+      };
+      placedRef.current = settlePopulation(
+        [...list.filter((q) => q !== a && q !== b), p],
+        MAX_CHAINS,
+      );
+      // the water the bond paid for, leaving as it really does
+      pourReagent("O", 1, p.nx, p.ny, hashSeed(p.seed, 0x1120));
+      reagentFx = { x: p.nx * width, y: p.ny * height, t0: performance.now(), tint: "231, 172, 82", ring: 1 };
+      try {
+        audio.bell();
+        audio.playNote(44 + p.chain.atoms.length, 220);
+        haptics.bloom();
+      } catch {
+        /* noop */
+      }
+      soundChain(p, 0.5 + gain * 0.5);
+      save();
+      return true;
+    };
+
+    /** The nearest pair the chemistry will actually let join. */
+    const findLigatablePair = (): [number, number] | null => {
+      const list = placedRef.current;
+      let best: [number, number] | null = null;
+      let bestD = Infinity;
+      for (let i = 0; i < list.length; i++) {
+        for (let j = 0; j < list.length; j++) {
+          if (i === j) continue;
+          if (!ligateChains(list[i].chain, list[j].chain)) continue;
+          const d = Math.hypot(list[i].nx - list[j].nx, list[i].ny - list[j].ny);
+          if (d < bestD) {
+            bestD = d;
+            best = [i, j];
+          }
+        }
+      }
+      return best;
+    };
+
+    /** Water goes back in: one chain becomes two, at a real peptide bond. */
+    const hydrolyseAt = (idx: number): boolean => {
+      const list = placedRef.current;
+      const p = list[idx];
+      if (!p) return false;
+      const sites = peptideSites(p.chain);
+      if (sites.length === 0) return false;
+      const site = sites[hashSeed(p.seed, sites.length) % sites.length];
+      const halves = hydrolyseChain(p.chain, site);
+      if (!halves) return false;
+      const spread = 0.045;
+      const parts: Placed[] = halves.map((c, k) => ({
+        nx: clamp(p.nx + (k === 0 ? -spread : spread), 0.07, 0.93),
+        ny: clamp(p.ny + (k === 0 ? spread : -spread) * 0.5, 0.09, 0.91),
+        seed: c.seed,
+        target: recognize(chainFormula(c))?.key ?? p.target,
+        chain: c,
+        spin: p.spin,
+        spinVel: p.spinVel + (k === 0 ? -0.4 : 0.4),
+        vx: k === 0 ? -0.05 : 0.05,
+        vy: 0,
+        heldMs: 0,
+        lit: 1,
+      }));
+      placedRef.current = settlePopulation([...list.filter((q) => q !== p), ...parts], MAX_CHAINS);
+      reagentFx = { x: p.nx * width, y: p.ny * height, t0: performance.now(), tint: "150, 178, 226", ring: 0.7 };
+      try {
+        audio.thud();
+        audio.playNote(38, 200);
+        haptics.chop();
+      } catch {
+        /* noop */
+      }
+      save();
+      return true;
+    };
+
+    /**
+     * A double tap on a chain folds it into its conformation: every angle
+     * onto the tetrahedral one, every torsion into its nearest staggered
+     * well, and the coil tightens by however hard the hand meant it.
+     */
+    const foldInto = (p: Placed, intensity: number) => {
+      p.chain = {
+        ...p.chain,
+        angles: p.chain.angles.map((a) => TETRAHEDRAL + (a - TETRAHEDRAL) * 0.12),
+        torsions: p.chain.torsions.map((t) => nearestStaggered(t) + (t - nearestStaggered(t)) * 0.1),
+        fold: clamp01(p.chain.fold + 0.22 + intensity * 0.4),
+      };
+      p.heldMs = Math.max(p.heldMs, 900 + intensity * 2400);
+      p.lit = 1;
+      p.spinVel += (polarity(p.chain) - 0.5) * 0.6;
+      try {
+        audio.chime();
+        haptics.detent();
+      } catch {
+        /* noop */
+      }
+      soundChain(p, 0.4 + intensity * 0.5);
+      save();
+    };
+
+    /**
+     * The 3-rung on open solvent pours in the next reagent of the cycle: a
+     * chain condensing out of the solvent (what the rung has always done),
+     * then an amine pool, an oxidiser, a methyl donor, then water — which
+     * does what water does and takes a chain apart again.
+     */
+    const summonReagent = (x: number, y: number, intensity: number) => {
+      const nx = clamp01(x / width);
+      const ny = clamp01(y / height);
+      const kind = reagentIdx % 5;
+      reagentIdx += 1;
+      const seed = hashSeed(reagentIdx, Math.round(x), Math.round(y));
+      const n = 2 + Math.round(intensity * 3);
+      if (kind === 4) {
+        // the solvent condenses a whole chain, bonds and all
+        condenseAt(nx, ny, 2 + Math.round(intensity * 3));
+        reagentFx = { x, y, t0: performance.now(), tint: "222, 214, 196", ring: 1 };
+      } else if (kind === 0) {
+        pourReagent("N", n, nx, ny, seed);
+        reagentFx = { x, y, t0: performance.now(), tint: "150, 178, 226", ring: 1 };
+        try { audio.playNote(55, 180); } catch { /* noop */ }
+      } else if (kind === 1) {
+        pourReagent("O", n, nx, ny, seed);
+        warmthTarget = clamp01(warmthTarget + 0.14 + intensity * 0.2);
+        reagentFx = { x, y, t0: performance.now(), tint: "218, 132, 108", ring: 1 };
+        try { audio.playNote(61, 170); } catch { /* noop */ }
+      } else if (kind === 2) {
+        pourReagent("C", n + 1, nx, ny, seed);
+        reagentFx = { x, y, t0: performance.now(), tint: "222, 214, 196", ring: 1 };
+        try { audio.playNote(49, 200); } catch { /* noop */ }
+      } else {
+        // water: the solvent's own verb — it cuts the longest peptide it finds
+        let longest = -1;
+        let bestN = 0;
+        placedRef.current.forEach((p, i) => {
+          if (peptideSites(p.chain).length > 0 && p.chain.atoms.length > bestN) {
+            bestN = p.chain.atoms.length;
+            longest = i;
+          }
+        });
+        reagentFx = { x, y, t0: performance.now(), tint: "150, 190, 200", ring: 1 };
+        if (longest >= 0) hydrolyseAt(longest);
+        else {
+          vortex = Math.min(1, vortex + 0.5);
+          try { audio.playNote(34, 240); } catch { /* noop */ }
+        }
+      }
+      stirTurbulence(0.06 + intensity * 0.08);
+      try {
+        haptics.ripple(0.2 + intensity * 0.3);
+      } catch {
+        /* noop */
+      }
+    };
+
     // the raised-lens marker ScaleTravel reads before a step-back nudge
     const markLens = (raised: boolean) => {
       if (raised) wrap.dataset.lensRaised = "1";
@@ -628,10 +857,21 @@ export default function OrganicsField() {
             return;
           }
           if (tier === 3) {
-            // spawn: bond a loose atom, or condense a new chain
+            // The 3-rung is the room's *transformation* rung. On a chain: a
+            // loose atom in reach bonds to it (the shipped meaning), and with
+            // nothing to bond the chain folds into its own conformation —
+            // every angle onto the tetrahedral one, every torsion into its
+            // staggered well. On open solvent: the next reagent of the cycle
+            // pours in, so a hand that keeps asking keeps being answered
+            // differently — the condensation the rung always did is the first
+            // of those answers, never the only one.
             const li = nearestLoose(x, y, scaleOf() * 3.5);
             if (li >= 0 && tryBond(li, x, y)) return;
-            condenseAt(clamp01(x / width), clamp01(y / height), 2 + Math.round(deepen * 3));
+            if (pi >= 0) {
+              foldInto(placedRef.current[pi], e.intensity + deepen * 0.3);
+              return;
+            }
+            summonReagent(x, y, e.intensity + deepen * 0.3);
             return;
           }
           if (tier === 5) {
@@ -683,6 +923,15 @@ export default function OrganicsField() {
             }
           }
           if (pi < 0) condenseAt(clamp01(x / width), clamp01(y / height), 4);
+          // ...and the top rung's own act, the largest thing this room does:
+          // a POLYMERISATION CASCADE. Every pair of chains the chemistry
+          // allows condenses, one peptide bond per beat, running down the
+          // whole population — each join a chain that is neither parent.
+          cascade = {
+            at: performance.now(),
+            left: 2 + Math.round(deepen * 4) + Math.round(e.intensity * 2),
+            gain: e.intensity,
+          };
           stirTurbulence(0.14 + deepen * 0.12);
           try {
             audio.bell();
@@ -1128,7 +1377,9 @@ export default function OrganicsField() {
       const breath = reduced ? 0.5 : Math.sin(t * Math.PI * 2 * 0.14) * 0.5 + 0.5;
 
       // ——— physics ———
-      const list = placedRef.current;
+      // rebound after any merge, split or birth below — the population is
+      // replaced wholesale, never mutated in place
+      let list = placedRef.current;
       for (let i = 0; i < list.length; i++) {
         const p = list[i];
         if (i !== holdIdx) {
@@ -1150,6 +1401,130 @@ export default function OrganicsField() {
         }
         p.lit = Math.max(0, p.lit - dt * 1.4);
       }
+
+      // ——— the physics BETWEEN chains ———
+      // Polar chains reach for each other (dipole–dipole, 1/d³, and exactly
+      // nothing between two hydrocarbons); close enough, they hydrogen-bond,
+      // and a bond that holds long enough on compatible ends ligates into a
+      // third chain that is neither parent. n ≤ MAX_CHAINS, so the pair loop
+      // is a handful of comparisons, allocating nothing.
+      {
+        const S0 = scaleOf();
+        const prevCount = hbondCount;
+        let write = 0;
+        let merged = false;
+        for (let i = 0; i < list.length && !merged; i++) {
+          for (let j = i + 1; j < list.length; j++) {
+            const a = list[i];
+            const b = list[j];
+            const dxp = (b.nx - a.nx) * width;
+            const dyp = (b.ny - a.ny) * height;
+            const dpx = Math.hypot(dxp, dyp);
+            const dBond = dpx / Math.max(1, S0);
+            const f = dipoleAttraction(a.chain, b.chain, dBond);
+            if (f > 0 && !reduced) {
+              const ux = dxp / (dpx || 1);
+              const uy = dyp / (dpx || 1);
+              const pull = f * dt * 0.9 * (1 - warmth * 0.7);
+              a.vx += ux * pull;
+              a.vy += uy * pull;
+              b.vx -= ux * pull;
+              b.vy -= uy * pull;
+            }
+            if (dBond > 3.4 || write >= HB_MAX) continue;
+            const s = hbondStrength(a.chain, b.chain);
+            if (s < 0.18) continue;
+            const slot = hbonds[write];
+            // carry the bond's age forward if this same pair held last frame
+            let age = 0;
+            for (let k = 0; k < prevCount; k++) {
+              const old = hbonds[k];
+              if (old.sa === a.seed && old.sb === b.seed) {
+                age = old.age;
+                break;
+              }
+            }
+            const wasNew = age === 0;
+            slot.i = i;
+            slot.j = j;
+            slot.s = s;
+            slot.sa = a.seed;
+            slot.sb = b.seed;
+            slot.age = age + dt;
+            write += 1;
+            if (wasNew) {
+              a.lit = Math.min(1, a.lit + 0.25);
+              b.lit = Math.min(1, b.lit + 0.25);
+              try {
+                audio.playNote(64 + Math.round(s * 8), 90);
+                haptics.tap();
+              } catch {
+                /* noop */
+              }
+            }
+            // a bond that holds, on ends the chemistry allows, becomes a bond
+            if (slot.age > 1.6 && !cascade) {
+              if (ligateAt(i, j, s) || ligateAt(j, i, s)) {
+                // the list under us is a different list now
+                write = 0;
+                merged = true;
+                break;
+              }
+            }
+          }
+        }
+        hbondCount = write;
+      }
+
+      // ——— the cascade: one join per beat, down the whole population ———
+      if (cascade) {
+        if (now >= cascade.at) {
+          const pair = findLigatablePair();
+          if (pair && ligateAt(pair[0], pair[1], cascade.gain)) {
+            cascade.left -= 1;
+            cascade.at = now + 420;
+          } else {
+            // nothing left to join: the cascade spends itself as heat
+            warmthTarget = clamp01(warmthTarget + 0.1);
+            for (const p of placedRef.current) kick(p, 0.12 + cascade.gain * 0.2);
+            cascade = null;
+          }
+          if (cascade && cascade.left <= 0) cascade = null;
+        }
+      }
+
+      // ——— aliveness: the solvent works whether or not anyone is here ———
+      // Seeded and deterministic in the event index: the same visit sees the
+      // same chemistry happen at the same times.
+      if (nextEventAt === 0) nextEventAt = now + 6000;
+      if (now >= nextEventAt && !reduced && !condensing && holdIdx < 0) {
+        const rng = mulberry32(hashSeed(eventCount, 0x0c1a));
+        const roll = rng();
+        eventCount += 1;
+        nextEventAt = now + 8000 + rng() * 14000;
+        const pop = placedRef.current;
+        if (pop.length < 2 || roll < 0.42) {
+          // something condenses out of the solvent on its own
+          condenseAt(0.16 + rng() * 0.68, 0.18 + rng() * 0.64, 2);
+        } else if (roll < 0.72) {
+          // ...and something else comes apart
+          let idx = -1;
+          for (let i = 0; i < pop.length; i++) {
+            if (peptideSites(pop[i].chain).length > 0) {
+              idx = i;
+              break;
+            }
+          }
+          if (idx >= 0) hydrolyseAt(idx);
+          else kick(pop[Math.floor(roll * pop.length) % pop.length], 0.3);
+        } else {
+          // a reagent drifts in off-field with no hand behind it
+          pourReagent(roll < 0.85 ? "O" : "N", 2, rng(), rng(), hashSeed(eventCount, 0x7a));
+        }
+      }
+
+      list = placedRef.current;
+
       for (const a of loose) {
         if (reduced) break;
         a.nx += (a.vx + current * 0.04) * dt;
@@ -1229,6 +1604,41 @@ export default function OrganicsField() {
       }
 
       const S = scaleOf();
+
+      // the hydrogen bonds standing between chains — dotted, because that is
+      // how a chemist draws the bond that is not quite a bond, and beating a
+      // little faster the stronger it is
+      for (let k = 0; k < hbondCount; k++) {
+        const hb = hbonds[k];
+        const a = list[hb.i];
+        const b = list[hb.j];
+        if (!a || !b) continue;
+        const pulse = 0.5 + 0.5 * Math.sin(localT * (2 + hb.s * 5));
+        const ripe = clamp01(hb.age / 1.6);
+        ctx.save();
+        ctx.setLineDash([2.5, 4.5]);
+        ctx.lineDashOffset = -localT * 14;
+        ctx.strokeStyle = `rgba(206, 222, 250, ${(0.1 + hb.s * 0.28) * (0.5 + pulse * 0.5) + ripe * 0.2})`;
+        ctx.lineWidth = 0.8 + hb.s * 1.1 + ripe;
+        ctx.beginPath();
+        ctx.moveTo(a.nx * width, a.ny * height);
+        ctx.lineTo(b.nx * width, b.ny * height);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // a reagent arriving, or a bond being made or broken: one soft ring
+      if (reagentFx) {
+        const u = (now - reagentFx.t0) / 900;
+        if (u >= 1) reagentFx = null;
+        else {
+          ctx.strokeStyle = `rgba(${reagentFx.tint}, ${(1 - u) * 0.45 * reagentFx.ring})`;
+          ctx.lineWidth = 1.4 * (1 - u) + 0.4;
+          ctx.beginPath();
+          ctx.arc(reagentFx.x, reagentFx.y, S * (0.6 + u * 3.4), 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
 
       // loose atoms
       for (let i = 0; i < loose.length; i++) {

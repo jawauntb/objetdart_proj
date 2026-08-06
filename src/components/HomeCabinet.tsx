@@ -549,7 +549,39 @@ export default function HomeCabinet() {
         if (holdOnFurniture && e.phase !== "release") return;
 
         if (e.phase === "release") {
-          if (growingRef.current) commitEmbers();
+          if (growingRef.current) {
+            const grown = growingRef.current;
+            // Embers of the same current gathered close together coalesce:
+            // a light finished within reach of another does not stand
+            // beside it, it combines into it — weight (brightness) summed
+            // and capped, sitting at their midpoint — the way embers heaped
+            // in a real hearth burn as one hotter light rather than two
+            // separate sparks. A different current never merges: they are
+            // lit from a different room, not the same fire.
+            let mergedInto: Ember | null = null;
+            for (const other of emberRef.current) {
+              if (other === grown) continue;
+              if (other.current !== grown.current) continue;
+              const d = Math.hypot(other.x - grown.x, other.y - grown.y);
+              if (d < 0.6 + other.weight * 0.5) {
+                mergedInto = other;
+                break;
+              }
+            }
+            if (mergedInto) {
+              mergedInto.weight = Math.min(1, mergedInto.weight + grown.weight * 0.6);
+              mergedInto.x = (mergedInto.x + grown.x) / 2;
+              mergedInto.y = (mergedInto.y + grown.y) / 2;
+              emberRef.current = emberRef.current.filter((x) => x !== grown);
+              try {
+                getFieldAudio().bell();
+                haptics.bloom();
+              } catch {
+                /* noop */
+              }
+            }
+            commitEmbers();
+          }
           growingRef.current = null;
           ceremonyTarget = null;
           holdOnFurniture = false;

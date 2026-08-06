@@ -281,6 +281,66 @@ export function decayChain(x: Excitation, seed: number): Excitation[] {
   return out;
 }
 
+// ———————————————————————————————————— what two excitations do to each other
+
+/**
+ * Whether these two excitations are each other's undoing: the same field,
+ * opposite orientations, and not self-conjugate (a photon meeting a photon
+ * is not an annihilation — it is a brighter photon, which is interference,
+ * below). Symmetric by construction.
+ */
+export function annihilates(a: Excitation, b: Excitation): boolean {
+  if (a.id !== b.id) return false;
+  if (PARTICLES[a.id].selfConjugate) return false;
+  return a.anti !== b.anti;
+}
+
+/**
+ * What a particle meeting its antiparticle leaves behind: TWO PHOTONS, back
+ * to back, sharing the whole energy. Two, never one — a single photon cannot
+ * carry away the pair's momentum in its own rest frame, which is why the
+ * annihilation line is a coincidence pair and why a PET scanner works at all.
+ *
+ * Every conserved book closes: charge sums to zero because the pair's did,
+ * every lepton flavor number cancels against its conjugate, and the energy
+ * out equals the energy in. Returns [] for anything that is not a
+ * particle–antiparticle pair of the same field.
+ */
+export function annihilationProducts(a: Excitation, b: Excitation): Excitation[] {
+  if (!annihilates(a, b)) return [];
+  return [
+    { id: "photon", anti: false },
+    { id: "photon", anti: false },
+  ];
+}
+
+/** Each annihilation photon's share of the pair's total energy, MeV. */
+export function annihilationPhotonEnergy(totalMeV: number): number {
+  return Math.max(PHOTON_E_MIN, totalMeV / 2);
+}
+
+/**
+ * The interference term between two ripples of the same field: cos Δφ, the
+ * only thing that decides whether meeting amplitudes add or cancel. +1 in
+ * phase (the crest lands on the crest — a brighter ripple), −1 exactly out
+ * of phase (crest on trough — nothing left where two things were), and every
+ * value between. Antisymmetric in neither argument and symmetric in both,
+ * because interference does not care which wave arrived first.
+ */
+export function interference(phaseA: number, phaseB: number): number {
+  return Math.cos(phaseA - phaseB);
+}
+
+/**
+ * The amplitude of the superposition of two equal-amplitude ripples, 0..2 —
+ * |1 + e^{iΔφ}| = 2|cos(Δφ/2)|. Two in phase make twice the wave; two
+ * exactly out of phase make none at all, and the energy has to go somewhere
+ * else, which is what the room spends on the cancellation flash.
+ */
+export function superposedAmplitude(phaseA: number, phaseB: number): number {
+  return 2 * Math.abs(Math.cos((phaseA - phaseB) / 2));
+}
+
 // ——————————————————————————————————————————— the mass ladder (birth law)
 
 /** The least the vacuum will bother ringing for, MeV. */

@@ -224,6 +224,93 @@ for (const radius of [0.3, 1, 1.7, 2.4]) {
   assert.equal(kept[0].seed, many[4].seed, "and retiring the oldest");
 }
 
+// —— the secretory pathway: budding and fusion move membrane, never mint it
+// The bug this catches: a bud that shrinks its parent by a *different* area
+// than the vesicle carries. Over a pathway of a dozen hand-offs the plasm's
+// total would drift, and the room's one law — the budget is conserved —
+// would be false while every frame still looked right.
+{
+  const golgi = M.organelleFromSeed("golgi", 0x901);
+  const before = M.surfaceArea(golgi);
+  const bud = M.budVesicle(golgi, M.VESICLE_AREA);
+  assert.ok(bud, "a golgi with membrane to spare can bud");
+  assert.ok(
+    Math.abs(M.surfaceArea(bud.parent) + bud.area - before) < 1e-6,
+    "what left the parent is exactly what the vesicle carries",
+  );
+  const back = M.fuseVesicle(bud.parent, bud.area);
+  assert.ok(
+    Math.abs(M.surfaceArea(back) - before) < 1e-6,
+    "and fusing it back lands on the area it started from",
+  );
+  // ten hand-offs down a chain of organs, and the ledger still closes
+  let carried = 0;
+  let chain = [
+    M.organelleFromSeed("er", 1),
+    M.organelleFromSeed("golgi", 2),
+    M.organelleFromSeed("vacuole", 3),
+  ];
+  const total0 = M.totalArea(chain);
+  for (let step = 0; step < 10; step++) {
+    const from = step % chain.length;
+    const to = (step + 1) % chain.length;
+    const b = M.budVesicle(chain[from], 1.2);
+    if (!b) continue;
+    chain = chain.map((o, k) => (k === from ? b.parent : o));
+    carried = b.area;
+    chain = chain.map((o, k) => (k === to ? M.fuseVesicle(o, carried) : o));
+    carried = 0;
+  }
+  assert.ok(
+    Math.abs(M.totalArea(chain) - total0) < 1e-4,
+    "ten hand-offs later the plasm holds exactly what it held",
+  );
+  // a bud that would take the parent under the floor is refused outright
+  const tiny = M.withArea(M.organelleFromSeed("ribosome", 5), M.AREA_FLOOR + 0.1);
+  assert.equal(M.budVesicle(tiny, 4), null, "no organ is budded out of existence");
+  assert.equal(M.budVesicle(golgi, 0), null, "and a vesicle of nothing is not a vesicle");
+}
+
+// —— the pathway is ordered: nothing skips a station ————————————————
+{
+  assert.equal(M.advanceCargo("raw", "er"), "folded", "the er folds what arrives raw");
+  assert.equal(M.advanceCargo("folded", "golgi"), "mature", "the golgi matures what the er folded");
+  assert.equal(M.advanceCargo("raw", "golgi"), "raw", "but the golgi cannot mature raw cargo");
+  assert.equal(M.advanceCargo("folded", "er"), "folded", "nor does the er re-fold what it already folded");
+  assert.equal(M.advanceCargo("mature", "golgi"), "mature", "mature cargo is finished with the pathway");
+  assert.equal(M.cargoDestination("raw"), "er");
+  assert.equal(M.cargoDestination("folded"), "golgi");
+  assert.equal(M.cargoDestination("mature"), null, "mature cargo is bound for outside the cell");
+}
+
+// —— fission halves the membrane; it does not copy it ————————————————
+{
+  const mito = M.organelleFromSeed("mitochondrion", 0x1770);
+  const grown = M.withArea(mito, 18);
+  const pair = M.fissionOrganelle(grown);
+  assert.ok(pair, "a large mitochondrion can divide");
+  assert.ok(
+    Math.abs(M.surfaceArea(pair[0]) + M.surfaceArea(pair[1]) - M.surfaceArea(grown)) < 1e-4,
+    "the two daughters hold exactly what the parent held — division is not creation",
+  );
+  assert.notEqual(pair[0].seed, pair[1].seed, "and the daughters are two things, not one twice");
+  assert.equal(pair[0].kind, "mitochondrion", "a mitochondrion divides into mitochondria");
+  const small = M.withArea(mito, M.AREA_FLOOR * 1.5);
+  assert.equal(M.fissionOrganelle(small), null, "what cannot make two viable halves does not divide");
+}
+
+// —— the free plasm is what the budget has not spent ————————————————
+{
+  const list = [M.organelleFromSeed("er", 1), M.organelleFromSeed("golgi", 2)];
+  const free = M.freeMembrane(list);
+  assert.ok(
+    Math.abs(free + M.totalArea(list) - M.MEMBRANE_BUDGET) < 1e-6,
+    "free membrane plus folded membrane is the whole budget",
+  );
+  assert.ok(M.freeMembrane(list, 4) < free, "membrane in transit is not also free");
+  assert.equal(M.freeMembrane(list, 1e9), 0, "an over-full plasm has nothing free, never a debt");
+}
+
 console.log(
-  "membrane ok: the arclength integral matching 2πr exactly for the smooth case, folding strictly adding surface, the budget conserved across eleven moves including both clamps, withArea inverting the integral, and folded-surface↔partials a true round trip with a vesicle ringing as one sine",
+  "membrane ok: the arclength integral matching 2πr exactly for the smooth case, folding strictly adding surface, the budget conserved across eleven moves including both clamps, withArea inverting the integral, folded-surface↔partials a true round trip with a vesicle ringing as one sine, and ten bud/fuse hand-offs leaving the ledger exactly where it started",
 );

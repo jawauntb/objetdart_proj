@@ -369,3 +369,115 @@ export function capFoam(specks: FoamSpeck[], max: number): FoamSpeck[] {
   specks.length = Math.max(0, max);
   return specks;
 }
+
+// ——— breakers: the physics of a raised wave, and the profile it moves ———
+//
+// A double-tap on the surf raises a real breaker: a swash that runs up the
+// beach and drains back, asymmetric like a real one, that both erodes at
+// the point it broke and deposits further up its own run-up — so the sand
+// profile is a *consequence* of where breakers have struck, not a decal
+// painted under them. `sandProfile` is a small bank of per-column offsets
+// (ny units) shared between the shader (visible dune/dry line) and the JS
+// side (shell burial, zone reads); it persists for the session and relaxes
+// slowly, the way a berm actually rebuilds.
+
+/** Columns in the shared sand-profile bank. Small: this is a coarse drift, not a heightmap. */
+export const SAND_PROFILE_N = 24;
+/** Largest either direction the profile may move a column, in ny units. */
+export const SAND_PROFILE_MAX = 0.05;
+
+export function createSandProfile(): Float32Array {
+  return new Float32Array(SAND_PROFILE_N);
+}
+
+/** Bilinear-interpolated profile offset at shore position `nx` (0..1). */
+export function sandProfileAt(profile: Float32Array, nx: number): number {
+  const n = profile.length;
+  if (n === 0) return 0;
+  const f = clamp01(nx) * (n - 1);
+  const i0 = Math.floor(f);
+  const i1 = Math.min(n - 1, i0 + 1);
+  const t = f - i0;
+  return profile[i0] * (1 - t) + profile[i1] * t;
+}
+
+/**
+ * A breaker's run-up envelope, 0..1: a fast rise to the swash's landward
+ * limit, then a slower drain back to nothing — a real asymmetric swash, not
+ * a symmetric pulse. `power` (0..1) stretches both legs a little, the way a
+ * bigger wave takes longer to run out.
+ */
+export function breakerRunup(ageSec: number, power: number): number {
+  const rise = 0.30 + clamp01(power) * 0.16;
+  const fall = 0.68 + clamp01(power) * 0.30;
+  if (ageSec <= 0) return 0;
+  if (ageSec < rise) {
+    const t = ageSec / rise;
+    return t * t * (3 - 2 * t);
+  }
+  const f = clamp01((ageSec - rise) / fall);
+  return 1 - f * f * (3 - 2 * f);
+}
+
+/** Total lifetime (s) of a breaker's swash before it has fully drained. */
+export function breakerLifeSec(power: number): number {
+  return 0.30 + clamp01(power) * 0.16 + 0.68 + clamp01(power) * 0.30;
+}
+
+/** How far up the dry band (fraction of it) the swash reaches at its peak. */
+export function breakerReach(power: number): number {
+  return 0.16 + clamp01(power) * 0.55;
+}
+
+/**
+ * Net sand a breaker moves at shore-column `x` this instant: erosion in a
+ * trench right where it broke (the backwash pulls sand seaward, strongest
+ * early in the swash) and deposition further up the run (the water loses
+ * energy and drops what it carries, strongest at peak run-up) — real swash
+ * sediment transport, not a single symmetric bump under the strike point.
+ */
+export function breakerSandRate(
+  x: number,
+  bnx: number,
+  spread: number,
+  power: number,
+  runup: number,
+): number {
+  const s = Math.max(0.02, spread);
+  const dx = x - bnx;
+  const lateral = Math.exp(-(dx * dx) / (2 * s * s));
+  if (lateral < 0.01) return 0;
+  const erode = (1 - runup) * 0.62;
+  const deposit = runup * 0.95;
+  return lateral * clamp01(power) * (deposit - erode);
+}
+
+/**
+ * Integrate one breaker's effect on the profile for `dt` seconds, in place.
+ * `scale` converts the dimensionless rate into ny units per second; callers
+ * own the scale so weak taps and rogue sets can differ.
+ */
+export function applyBreakerToProfile(
+  profile: Float32Array,
+  bnx: number,
+  spread: number,
+  power: number,
+  runup: number,
+  dt: number,
+  scale = 0.02,
+): void {
+  const n = profile.length;
+  for (let i = 0; i < n; i++) {
+    const x = n <= 1 ? 0.5 : i / (n - 1);
+    const rate = breakerSandRate(x, bnx, spread, power, runup);
+    if (rate === 0) continue;
+    const next = profile[i] + rate * dt * scale;
+    profile[i] = next < -SAND_PROFILE_MAX ? -SAND_PROFILE_MAX : next > SAND_PROFILE_MAX ? SAND_PROFILE_MAX : next;
+  }
+}
+
+/** Relax the whole profile a little toward flat — a berm slowly rebuilding. */
+export function relaxSandProfile(profile: Float32Array, dt: number, tau = 90): void {
+  const k = Math.exp(-dt / Math.max(1, tau));
+  for (let i = 0; i < profile.length; i++) profile[i] *= k;
+}
