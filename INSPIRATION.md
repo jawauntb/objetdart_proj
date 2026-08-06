@@ -204,10 +204,12 @@ regression even if the code is clean.
 ## 6. Where this is going: the scale manifold
 
 The long arc is a single continuous **scale axis** the whole album mounts onto — think
-scaleofuniverse.com, but where every band is one of these living rooms: quanta → quarks →
-nucleons → atoms →
+scaleofuniverse.com, but where every band is one of these living rooms: the plank →
+quanta → quarks → nucleons → atoms →
 molecules → cells → flowers → drop → tide pool → coast → atlas → earth → stars →
 `/beyond` → the spacetime manifold. Zoom becomes navigation; the nav becomes vestigial.
+And the axis is a loop, not a line: the plank's floor opens onto the manifold —
+below the smallest length there is no smaller, only the whole.
 
 Design commitments already made:
 

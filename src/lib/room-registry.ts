@@ -1700,6 +1700,31 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     exempt: {},
   },
   {
+    key: "plank",
+    href: "/plank",
+    kind: "room",
+    source: "src/components/Plank.tsx",
+    page: "src/app/plank/page.tsx",
+    address: { band: "plank" },
+    frame: "yield",
+    chrome: "axis",
+    keeps: "objetdart:plank:v1",
+    creates: "a stitch of space",
+    interacts:
+      "adjacency and fusion, the way loop quantum gravity says space holds together: stitches " +
+      "inside reach thread into the spin network that IS the room's space (weaveLinks in " +
+      "lib/plank — symmetric, degree-capped, order-independent), and the foam visibly calms " +
+      "where the network is dense because geometry only holds still where something weaves it. " +
+      "Two loops drawn together fuse into one that is neither parent — position spin-weighted, " +
+      "seed folded from both histories, spin exactly conserved (j = j₁ + j₂, pinned in " +
+      "test-plank) — and past SPIN_COLLAPSE the fusion makes not a bigger loop but a pinprick " +
+      "hole that consumes its own threads and evaporates in τ ∝ j³, the Hawking scaling, " +
+      "giving its light back to the foam grain by grain. Unattended, the foam advects drifting " +
+      "stitches into fusions on its own seeded churn, and the vacuum borrows a virtual pair " +
+      "every few breaths and gives it back.",
+    exempt: {},
+  },
+  {
     key: "reef",
     href: "/reef",
     kind: "room",

@@ -74,7 +74,12 @@ export type PassageEdgeKey =
   | "space->beyond"
   | "beyond->space"
   | "beyond->manifold"
-  | "manifold->beyond";
+  | "manifold->beyond"
+  // ——— The bottom of the axis, and the wrap that closes it ———
+  | "quanta->plank"
+  | "plank->quanta"
+  | "plank->manifold"
+  | "manifold->plank";
 
 export type PassageFilm =
   | "planet"
@@ -110,7 +115,10 @@ export type PassageFilm =
   | "shorewing"
   | "massif"
   | "interfere"
-  | "curvature";
+  | "curvature"
+  // ——— The bottom of the axis, and the wrap that closes it ———
+  | "loom"
+  | "ouroboros";
 
 export type PassageSpec = {
   durationMs: number;
@@ -719,6 +727,51 @@ export const PASSAGES: Partial<Record<PassageEdgeKey, PassageSpec>> = {
     detentAt: 0.3,
     out: false,
     film: "curvature",
+  },
+  // ——— The bottom of the axis, and the wrap that closes it ———
+  // Below the quanta lies almost nothing at all: thirteen empty decades
+  // down to the smallest length, kept on the small-scale spine's budget —
+  // the fall is long only in what it passes, not in what it takes.
+  "quanta->plank": {
+    durationMs: 2200,
+    reducedMs: 850,
+    navigateAt: 0.45,
+    bellAt: 0.55,
+    detentAt: 0.3,
+    out: false,
+    film: "loom",
+  },
+  "plank->quanta": {
+    durationMs: 2200,
+    reducedMs: 850,
+    navigateAt: 0.5,
+    bellAt: 0.42,
+    detentAt: 0.6,
+    out: true,
+    film: "loom",
+  },
+  // The ouroboros: the plank's floor opens onto the manifold — press down
+  // past the smallest length and arrive at the whole. `out` follows the
+  // hand, not the metric mids: the glide leaves through the floor (sMin)
+  // going down, through the ceiling (sMax) coming back — playTravelPassage
+  // reads the departure wall from `out`, and the wall here is the floor.
+  "plank->manifold": {
+    durationMs: 2600,
+    reducedMs: 900,
+    navigateAt: 0.45,
+    bellAt: 0.52,
+    detentAt: 0.3,
+    out: false,
+    film: "ouroboros",
+  },
+  "manifold->plank": {
+    durationMs: 2600,
+    reducedMs: 900,
+    navigateAt: 0.5,
+    bellAt: 0.44,
+    detentAt: 0.62,
+    out: true,
+    film: "ouroboros",
   },
 };
 

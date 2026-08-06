@@ -874,7 +874,7 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
   {
     key: "quanta",
     title: "mass buys only a moment",
-    scale: "the quanta — the floor of the whole axis",
+    scale: "the quanta — the field floor, one band above the plank",
     href: "/quanta",
     essence: "the field floor: every particle a ripple, and one great law — lifetime and reach are inverse to mass. photons cross forever sounding e = hf; the heavy bosons die within a fingertip's breadth.",
     moves: [

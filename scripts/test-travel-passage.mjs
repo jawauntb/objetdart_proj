@@ -102,6 +102,34 @@ function band(id) {
   }
 }
 
+// The bottom of the axis: quanta ↔ plank walks the thirteen empty decades
+// on the small-scale spine's budget, and plank ↔ manifold is the ouroboros —
+// the wrap TRAVEL_OVERRIDES declares (the plank's floor opens onto the
+// manifold). The ouroboros pair deliberately inverts metric-mid ordering:
+// `out` follows the HAND, not the mids. plank->manifold presses DOWN through
+// the floor (out:false) even though the manifold's mid sits 60 decades above
+// the plank's, because playTravelPassage picks the departure wall from `out`
+// (sFrom = out ? sMax : sMin) and the register glide must leave through the
+// floor going down, the ceiling coming back. A "fix" that re-derives these
+// two from band mids breaks the glide's wall, and this block.
+{
+  const bottom = [
+    ["quanta", "plank", "loom", false],
+    ["plank", "quanta", "loom", true],
+    ["plank", "manifold", "ouroboros", false],
+    ["manifold", "plank", "ouroboros", true],
+  ];
+  for (const [from, to, film, out] of bottom) {
+    const key = `${from}->${to}`;
+    const spec = resolvePassageSpec(from, band(to));
+    assert.equal(spec.film, film, `${key} keeps film ${film}`);
+    assert.equal(spec.out, out, `${key} direction follows the hand`);
+    assert.equal(spec.durationMs, PASSAGES[key].durationMs, `${key} duration from registry`);
+    assert.notEqual(spec.durationMs, DEFAULT_PASSAGE.durationMs, `${key} is not the soft default`);
+    assert.ok(spec.durationMs <= 2600, `${key} stays on the small-scale spine's budget`);
+  }
+}
+
 // The living middle and the top of the axis — the edges a hand actually
 // walks between the two trunks, which resolved to the default planet until
 // they were filmed. Same bug guarded as above: a key drifts, the hop goes
@@ -290,6 +318,9 @@ const PURE_FILM_NAMES = [
   "massif",
   "interfere",
   "curvature",
+  // the bottom of the axis, and the ouroboros wrap
+  "loom",
+  "ouroboros",
 ];
 for (const name of PURE_FILM_NAMES) {
   assert.equal(

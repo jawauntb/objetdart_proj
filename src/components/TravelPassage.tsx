@@ -4294,6 +4294,425 @@ function makeCurvatureFilm(seed: number): Film {
   return { renderFrame };
 }
 
+// ——— The bottom of the axis, and the wrap that closes it ————————————
+//
+// Two films past the quanta's floor. "loom" walks the thirteen empty
+// decades between the vacuum's seethe and the smallest length — the
+// longest crossing on the axis measured in decades, the quickest measured
+// in what there is to see. "ouroboros" presses through that length's
+// floor and arrives at the whole: the wrap edge TRAVEL_OVERRIDES declares
+// (the plank's floor opens onto the manifold), the smallest turning
+// inside-out into the largest. Both are pure functions of u and a seed:
+// randomness drawn once at build time into fixed arrays, never inside
+// renderFrame, so the return leg's backward replay lands exactly.
+
+// Mother-of-pearl — the paper leaned toward three faint interference
+// tints, the way nacre carries color without owning any.
+const NACRE_ROSE: RGB = [226, 186, 198];
+const NACRE_JADE: RGB = [180, 216, 198];
+const NACRE_LILAC: RGB = [188, 194, 228];
+const NACRE_TINTS: RGB[] = [NACRE_ROSE, NACRE_JADE, NACRE_LILAC];
+
+/**
+ * quanta ↔ plank — "loom": the long fall out of the vacuum's floor.
+ *   u = 0   the foam at the smallest length — mother-of-pearl froth cells
+ *           threaded by a luminous weave, ring-stitches on thin thread
+ *   u ≈ 0.5 the weave has receded and the froth grained down to dark: the
+ *           desert of the thirteen empty decades, only faint decade-lines
+ *           drifting past to say the fall is still a fall
+ *   u = 1   the virtual-pair flicker blooms in — the same seethe the
+ *           quantum film opens on, so the quanta end hands off exactly
+ * u = 0 is the plank end; plank → quanta is the out:true leg.
+ */
+function makeLoomFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const vignette = makeVignette();
+  const stitchSprites = NACRE_TINTS.map((c) => makeGlowSprite(mix(c, PAPER, 0.45), c, 0.45));
+  // The froth: cells of the foam, each churning on its own phase.
+  const cells: Array<{ x: number; y: number; r: number; ph: number; freq: number; tint: number }> =
+    [];
+  for (let i = 0; i < 46; i++) {
+    cells.push({
+      x: rng(),
+      y: rng(),
+      r: 0.028 + rng() * 0.07,
+      ph: rng() * TAU,
+      freq: 2 + rng() * 3,
+      tint: i % 3,
+    });
+  }
+  // The weave: ring-stitches, each thread tied to its two nearest.
+  const stitches: Array<{ x: number; y: number; m: number; ph: number; tint: number }> = [];
+  for (let i = 0; i < 18; i++) {
+    stitches.push({
+      x: 0.08 + rng() * 0.84,
+      y: 0.08 + rng() * 0.84,
+      m: 0.5 + rng() * 0.8,
+      ph: rng() * TAU,
+      tint: (rng() * 3) | 0,
+    });
+  }
+  const links: Array<[number, number]> = [];
+  for (let i = 0; i < stitches.length; i++) {
+    const near: Array<{ j: number; d: number }> = [];
+    for (let j = 0; j < stitches.length; j++) {
+      if (j === i) continue;
+      near.push({ j, d: (stitches[j].x - stitches[i].x) ** 2 + (stitches[j].y - stitches[i].y) ** 2 });
+    }
+    near.sort((a, b) => a.d - b.d);
+    for (let n = 0; n < 2; n++) {
+      const a = Math.min(i, near[n].j);
+      const b = Math.max(i, near[n].j);
+      if (!links.some(([p, q]) => p === a && q === b)) links.push([a, b]);
+    }
+  }
+  // The grains the froth breaks into on the way down.
+  const grains: Array<{ x: number; y: number; ph: number }> = [];
+  for (let i = 0; i < 70; i++) grains.push({ x: rng(), y: rng(), ph: rng() * TAU });
+  // Thirteen decade-lines — one ruling per empty decade, each with its own
+  // seeded tick positions so no two rulings read alike.
+  const DECADES = 13;
+  const TICKS = 9;
+  const tickX = new Float64Array(DECADES * TICKS);
+  for (let k = 0; k < DECADES; k++) {
+    for (let t = 0; t < TICKS; t++) {
+      tickX[k * TICKS + t] = 0.06 + ((t + 0.2 + rng() * 0.6) / TICKS) * 0.88;
+    }
+  }
+  // The seethe at the quanta end — the quantum film's u = 0 idiom exactly,
+  // so the handoff is a match cut, not a cut.
+  const flicker: Array<{ x: number; y: number; ph: number; freq: number }> = [];
+  for (let i = 0; i < 120; i++) {
+    flicker.push({ x: rng(), y: rng(), ph: rng() * TAU, freq: 3 + rng() * 5 });
+  }
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+
+    // The froth, graining down into darkness as the fall begins.
+    const frothA = 1 - smoothstep(0.12, 0.52, u);
+    if (frothA > 0.01) {
+      const shrink = 1 - smoothstep(0.08, 0.5, u) * 0.6;
+      ctx.lineWidth = Math.max(1, m * 0.0022);
+      for (const c of cells) {
+        const churn = 0.85 + 0.15 * Math.sin(c.ph + u * c.freq * TAU);
+        const a = frothA * (0.2 + 0.18 * Math.sin(c.ph * 1.7 + u * c.freq * TAU * 0.5));
+        if (a <= 0.012) continue;
+        ctx.strokeStyle = rgba(mix(NACRE_TINTS[c.tint], PAPER, 0.35), a);
+        ctx.beginPath();
+        ctx.arc(c.x * w, c.y * h, Math.max(0.5, c.r * m * churn * shrink), 0, TAU);
+        ctx.stroke();
+      }
+    }
+
+    // The weave recedes first — thread before froth, stitch before thread.
+    const weaveA = 1 - smoothstep(0.05, 0.38, u);
+    if (weaveA > 0.01) {
+      ctx.strokeStyle = rgba(mix(PAPER, AURORA, 0.3), 0.3 * weaveA);
+      ctx.lineWidth = 1;
+      for (const [a, b] of links) {
+        ctx.beginPath();
+        ctx.moveTo(stitches[a].x * w, stitches[a].y * h);
+        ctx.lineTo(stitches[b].x * w, stitches[b].y * h);
+        ctx.stroke();
+      }
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (const st of stitches) {
+        const beat = 0.7 + 0.3 * Math.sin(st.ph + u * 4);
+        blitGlow(
+          ctx,
+          stitchSprites[st.tint],
+          st.x * w,
+          st.y * h,
+          (4 + st.m * 7) * (m / 600),
+          0.5 * weaveA * beat,
+        );
+      }
+      ctx.restore();
+    }
+
+    // The last grains of the foam, letting go one phase at a time.
+    const grainA = (1 - smoothstep(0.3, 0.62, u)) * smoothstep(0.06, 0.2, u);
+    if (grainA > 0.01) {
+      for (const g of grains) {
+        const a = grainA * Math.max(0, 0.5 + 0.5 * Math.sin(g.ph + u * 6) - 0.3);
+        if (a <= 0.012) continue;
+        ctx.fillStyle = rgba(mix(PAPER, NACRE_LILAC, 0.5), a * 0.5);
+        ctx.fillRect(g.x * w, g.y * h, 1, 1);
+      }
+    }
+
+    // The desert: nothing to cross but distance, ticked by the rulings of a
+    // log axis drifting past — one line per empty decade, passing downward
+    // as the fall rises.
+    const desertA = smoothstep(0.16, 0.4, u) * (1 - smoothstep(0.6, 0.88, u));
+    if (desertA > 0.01) {
+      ctx.lineWidth = 1;
+      for (let k = 0; k < DECADES; k++) {
+        const ly = (k / DECADES + u) % 1;
+        const fade = smoothstep(0, 0.12, ly) * (1 - smoothstep(0.88, 1, ly));
+        const a = desertA * fade * 0.22;
+        if (a <= 0.012) continue;
+        const y = ly * h;
+        ctx.strokeStyle = rgba(mix(PAPER, KEPT, 0.4), a);
+        ctx.beginPath();
+        ctx.moveTo(w * 0.04, y);
+        ctx.lineTo(w * 0.96, y);
+        for (let t = 0; t < TICKS; t++) {
+          const x = tickX[k * TICKS + t] * w;
+          ctx.moveTo(x, y - m * 0.006);
+          ctx.lineTo(x, y + m * 0.006);
+        }
+        ctx.stroke();
+      }
+    }
+
+    // The seethe blooms in at the quanta end — virtual pairs, none lasting.
+    const seetheA = smoothstep(0.58, 0.94, u);
+    if (seetheA > 0.01) {
+      for (const f of flicker) {
+        const v = 0.5 + 0.5 * Math.sin(f.ph + u * f.freq * TAU);
+        const a = Math.max(0, v - 0.35) * 1.4 * seetheA;
+        if (a <= 0.01) continue;
+        ctx.fillStyle = rgba(PAPER, a * 0.55);
+        ctx.fillRect(f.x * w, f.y * h, 1.1, 1.1);
+      }
+    }
+
+    vignette(ctx, w, h);
+  };
+
+  return { renderFrame };
+}
+
+/**
+ * plank ↔ manifold — "ouroboros": the crossing that closes the axis.
+ *   u = 0   the great fold seen from outside — the ruled mesh and its
+ *           well, the same door the fold and curvature films enter by
+ *   u ≈ 0.5 the weave has knit into a geodesic net: threads pulled
+ *           straight, stitches seated at the crossings of a dome that is
+ *           already curving away, growing past the frame
+ *   u = 1   the foam at its wildest — froth cells churning on the weave,
+ *           the loom film's plank end at full boil
+ * u = 0 is the manifold end. The hand presses DOWN through the plank's
+ * floor and arrives at the whole — the wrap TRAVEL_OVERRIDES declares —
+ * so plank → manifold is the out:false leg and reads the film u = 1 → 0:
+ * the smallest turning inside-out into the largest.
+ */
+function makeOuroborosFilm(seed: number): Film {
+  const rng = seededRandom(seed);
+  const vignette = makeVignette();
+  const stitchSprites = NACRE_TINTS.map((c) => makeGlowSprite(mix(c, PAPER, 0.45), c, 0.45));
+  const massSprite = makeGlowSprite(mix(PAPER, CANDLE, 0.3), CANDLE, 0.4);
+  // The froth at full boil — wilder churn than the loom's.
+  const cells: Array<{ x: number; y: number; r: number; ph: number; freq: number; tint: number }> =
+    [];
+  for (let i = 0; i < 40; i++) {
+    cells.push({
+      x: rng(),
+      y: rng(),
+      r: 0.03 + rng() * 0.08,
+      ph: rng() * TAU,
+      freq: 4 + rng() * 4,
+      tint: i % 3,
+    });
+  }
+  // The stitches: a froth seat and a net seat each — scattered in the foam,
+  // waiting on the dome's unit disc for the knit to call them home.
+  const stitches: Array<{
+    x: number;
+    y: number;
+    dx: number;
+    dy: number;
+    m: number;
+    ph: number;
+    tint: number;
+  }> = [];
+  for (let i = 0; i < 20; i++) {
+    const ang = rng() * TAU;
+    const rr = Math.sqrt(rng()) * 0.88;
+    stitches.push({
+      x: 0.08 + rng() * 0.84,
+      y: 0.08 + rng() * 0.84,
+      dx: Math.cos(ang) * rr,
+      dy: Math.sin(ang) * rr,
+      m: 0.5 + rng() * 0.8,
+      ph: rng() * TAU,
+      tint: (rng() * 3) | 0,
+    });
+  }
+  const links: Array<{ a: number; b: number; sag: number }> = [];
+  for (let i = 0; i < stitches.length; i++) {
+    const near: Array<{ j: number; d: number }> = [];
+    for (let j = 0; j < stitches.length; j++) {
+      if (j === i) continue;
+      near.push({ j, d: (stitches[j].x - stitches[i].x) ** 2 + (stitches[j].y - stitches[i].y) ** 2 });
+    }
+    near.sort((a, b) => a.d - b.d);
+    for (let n = 0; n < 2; n++) {
+      const a = Math.min(i, near[n].j);
+      const b = Math.max(i, near[n].j);
+      if (!links.some((l) => l.a === a && l.b === b)) links.push({ a, b, sag: (rng() - 0.5) * 2 });
+    }
+  }
+  // Reused every frame — stitch screen positions, written in place.
+  const pos = stitches.map(() => ({ x: 0, y: 0 }));
+
+  const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
+    const m = Math.min(w, h);
+    const cx = w / 2;
+    const cy = h / 2;
+    ctx.fillStyle = rgba(NIGHT, 1);
+    ctx.fillRect(0, 0, w, h);
+
+    // The knit: 0 in the foam, 1 once every thread has been pulled true.
+    const knit = easeInOut(1 - smoothstep(0.38, 0.8, u));
+    // The dome grows as the crossing descends — curvature flattening the
+    // way a horizon does, by getting bigger than the window watching it.
+    const R = m * lerp(0.34, 2.6, easeInOut(1 - smoothstep(0.05, 0.6, u)));
+    // Weave-green at the plank end, fold-candle at the manifold end.
+    const lineCol = mix(mix(PAPER, AURORA, 0.35), mix(PAPER, CANDLE, 0.2), smoothstep(0.2, 0.7, 1 - u));
+
+    // The froth, at its wildest just before it agrees to geometry.
+    const frothA = smoothstep(0.55, 0.9, u);
+    if (frothA > 0.01) {
+      ctx.lineWidth = Math.max(1, m * 0.0024);
+      for (const c of cells) {
+        const churn = 0.7 + 0.3 * Math.sin(c.ph + u * c.freq * TAU);
+        const a = frothA * (0.22 + 0.2 * Math.sin(c.ph * 1.9 + u * c.freq * TAU * 0.6));
+        if (a <= 0.012) continue;
+        ctx.strokeStyle = rgba(mix(NACRE_TINTS[c.tint], PAPER, 0.3), a);
+        ctx.beginPath();
+        ctx.arc(c.x * w, c.y * h, Math.max(0.5, c.r * m * churn), 0, TAU);
+        ctx.stroke();
+      }
+    }
+
+    // Stitches walk from the foam to their crossings on the net.
+    for (let i = 0; i < stitches.length; i++) {
+      const st = stitches[i];
+      pos[i].x = lerp(st.x * w, cx + st.dx * R, knit);
+      pos[i].y = lerp(st.y * h, cy + st.dy * R, knit);
+    }
+
+    // Threads tighten: sagging in the foam, pulled straight by the knit.
+    const threadA = smoothstep(0.2, 0.45, u);
+    if (threadA > 0.01) {
+      ctx.strokeStyle = rgba(lineCol, 0.32 * threadA);
+      ctx.lineWidth = 1;
+      const sagAmp = (1 - knit) * m * 0.09;
+      for (const l of links) {
+        const ax = pos[l.a].x;
+        const ay = pos[l.a].y;
+        const bx = pos[l.b].x;
+        const by = pos[l.b].y;
+        const len = Math.hypot(bx - ax, by - ay) || 1;
+        // Control point set so the thread's belly hangs sag-deep off the
+        // chord's normal — and the knit pulls that belly to zero.
+        const off = (l.sag * sagAmp * 2) / len;
+        const cpx = (ax + bx) / 2 - (by - ay) * off;
+        const cpy = (ay + by) / 2 + (bx - ax) * off;
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.quadraticCurveTo(cpx, cpy, bx, by);
+        ctx.stroke();
+      }
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (let i = 0; i < stitches.length; i++) {
+        const st = stitches[i];
+        const beat = 0.7 + 0.3 * Math.sin(st.ph + u * 5);
+        blitGlow(
+          ctx,
+          stitchSprites[st.tint],
+          pos[i].x,
+          pos[i].y,
+          (4 + st.m * 7) * (m / 600),
+          0.5 * threadA * beat,
+        );
+      }
+      ctx.restore();
+    }
+
+    // The geodesic net: a dome seen from outside, latitude and longitude
+    // arcs, curving away as it grows past the frame.
+    const domeA = smoothstep(0.08, 0.3, u) * (1 - smoothstep(0.5, 0.82, u));
+    if (domeA > 0.01) {
+      ctx.lineWidth = 1;
+      for (let li = -3; li <= 3; li++) {
+        const phi = (li / 8) * Math.PI;
+        const rx = Math.cos(phi) * R;
+        if (rx <= 1) continue;
+        ctx.strokeStyle = rgba(lineCol, domeA * (0.14 + 0.1 * Math.cos(phi)));
+        ctx.beginPath();
+        ctx.ellipse(cx, cy - Math.sin(phi) * R * 0.28, rx, Math.max(0.5, rx * 0.28), 0, 0, TAU);
+        ctx.stroke();
+      }
+      for (let lo = 0; lo < 7; lo++) {
+        const theta = (lo / 7) * Math.PI;
+        const rx = Math.abs(Math.cos(theta)) * R;
+        ctx.strokeStyle = rgba(lineCol, domeA * 0.16);
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, Math.max(0.5, rx), R, 0, 0, TAU);
+        ctx.stroke();
+      }
+    }
+
+    // The fold's own door: the ruled mesh and its well, exactly as the
+    // fold and curvature films draw it, so the manifold is entered the
+    // same way from every side.
+    const meshA = 1 - smoothstep(0.18, 0.5, u);
+    if (meshA > 0.02) {
+      const gap = Math.max(22, m / 18);
+      const well = 0.12 * (1 - smoothstep(0.05, 0.5, u));
+      ctx.strokeStyle = rgba(mix(PAPER, CANDLE, 0.2), 0.22 * meshA);
+      ctx.lineWidth = 1;
+      for (let x = 0; x <= w + gap; x += gap) {
+        ctx.beginPath();
+        for (let y = 0; y <= h; y += 8) {
+          const nx = (x / w - 0.5) * 2;
+          const ny = (y / h - 0.5) * 2;
+          const pull = well / (0.15 + nx * nx + ny * ny);
+          const px = x - nx * pull * w * 0.35;
+          const py = y - ny * pull * h * 0.35;
+          if (y === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      }
+      for (let y = 0; y <= h + gap; y += gap) {
+        ctx.beginPath();
+        for (let x = 0; x <= w; x += 8) {
+          const nx = (x / w - 0.5) * 2;
+          const ny = (y / h - 0.5) * 2;
+          const pull = well / (0.15 + nx * nx + ny * ny);
+          const px = x - nx * pull * w * 0.35;
+          const py = y - ny * pull * h * 0.35;
+          if (x === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      }
+    }
+
+    // And the mass the whole crossing was falling toward all along.
+    const massA = 1 - smoothstep(0.1, 0.35, u);
+    if (massA > 0.01) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      blitGlow(ctx, massSprite, cx, cy, m * 0.12, 0.3 * massA);
+      ctx.restore();
+    }
+
+    vignette(ctx, w, h);
+  };
+
+  return { renderFrame };
+}
+
 function makeFilmFor(spec: PassageSpec): Film | null {
   if (spec.film === "arm") return makeArmFilm();
   if (spec.film === "node") return makeNodeFilm();
@@ -4326,6 +4745,8 @@ function makeFilmFor(spec: PassageSpec): Film | null {
   if (spec.film === "massif") return makeMassifFilm(PASSAGE_SEED ^ 0x0a5511);
   if (spec.film === "interfere") return makeInterfereFilm(PASSAGE_SEED ^ 0x01e7fe);
   if (spec.film === "curvature") return makeCurvatureFilm(PASSAGE_SEED ^ 0x0c4a7e);
+  if (spec.film === "loom") return makeLoomFilm(PASSAGE_SEED ^ 0x0100e3);
+  if (spec.film === "ouroboros") return makeOuroborosFilm(PASSAGE_SEED ^ 0x00b005);
   return makeFilm(PASSAGE_SEED);
 }
 
@@ -4370,6 +4791,9 @@ export const __pureFilmFactories: Record<string, (seed: number) => Film> = {
   massif: makeMassifFilm,
   interfere: makeInterfereFilm,
   curvature: makeCurvatureFilm,
+  // the bottom of the axis, and the wrap that closes it
+  loom: makeLoomFilm,
+  ouroboros: makeOuroborosFilm,
 };
 
 // ——— The host and player ————————————————————————————————————————————

@@ -13,6 +13,7 @@
  */
 
 export type ScaleBandId =
+  | "plank"
   | "quanta"
   | "quarks"
   | "nucleons"
@@ -56,6 +57,12 @@ export type ScaleBand = {
  * and audio registers are stable when the rooms arrive (plan W6).
  */
 export const SCALE_BANDS: ScaleBand[] = [
+  // The floor. The Planck length sits at 10^-34.8 m, and between it and the
+  // quantum fields physics offers no structure at all — thirteen decades of
+  // desert, held honestly as one wide address. The last floorboard of the
+  // world, and the only band whose lower wall is a door (see stepScale: the
+  // axis closes into a loop at the ends the cosmology declares).
+  { id: "plank", label: "the plank", route: "/plank", sMin: -35, sMax: -22 },
   { id: "quanta", label: "the quanta", route: "/quanta", sMin: -22, sMax: -19 },
   { id: "quarks", label: "quarks", route: "/quarks", sMin: -19, sMax: -15 },
   { id: "nucleons", label: "nucleons", route: "/nucleons", sMin: -15, sMax: -14 },
@@ -202,8 +209,8 @@ export function liveInput(input: ScaleInput, msSinceLastEvent: number): ScaleInp
 
 export type ScaleEvent =
   | { type: "detent"; at: number; band: ScaleBandId }
-  | { type: "edge"; toward: ScaleBandId; progress: number }
-  | { type: "crossing"; from: ScaleBandId; to: ScaleBandId; s: number };
+  | { type: "edge"; toward: ScaleBandId; progress: number; dir: TravelDir }
+  | { type: "crossing"; from: ScaleBandId; to: ScaleBandId; s: number; dir: TravelDir };
 
 export type ScaleStep = {
   state: ScaleState;
@@ -245,8 +252,15 @@ export function stepScale(state: ScaleState, input: ScaleInput, dtMs: number): S
   let next = s + v * dt;
   let edgePressure = 0;
 
-  const hitLower = next < band.sMin && i > 0;
-  const hitUpper = next >= band.sMax && i < SCALE_BANDS.length - 1;
+  // The axis's ends are walls too — but only doors when the cosmology says
+  // so. The floor of the bottom band opens onto whatever its travel graph
+  // declares below it (the plank's floor wraps to the manifold: below the
+  // smallest length there is no smaller, only the whole), and the ceiling of
+  // the top band mirrors it. An end with no declared neighbor stays what it
+  // always was: the world ending quietly, a clamp with no detent.
+  const hitLower = next < band.sMin && (i > 0 || travelNeighbor(band.id, -1) !== null);
+  const hitUpper =
+    next >= band.sMax && (i < SCALE_BANDS.length - 1 || travelNeighbor(band.id, 1) !== null);
 
   if (!hitLower && !hitUpper) {
     // LOCAL regime — free movement, intent releases. This is the common
@@ -262,7 +276,9 @@ export function stepScale(state: ScaleState, input: ScaleInput, dtMs: number): S
   const events: ScaleEvent[] = [];
   const dir: -1 | 1 = hitLower ? -1 : 1;
   const wall = hitLower ? band.sMin : band.sMax;
-  const neighbor = SCALE_BANDS[i + dir];
+  // Interior walls face their metric neighbor; the axis's ends face the band
+  // the travel graph glues there (guaranteed non-null by hitLower/hitUpper).
+  const neighbor = SCALE_BANDS[i + dir] ?? bandById(travelNeighbor(band.id, dir) as ScaleBandId);
 
   if (pressing !== dir) {
     // First contact with this wall in this push: a felt stop.
@@ -275,7 +291,7 @@ export function stepScale(state: ScaleState, input: ScaleInput, dtMs: number): S
   if (pushing) {
     intentMs += dtMs;
     edgePressure = Math.min(1, intentMs / TRAVEL_INTENT_MS);
-    events.push({ type: "edge", toward: neighbor.id, progress: edgePressure });
+    events.push({ type: "edge", toward: neighbor.id, progress: edgePressure, dir });
   } else {
     intentMs = Math.max(0, intentMs - dtMs * INTENT_DECAY);
     edgePressure = Math.min(1, intentMs / TRAVEL_INTENT_MS);
@@ -285,7 +301,7 @@ export function stepScale(state: ScaleState, input: ScaleInput, dtMs: number): S
     // Break through: land just inside the neighbor so re-crossing needs a
     // fresh, deliberate push.
     const landing = dir === 1 ? wall + EDGE_PEEK : wall - EDGE_PEEK;
-    events.push({ type: "crossing", from: band.id, to: neighbor.id, s: landing });
+    events.push({ type: "crossing", from: band.id, to: neighbor.id, s: landing, dir });
     return {
       state: { s: clampScale(landing), v: v * 0.35, intentMs: 0, pressing: 0 },
       events,
@@ -416,6 +432,13 @@ type TravelOverride = {
  * agreement is the tell that those bands were placed right.
  */
 const TRAVEL_OVERRIDES: Partial<Record<ScaleBandId, TravelOverride>> = {
+  // The ouroboros. Below the smallest length there is no smaller — pressing
+  // through the plank's floor arrives at the fold, entering from its widest
+  // edge; and pinching out past the fold's ceiling falls back into the foam.
+  // The axis is a loop, glued where measure gives out at both ends. Doors
+  // swing both ways as always; firstBuiltAlong's seen-guard keeps the cycle
+  // from hanging any walk.
+  plank: { down: "manifold" },
   drop: { up: "coast" }, // a drop returns to the shore (beach before deep)
   coast: { down: "drop", extraUp: ["earth"] }, // the shore gives the drop back;
   // and opens laterally onto the land it borders
@@ -450,7 +473,8 @@ const TRAVEL_OVERRIDES: Partial<Record<ScaleBandId, TravelOverride>> = {
   // into the galaxy, then the web, by metric adjacency
   space: { up: "manifold" }, // the web opens onto the fold; /beyond stays a
   // branch off the trunk, reachable by fork doors and received back by memory
-  manifold: { down: "space" },
+  manifold: { down: "space", up: "plank" }, // and the fold's ceiling is the
+  // other half of the ouroboros: the largest view wraps to the floor
 };
 
 /** Canonical travel neighbor: mereological override, else metric adjacency. */
