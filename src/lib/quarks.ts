@@ -354,6 +354,17 @@ export type VirtualPair = {
   sep: number;
 };
 
+// vacuumPairsAt(slot, fieldSeed) is a pure function of its inputs — same
+// slot, same sparks, forever — and the room re-reads a ~64-slot lookback
+// window every rAF tick (the dilation-safe render, not the reduced-motion
+// one) so the same slot is recomputed hundreds of times over its life on
+// screen. Memoize per fieldSeed, bounded so a long-running tab can't grow
+// it without limit; callers only ever read the returned pairs (never
+// mutate or retain them past the call), so handing back the cached array
+// is safe.
+const VACUUM_PAIRS_CACHE_CAP = 512;
+const vacuumPairsCache = new Map<number, Map<number, VirtualPair[]>>();
+
 /**
  * Deterministic seeded scheduling of the vacuum's seethe: which virtual
  * pairs, if any, spark into being in time slot `slot`. Same slot, same
@@ -365,6 +376,15 @@ export type VirtualPair = {
  * but it is never busy either.
  */
 export function vacuumPairsAt(slot: number, fieldSeed: number): VirtualPair[] {
+  let bySlot = vacuumPairsCache.get(fieldSeed);
+  if (!bySlot) {
+    bySlot = new Map();
+    vacuumPairsCache.set(fieldSeed, bySlot);
+  } else {
+    const cached = bySlot.get(slot);
+    if (cached) return cached;
+  }
+
   const rng = mulberry32(mix32(hashSeed(slot, fieldSeed, 0xacc) || 1));
   const r = rng();
   const count = r < 0.12 ? 0 : r < 0.3 ? 1 : r < 0.54 ? 2 : r < 0.76 ? 3 : r < 0.92 ? 4 : 5;
@@ -378,6 +398,13 @@ export function vacuumPairsAt(slot: number, fieldSeed: number): VirtualPair[] {
       angle: rng() * Math.PI * 2,
       sep: 0.008 + rng() * 0.018,
     });
+  }
+
+  bySlot.set(slot, pairs);
+  if (bySlot.size > VACUUM_PAIRS_CACHE_CAP) {
+    // Map preserves insertion order — the first key is the oldest slot.
+    const oldest = bySlot.keys().next().value;
+    if (oldest !== undefined) bySlot.delete(oldest);
   }
   return pairs;
 }

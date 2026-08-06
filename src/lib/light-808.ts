@@ -57,6 +57,10 @@ export function getLight808(): Light808Engine {
   const voices = new Map<string, Voice>();
   let subMode = false;
   let macroCutoff = 0;
+  // cached 2 ** (macroCutoff * 1.3): macroCutoff only changes in setMacro,
+  // so this avoids re-deriving the same pow for every active voice on every
+  // tilt update (setMacro) and every noteOn/glide call.
+  let macroCutoffMult = 1;
 
   const ensure = (): AudioContext | null => {
     const c = audio.getAudioContext();
@@ -119,7 +123,7 @@ export function getLight808(): Light808Engine {
     Math.max(220, Math.min(9000, freq * (3 + brightness * 9)));
 
   const applyMacroCutoff = (c: AudioContext, voice: Voice) => {
-    const target = Math.max(180, Math.min(11000, voice.baseCutoff * 2 ** (macroCutoff * 1.3)));
+    const target = Math.max(180, Math.min(11000, voice.baseCutoff * macroCutoffMult));
     voice.filter.frequency.cancelScheduledValues(c.currentTime);
     voice.filter.frequency.setTargetAtTime(target, c.currentTime, 0.06);
   };
@@ -330,6 +334,7 @@ export function getLight808(): Light808Engine {
     }
     if (macro.cutoff != null) {
       macroCutoff = Math.max(-1, Math.min(1, macro.cutoff));
+      macroCutoffMult = 2 ** (macroCutoff * 1.3);
       if (c) voices.forEach((voice) => applyMacroCutoff(c, voice));
     }
   };

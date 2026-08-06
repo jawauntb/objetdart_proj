@@ -104,17 +104,18 @@ export function membranePoint(o: Organelle, theta: number, breath = 0): { x: num
  * quietly read as folded inward. Simpson on the analytic integrand is exact
  * for the constant case, which is the case we can check by hand.
  */
+function membraneArcSpeed(o: Organelle, theta: number): number {
+  const r = o.radius * (1 + o.amplitude * Math.sin(o.folds * theta));
+  const dr = o.radius * o.amplitude * o.folds * Math.cos(o.folds * theta);
+  return Math.hypot(r, dr);
+}
+
 export function surfaceArea(o: Organelle, samples = 360): number {
   const n = Math.max(2, samples % 2 === 0 ? samples : samples + 1);
   const h = TAU / n;
-  const ds = (theta: number) => {
-    const r = o.radius * (1 + o.amplitude * Math.sin(o.folds * theta));
-    const dr = o.radius * o.amplitude * o.folds * Math.cos(o.folds * theta);
-    return Math.hypot(r, dr);
-  };
-  let sum = ds(0) + ds(TAU);
+  let sum = membraneArcSpeed(o, 0) + membraneArcSpeed(o, TAU);
   for (let i = 1; i < n; i++) {
-    sum += ds(i * h) * (i % 2 === 1 ? 4 : 2);
+    sum += membraneArcSpeed(o, i * h) * (i % 2 === 1 ? 4 : 2);
   }
   return (h / 3) * sum;
 }
