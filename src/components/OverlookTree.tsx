@@ -1562,9 +1562,8 @@ export default function OverlookTree() {
       ctx.restore();
       // three-finger twist's season: a slow tint over the whole tree's light
       if (season !== 0 || seasonTarget !== 0) {
-        const seasonTint = ["rgba(90,150,110,0.05)", "rgba(231,172,82,0.06)", "rgba(200,110,60,0.06)", "rgba(120,150,200,0.06)"];
         const si = Math.floor(((season % 4) + 4) % 4);
-        ctx.fillStyle = seasonTint[si];
+        ctx.fillStyle = SEASON_TINTS[si];
         ctx.fillRect(0, 0, width, height);
       }
 
@@ -1575,13 +1574,12 @@ export default function OverlookTree() {
         nodeScreen[i].y = p.y;
         nodeScreen[i].r = nodeRadius(i);
       }
-      const idxOf = new Map(NODES.map((n, i) => [n.id, i]));
 
       // ————— threads: the trunk luminous, branches finer, glow = graph —————
       const feltA = 1 - lens * 0.75;
       for (const e of TREE.edges) {
-        const ai = idxOf.get(e.a);
-        const bi = idxOf.get(e.b);
+        const ai = NODE_INDEX.get(e.a);
+        const bi = NODE_INDEX.get(e.b);
         if (ai === undefined || bi === undefined) continue;
         const A = nodeScreen[ai];
         const B = nodeScreen[bi];
@@ -1592,7 +1590,7 @@ export default function OverlookTree() {
         const midX = (A.x + B.x) / 2;
         const midY = (A.y + B.y) / 2;
         const bow = e.trunk ? 0 : (A.x === B.x ? 12 : (B.x - A.x) * 0.24) * (1 - lens);
-        const passes = e.trunk && !bareOnly ? [0, 1] : [1];
+        const passes = e.trunk && !bareOnly ? EDGE_PASS_BOTH : EDGE_PASS_SOLID;
         for (const pass of passes) {
           if (pass === 0) {
             ctx.strokeStyle = `rgba(231, 172, 82, ${(0.07 + glow * 0.1) * feltA})`;
@@ -1617,9 +1615,7 @@ export default function OverlookTree() {
       // ————— the ruler (lens up): log₁₀ spans, the notation surface —————
       if (lens > 0.6) {
         const la = (lens - 0.6) / 0.4;
-        const trunkIdx = TREE.trunk
-          .map((id) => idxOf.get(id))
-          .filter((i): i is number => i !== undefined);
+        const trunkIdx = TRUNK_IDX;
         if (trunkIdx.length > 1) {
           const rx = nodeScreen[trunkIdx[0]].x - clamp(width * 0.16, 46, 90);
           ctx.strokeStyle = `rgba(206, 222, 250, ${0.3 * la})`;
@@ -1627,22 +1623,15 @@ export default function OverlookTree() {
           ctx.font = "300 10px ui-monospace, 'SF Mono', Menlo, monospace";
           ctx.textAlign = "right";
           // one tick per band boundary along the whole axis, true to log₁₀
-          const sLo = Math.min(...NODES.map((n) => n.s));
-          const sHi = Math.max(...NODES.map((n) => n.s));
           const top = nodeScreen[trunkIdx[trunkIdx.length - 1]].y;
           const bot = nodeScreen[trunkIdx[0]].y;
           ctx.beginPath();
           ctx.moveTo(rx, bot);
           ctx.lineTo(rx, top);
           ctx.stroke();
-          const marks = new Set<number>();
-          for (const n of NODES) {
-            marks.add(n.sMin);
-            marks.add(n.sMax);
-          }
           ctx.fillStyle = `rgba(206, 222, 250, ${0.5 * la})`;
-          for (const s of marks) {
-            const yy = mix(bot, top, (s - sLo) / (sHi - sLo));
+          for (const s of RULER_MARKS) {
+            const yy = mix(bot, top, (s - S_LO) / (S_HI - S_LO));
             ctx.beginPath();
             ctx.moveTo(rx - 4, yy);
             ctx.lineTo(rx + 4, yy);
@@ -1671,7 +1660,7 @@ export default function OverlookTree() {
           ctx.arc(x, y, r * 0.94, 0, Math.PI * 2);
           ctx.clip();
           ctx.translate(x + parX * PAR_VIGNETTE, y + parY * PAR_VIGNETTE);
-          drawVignette(ctx, n.id, r, vigT + n.order * 3.7, breath, detail.particles);
+          drawVignette(ctx, n.id, r, vigT + n.order * 3.7, breath, detail.particles, fogGradient);
           ctx.restore();
 
           // a swelling answer to touch: warm rim rising with the chime

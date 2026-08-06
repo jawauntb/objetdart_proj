@@ -1491,10 +1491,11 @@ export default function Tourbillon() {
       const storm = relaxTurbulence(now);
       void storm; // read each frame so this room's own decay owns the shared axis
 
-      stations.forEach((s) => {
+      for (let i = 0; i < stations.length; i++) {
+        const s = stations[i];
         const smooth = s === center || s === barrel;
         s.group.rotation.y = s.omega * (smooth ? simSec : tEff);
-      });
+      }
       windKick.v *= 0.9;
       drum.rotation.y = barrel.omega * simSec + windKick.v;
       ratchet.rotation.y = barrel.omega * simSec + windKick.v * 1.6;
@@ -1532,7 +1533,7 @@ export default function Tourbillon() {
       secGroup.rotation.y = -((tEff % 60) / 60) * Math.PI * 2;
 
       // button press-in animation
-      pressables.forEach((p) => { p.mesh.position.copy(p.rest); });
+      for (let i = 0; i < pressables.length; i++) pressables[i].mesh.position.copy(pressables[i].rest);
       if (pressAnim.rec) {
         const el = now - pressAnim.t0;
         if (el < 170) {
