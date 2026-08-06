@@ -335,6 +335,11 @@ function clampTo(v: number, a: number, b: number): number {
   return v < a ? a : v > b ? b : v;
 }
 
+/** Commit the in-progress turtle path to `stems` if it has any length. */
+function flushStemPath(stems: StemPath[], path: Pt[], pathW: number): void {
+  if (path.length > 1) stems.push({ pts: path, width: pathW });
+}
+
 /**
  * A plant's vigour, 0..1: what is left of it after the light its neighbours
  * take and the root space they share. This is the number a garden competes
@@ -358,8 +363,17 @@ export function phenologyOpenness(sp: Species, phenophase: number): number {
   return 1 - Math.pow(v, sp.phenology.closeEase) * sp.phenology.closeDepth;
 }
 
+// Expansion depends only on the LSystem's own fields, which never mutate
+// once a species is decoded (`lsystem` is never reassigned in this module).
+// Callers on a render loop (flowerGeometry) pass the same `sp.lsystem`
+// object every frame as phenophase alone advances, so this cache turns a
+// repeated string-rewrite into a one-time cost per species.
+const lsystemExpansionCache = new WeakMap<LSystem, string>();
+
 /** Expand the species' L-system to its final token string. */
 export function expandLSystem(ls: LSystem): string {
+  const cached = lsystemExpansionCache.get(ls);
+  if (cached !== undefined) return cached;
   let s = ls.axiom;
   for (let i = 0; i < ls.depth; i++) {
     let next = "";
@@ -367,6 +381,7 @@ export function expandLSystem(ls: LSystem): string {
     s = next;
     if (s.length > 8192) break; // never let a hostile rule set run away
   }
+  lsystemExpansionCache.set(ls, s);
   return s;
 }
 
@@ -411,10 +426,6 @@ export function flowerGeometry(sp: Species, phenophase: number): FlowerGeometry 
   let leafCount = 0;
   let branchFlip = 1;
 
-  const flushPath = () => {
-    if (path.length > 1) stems.push({ pts: path, width: pathW });
-  };
-
   for (const ch of tokens) {
     if (ch === "F") {
       st.ang += (rng() - 0.5) * 0.14; // grain
@@ -429,14 +440,14 @@ export function flowerGeometry(sp: Species, phenophase: number): FlowerGeometry 
       st.ang += dir * angleRad * (0.8 + rng() * 0.4);
     } else if (ch === "[") {
       stack.push({ ...st });
-      flushPath();
+      flushStemPath(stems, path, pathW);
       branchFlip = -branchFlip;
       st.w *= 0.66;
       st.scale *= 0.72;
       path = [{ x: st.x, y: st.y }];
       pathW = st.w;
     } else if (ch === "]") {
-      flushPath();
+      flushStemPath(stems, path, pathW);
       st = stack.pop() ?? st;
       path = [{ x: st.x, y: st.y }];
       pathW = st.w;
@@ -453,7 +464,7 @@ export function flowerGeometry(sp: Species, phenophase: number): FlowerGeometry 
     }
     // S and anything else are silent.
   }
-  flushPath();
+  flushStemPath(stems, path, pathW);
   if (heads.length === 0) heads.push({ x: st.x, y: st.y, angle: st.ang, scale: 1 });
   // Primary crown first: the one still carrying the main axis' scale.
   heads.sort((a, b) => b.scale - a.scale);

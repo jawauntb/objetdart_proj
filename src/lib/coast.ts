@@ -88,23 +88,17 @@ export function zoneAt(nx: number, ny: number, tide: number): CoastZone {
 
 /** 0..1 position inside the zone the point falls in (0 = its seaward edge). */
 export function zoneDepth(nx: number, ny: number, tide: number): number {
-  const zone = zoneAt(nx, ny, tide);
-  switch (zone) {
-    case "sky":
-      return clamp01(ny / Math.max(1e-4, tide - SEA_BAND));
-    case "sea":
-      return clamp01((ny - (tide - SEA_BAND)) / SEA_BAND);
-    case "wet":
-      return clamp01((ny - tide) / WET_BAND);
-    case "dry": {
-      const top = tide + WET_BAND;
-      return clamp01((ny - top) / Math.max(1e-4, duneLine(nx, tide) - top));
-    }
-    default: {
-      const top = duneLine(nx, tide);
-      return clamp01((ny - top) / Math.max(1e-4, 1 - top));
-    }
+  // Same branch structure as zoneAt, but the dune line — two sin() calls —
+  // is computed at most once instead of once in zoneAt and again here.
+  if (ny < tide - SEA_BAND) return clamp01(ny / Math.max(1e-4, tide - SEA_BAND));
+  if (ny < tide) return clamp01((ny - (tide - SEA_BAND)) / SEA_BAND);
+  if (ny < tide + WET_BAND) return clamp01((ny - tide) / WET_BAND);
+  const dune = duneLine(nx, tide);
+  if (ny < dune) {
+    const top = tide + WET_BAND;
+    return clamp01((ny - top) / Math.max(1e-4, dune - top));
   }
+  return clamp01((ny - dune) / Math.max(1e-4, 1 - dune));
 }
 
 /**
