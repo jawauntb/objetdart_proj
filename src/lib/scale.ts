@@ -213,6 +213,15 @@ export type ScaleStep = {
 };
 
 /**
+ * Shared, frozen, never-mutated empty events array — returned by stepScale's
+ * common no-wall-contact regime (the vast majority of rAF ticks) so that
+ * branch allocates nothing. Safe only because every stepScale caller merely
+ * iterates `events` read-only; never push onto a returned events array.
+ */
+const NO_SCALE_EVENTS: ScaleEvent[] = [];
+Object.freeze(NO_SCALE_EVENTS);
+
+/**
  * Advance the scale position by dtMs under the given input.
  *
  * Two regimes:
@@ -225,7 +234,6 @@ export type ScaleStep = {
  */
 export function stepScale(state: ScaleState, input: ScaleInput, dtMs: number): ScaleStep {
   const dt = Math.max(0, Math.min(100, dtMs)) / 1000;
-  const events: ScaleEvent[] = [];
   let { s, v, intentMs, pressing } = state;
 
   const target = input.active ? Math.max(-V_MAX, Math.min(V_MAX, input.zoomVel)) : 0;
@@ -241,13 +249,17 @@ export function stepScale(state: ScaleState, input: ScaleInput, dtMs: number): S
   const hitUpper = next >= band.sMax && i < SCALE_BANDS.length - 1;
 
   if (!hitLower && !hitUpper) {
-    // LOCAL regime — free movement, intent releases.
+    // LOCAL regime — free movement, intent releases. This is the common
+    // case on most animation frames (no wall contact), so it never emits
+    // events: reuse the shared empty array instead of allocating a fresh
+    // one every rAF tick. Callers only ever iterate `events` read-only.
     s = clampScale(next);
     if (intentMs > 0) intentMs = Math.max(0, intentMs - dtMs * INTENT_DECAY);
     pressing = 0;
-    return { state: { s, v, intentMs, pressing }, events, edgePressure };
+    return { state: { s, v, intentMs, pressing }, events: NO_SCALE_EVENTS, edgePressure };
   }
 
+  const events: ScaleEvent[] = [];
   const dir: -1 | 1 = hitLower ? -1 : 1;
   const wall = hitLower ? band.sMin : band.sMax;
   const neighbor = SCALE_BANDS[i + dir];

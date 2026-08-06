@@ -724,23 +724,36 @@ export function relaxTransients(
 ): PoolState {
   const CURL_RELAX = 1 / 1.5; // 1.5s time constant
   const BEND_RELAX = 1 / 0.8; // 0.8s time constant
+  // Called every rAF tick from the room's draw loop — most frames touch no
+  // creature at all (nothing retreating, curl already at its target, kelp
+  // already at rest), so skip the clone (and the outer array/state clone)
+  // whenever a creature's value would come out numerically unchanged. Every
+  // branch below computes the exact same result the unconditional version
+  // did; this only decides whether that result needs a new object.
+  let changed = false;
   const creatures = state.creatures.map((c) => {
-    let out = { ...c };
-    if (c.kind === "snail" && c.retreated && nowMs >= c.retreatedUntilMs) {
-      out.retreated = false;
-      out.retreatedUntilMs = 0;
+    if (c.kind === "snail") {
+      if (c.retreated && nowMs >= c.retreatedUntilMs) {
+        changed = true;
+        return { ...c, retreated: false, retreatedUntilMs: 0 };
+      }
+      return c;
     }
     if (c.kind === "anemone") {
+      if (c.curl === targetCurl) return c;
       const decay = Math.exp(-CURL_RELAX * dtSec);
-      out.curl = targetCurl + (c.curl - targetCurl) * decay;
+      changed = true;
+      return { ...c, curl: targetCurl + (c.curl - targetCurl) * decay };
     }
     if (c.kind === "kelp") {
+      if (c.bendPhase === 0) return c;
       const decay = Math.exp(-BEND_RELAX * dtSec);
-      out.bendPhase = c.bendPhase * decay;
+      changed = true;
+      return { ...c, bendPhase: c.bendPhase * decay };
     }
-    return out;
+    return c;
   });
-  return { ...state, creatures };
+  return changed ? { ...state, creatures } : state;
 }
 
 // ——— starter, storage ————————————————————————————————————————

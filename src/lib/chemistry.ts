@@ -638,40 +638,45 @@ export type VibrationMode = {
 };
 
 /**
- * The named modes a room can actually show, in the order a spectroscopist
- * would list them: lowest wavenumber first. Real numbers where reality has
- * them — water's bend at 1595 cm⁻¹ under its symmetric stretch at 3657 and
- * its asymmetric at 3756; CO₂'s bend at 667, its IR-DARK symmetric stretch
- * at 1333 (the two oxygens move out together, the dipole never changes, and
- * that is exactly why it is invisible in the infrared while the asymmetric
- * stretch at 2349 is the band that makes CO₂ a greenhouse gas at all).
- *
+ * Real named wavenumbers per compound, in the order a spectroscopist would
+ * list them: lowest first. Water's bend at 1595 cm⁻¹ under its symmetric
+ * stretch at 3657 and its asymmetric at 3756; CO₂'s bend at 667, its
+ * IR-DARK symmetric stretch at 1333 (the two oxygens move out together, the
+ * dipole never changes, and that is exactly why it is invisible in the
+ * infrared while the asymmetric stretch at 2349 is the band that makes CO₂
+ * a greenhouse gas at all). Hoisted to module scope: this table is the same
+ * object on every call, never mutated — `vibrationalModes` only ever reads
+ * from it, then clones what it takes.
+ */
+const NAMED_VIBRATIONAL_MODES: Record<string, VibrationMode[]> = {
+  H2O: [
+    { kind: "bend", wavenumber: 1595, irActive: true },
+    { kind: "stretch", wavenumber: 3657, irActive: true },
+    { kind: "stretch", wavenumber: 3756, irActive: true },
+  ],
+  CO2: [
+    { kind: "bend", wavenumber: 667, irActive: true },
+    { kind: "bend", wavenumber: 667, irActive: true },
+    { kind: "stretch", wavenumber: 1333, irActive: false },
+    { kind: "stretch", wavenumber: 2349, irActive: true },
+  ],
+  N2: [{ kind: "stretch", wavenumber: 2359, irActive: false }],
+  O2: [{ kind: "stretch", wavenumber: 1580, irActive: false }],
+  H2: [{ kind: "stretch", wavenumber: 4161, irActive: false }],
+  CO: [{ kind: "stretch", wavenumber: 2143, irActive: true }],
+  NO: [{ kind: "stretch", wavenumber: 1876, irActive: true }],
+  HCl: [{ kind: "stretch", wavenumber: 2886, irActive: true }],
+  NaCl: [{ kind: "stretch", wavenumber: 364, irActive: true }],
+};
+
+/**
  * The mode count matches `vibrationalModeCount`; where a compound has more
  * modes than reality has famous names, the remainder are filled in as
  * degenerate bends scaled from the compound's own bonds — deterministic, and
  * always ordered by wavenumber.
  */
 export function vibrationalModes(c: Compound): VibrationMode[] {
-  const named: Record<string, VibrationMode[]> = {
-    H2O: [
-      { kind: "bend", wavenumber: 1595, irActive: true },
-      { kind: "stretch", wavenumber: 3657, irActive: true },
-      { kind: "stretch", wavenumber: 3756, irActive: true },
-    ],
-    CO2: [
-      { kind: "bend", wavenumber: 667, irActive: true },
-      { kind: "bend", wavenumber: 667, irActive: true },
-      { kind: "stretch", wavenumber: 1333, irActive: false },
-      { kind: "stretch", wavenumber: 2349, irActive: true },
-    ],
-    N2: [{ kind: "stretch", wavenumber: 2359, irActive: false }],
-    O2: [{ kind: "stretch", wavenumber: 1580, irActive: false }],
-    H2: [{ kind: "stretch", wavenumber: 4161, irActive: false }],
-    CO: [{ kind: "stretch", wavenumber: 2143, irActive: true }],
-    NO: [{ kind: "stretch", wavenumber: 1876, irActive: true }],
-    HCl: [{ kind: "stretch", wavenumber: 2886, irActive: true }],
-    NaCl: [{ kind: "stretch", wavenumber: 364, irActive: true }],
-  };
+  const named = NAMED_VIBRATIONAL_MODES;
   const want = vibrationalModeCount(c);
   const have = named[c.key] ?? [];
   const out: VibrationMode[] = have.slice(0, want).map((m) => ({ ...m }));
@@ -705,6 +710,11 @@ export function modeForStrength(c: Compound, strength: number): VibrationMode | 
   return modes[Math.min(modes.length - 1, Math.floor(u * modes.length * 0.999))];
 }
 
+// the octave span's log-ratio is fixed by the 200..4400 cm⁻¹ bounds below,
+// never by the call's wavenumber — hoisted so it is computed once, not on
+// every strike
+const VIBRATION_PITCH_LOG_SPAN = Math.log(4400 / 200);
+
 /**
  * A wavenumber (cm⁻¹) carried down into the audible register, Hz. The true
  * frequency is c·ν̃ ≈ 3·10¹⁰ Hz per cm⁻¹; this is the same law under a
@@ -714,7 +724,7 @@ export function modeForStrength(c: Compound, strength: number): VibrationMode | 
  */
 export function vibrationPitchHz(wavenumber: number): number {
   const w = Math.max(200, Math.min(4400, wavenumber));
-  const u = Math.log(w / 200) / Math.log(4400 / 200);
+  const u = Math.log(w / 200) / VIBRATION_PITCH_LOG_SPAN;
   return 110 * Math.pow(16, u);
 }
 

@@ -243,13 +243,21 @@ export function growthRate(c: Climate): number {
 
 /** Overlap of two lives' feeding zones: one where they stand together, zero apart. */
 export function overlap(a: Organism, b: Organism): number {
-  const d = Math.hypot(a.nx - b.nx, a.ny - b.ny);
+  const dx = a.nx - b.nx;
+  const dy = a.ny - b.ny;
+  // same falloff as below: outside the radius the answer is exactly zero, so
+  // the sqrt only has to run when the pair is actually close enough to matter.
+  if (dx * dx + dy * dy >= COMPETE_R * COMPETE_R) return 0;
+  const d = Math.hypot(dx, dy);
   return Math.max(0, 1 - d / COMPETE_R);
 }
 
 /** Strength of a mycorrhizal link, by distance. */
 export function linkStrength(a: Organism, b: Organism): number {
-  const d = Math.hypot(a.nx - b.nx, a.ny - b.ny);
+  const dx = a.nx - b.nx;
+  const dy = a.ny - b.ny;
+  if (dx * dx + dy * dy >= LINK_R * LINK_R) return 0;
+  const d = Math.hypot(dx, dy);
   return Math.max(0, 1 - d / LINK_R);
 }
 
@@ -536,11 +544,15 @@ export function uproot(
 /** The life nearest a point, within a radius. What a flick or a keypress finds. */
 export function nearestOrganism(orgs: Organism[], nx: number, ny: number, within = 0.18): Organism | null {
   let best: Organism | null = null;
-  let bestD = within;
+  // only the ranking matters here, never the distance itself, so the whole
+  // search stays in squared-distance space and never pays for a sqrt.
+  let bestD2 = within * within;
   for (const o of orgs) {
-    const d = Math.hypot(o.nx - nx, o.ny - ny);
-    if (d <= bestD) {
-      bestD = d;
+    const dx = o.nx - nx;
+    const dy = o.ny - ny;
+    const d2 = dx * dx + dy * dy;
+    if (d2 <= bestD2) {
+      bestD2 = d2;
       best = o;
     }
   }
