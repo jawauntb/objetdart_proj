@@ -38,7 +38,7 @@ const tree = deriveTree(SCALE_BANDS, liveNeighbor);
 const byId = new Map(tree.nodes.map((n) => [n.id, n]));
 
 // — the trunk is a single chain from quarks to the manifold, no repeats —
-assert.equal(tree.trunk[0], "quanta", "the trunk rises from the quantum fields");
+assert.equal(tree.trunk[0], "plank", "the trunk rises from the plank — the last floorboard under the quanta");
 assert.equal(tree.trunk[tree.trunk.length - 1], "manifold", "the trunk ends at the fold");
 assert.equal(new Set(tree.trunk).size, tree.trunk.length, "the trunk never revisits a band");
 for (let i = 1; i < tree.trunk.length; i++) {
@@ -119,6 +119,7 @@ assert.equal(
 // consecutive. A band inserted at the wrong index, a lost override, or a door
 // that skips a rung all break this line and nothing else in the suite.
 const LADDER = [
+  "plank",
   "quanta",
   "quarks",
   "nucleons",

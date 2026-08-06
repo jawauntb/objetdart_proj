@@ -308,16 +308,19 @@ export function buildStars(seed: number, count: number = STAR_COUNT): StarField 
 
 // ——— the wave, heard ————————————————————————————————————————————
 // The register the axis assigns this band. The galaxy band spans
-// s = 17..20.5 log10 m; its centre is 18.75, and spectralRegisterFor puts
-//   baseHz = 27.5·2^(7·(27 − 18.75)/49) = 27.5·2^(33/28) ≈ 62.25 Hz
-//   lfoHz  = 1.8·2^(−7.5·(18.75 + 22)/49)           ≈ 0.0239 Hz
-// — one breath every ~42 seconds, a fourth above the deep-space web's A1.
-// This module does not invent a register; the test asserts these constants
-// agree with lib/scale.ts to the last digit.
+// s = 17..20.5 log10 m; its centre is 18.75, and on the −35…27 axis
+// (span 62 decades — the plank band moved the floor) spectralRegisterFor puts
+//   baseHz = 27.5·2^(7·(27 − 18.75)/62) = 27.5·2^(57.75/62) ≈ 52.45 Hz
+//   lfoHz  = 1.8·2^(−7.5·(18.75 + 35)/62)            ≈ 0.0199 Hz
+// — one breath every ~50 seconds, a third above the deep-space web. The
+// literals 62 (SCALE_MAX − SCALE_MIN), 27 (SCALE_MAX) and 35 (−SCALE_MIN)
+// encode the axis span because this module stays import-free; retune them
+// whenever the floor moves again. This module does not invent a register;
+// the test asserts these constants agree with lib/scale.ts to the last digit.
 
 export const GALAXY_SCALE_S = 18.75;
-export const GALAXY_BASE_HZ = 27.5 * Math.pow(2, (7 * (27 - GALAXY_SCALE_S)) / 49);
-export const GALAXY_LFO_HZ = 1.8 * Math.pow(2, (-7.5 * (GALAXY_SCALE_S + 22)) / 49);
+export const GALAXY_BASE_HZ = 27.5 * Math.pow(2, (7 * (27 - GALAXY_SCALE_S)) / 62);
+export const GALAXY_LFO_HZ = 1.8 * Math.pow(2, (-7.5 * (GALAXY_SCALE_S + 35)) / 62);
 
 /** Octaves the pattern-speed range sweeps around the band's fundamental. */
 export const PATTERN_SPAN_OCT = 1.2;

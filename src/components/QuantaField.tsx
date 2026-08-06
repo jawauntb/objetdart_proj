@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * /quanta — the field floor at 10⁻²²…10⁻¹⁹ m, below the quarks: the new
- * floor of the whole axis. There are no things down here, only fields, and
+ * /quanta — the field floor at 10⁻²²…10⁻¹⁹ m, below the quarks, one band
+ * above the plank. There are no things down here, only fields, and
  * every particle in the room is a ripple some field was made to carry.
  *
  * The room runs on ONE GREAT LAW: lifetime and reach are inverse to mass
@@ -36,8 +36,8 @@
  * Cosmic muons rain in on their own seeded schedule and die mid-flight.
  *
  * The stable residue persists in `objetdart:quanta:v1`. Pinch is
- * deliberately unbound — ScaleTravel owns it (quarks above; below is the
- * floor of the axis, and the integrator holds it).
+ * deliberately unbound — ScaleTravel owns it (quarks above; below, the
+ * plank — the last floorboard, where the axis closes its loop).
  */
 
 import { useEffect, useRef, useState } from "react";

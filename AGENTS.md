@@ -235,7 +235,7 @@ the readable worked example of the same contract — read it, then use the shell
 
 **Nav order follows the scale graph.** The header dropdown and home gallery
 are derived from `SCALE_BANDS` + `PEER_CIRCLES` (`src/lib/nav-order.ts`) —
-manifold at the top, quanta at the bottom, MetaNavigator peers contiguous in
+manifold at the top, the plank at the bottom, MetaNavigator peers contiguous in
 ring order. Never hand-sort `NAVIGATION_ROUTES`. Every extant interactive
 page belongs on the axis (band or peer circle) or in `SCALE_EXEMPT_KEYS`
 (laws / lenses / reading surfaces) — coin, tourbillon, sine, fire, and the

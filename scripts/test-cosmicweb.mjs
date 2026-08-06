@@ -506,7 +506,13 @@ const webs = seeds.map((s) => C.buildWeb(s));
   // clamped outside 0..1 rather than running away
   assert.equal(C.subBassHzFor(-5), C.subBassHzFor(0));
   assert.equal(C.subBassHzFor(5), C.subBassHzFor(1));
-  assert.ok(Math.abs(C.subBassMidiFor(0.5) - 31) < 1e-9, "the median is midi 31 — G1, exactly");
+  // 69 + 12·log2(27.5·2^(245/372)/440) = 21 + 245/31 — the plank band moved
+  // the floor to −35 and re-tuned the whole axis; the closed form keeps this
+  // pinned independently of the constant it checks.
+  assert.ok(
+    Math.abs(C.subBassMidiFor(0.5) - (21 + 245 / 31)) < 1e-9,
+    "the median is midi 896/31 ≈ 28.90 — a hair under F1, exactly where the axis puts it",
+  );
 }
 
 // —— novae: deterministic, and genuinely rare ————————————————————
@@ -633,5 +639,5 @@ console.log(
     "every galaxy above the threshold and every rejected candidate below it; the threshold→count map " +
     "monotone and gapless; morphology a real readout of density with all three classes reachable; " +
     "growth monotone about the field's own mean; density→sub-bass strictly falling and landing on the " +
-    "49 Hz register src/lib/scale.ts assigns s=127/6; novae deterministic at about one a minute",
+    "43.4 Hz register src/lib/scale.ts assigns s=127/6; novae deterministic at about one a minute",
 );

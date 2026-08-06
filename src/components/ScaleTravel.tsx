@@ -92,13 +92,6 @@ function recordEnteredFrom(dest: ScaleBandId, from: ScaleBandId | RouteRef): voi
   }
 }
 
-/** Direction of a metric-neighbor crossing/edge event relative to `from`. */
-function dirToward(from: ScaleBandId, towardMetric: ScaleBandId): TravelDir {
-  const fi = SCALE_BANDS.findIndex((b) => b.id === from);
-  const ti = SCALE_BANDS.findIndex((b) => b.id === towardMetric);
-  return ti > fi ? 1 : -1;
-}
-
 // At a fork (the earth holds the atlas and the flowers), pressing the wall
 // offers the first door; releasing and pressing again within this window
 // cycles the whisper to the next. Deterministic, discoverable, no chrome.
@@ -210,17 +203,22 @@ export function declareForkRegions(
   };
 }
 
-/** The door on offer toward `towardMetric`, plus where it sits on the frame. */
+/**
+ * The door on offer through the wall pressed in `dir`, plus where it sits on
+ * the frame. Direction comes from the scale event itself, never re-derived
+ * from metric order — at the axis's glued ends (the plank's floor opens onto
+ * the manifold) the pressed direction and the metric direction disagree, and
+ * the pressed one is the truth.
+ */
 type Offered = { door: TravelDoor; idx: number; count: number };
 
 function offeredDoor(
   route: string,
   from: ScaleBandId,
-  towardMetric: ScaleBandId,
+  dir: TravelDir,
   offer: WallOffer,
   point: FramePoint | null,
 ): Offered | null {
-  const dir = dirToward(from, towardMetric);
   const wall = cachedWall(route, from, dir);
   const options = wall.doors;
   if (options.length === 0) return null;
@@ -419,7 +417,7 @@ export function useBandEdgeTravel(
         if (e.type === "edge") {
           // The adapter path carries no pinch centroid (the room owns the
           // gesture and reports only zoom), so its forks keep the cycle.
-          const off = offeredDoor(route, bandAt(state.s).id, e.toward, r.offer, null);
+          const off = offeredDoor(route, bandAt(state.s).id, e.dir, r.offer, null);
           // No built door on offer: hold forever, promise nothing.
           toward = off ? off.door.label : null;
           if (!off && r.state) {
@@ -430,8 +428,8 @@ export function useBandEdgeTravel(
           }
         }
         if (e.type === "crossing") {
-          const dir = dirToward(e.from, e.to);
-          const off = offeredDoor(route, e.from, e.to, r.offer, null);
+          const dir = e.dir;
+          const off = offeredDoor(route, e.from, dir, r.offer, null);
           const dest = off?.door;
           if (dest && dest.route !== route) {
             recordEnteredFrom(dest.band.id, doorMemoryFor(route) ?? e.from);
@@ -577,7 +575,7 @@ export default function ScaleTravel({ route }: { route: string }) {
           const off = offeredDoor(
             route,
             bandAt(state.s).id,
-            e.toward,
+            e.dir,
             offerRef.current,
             pointRef.current,
           );
@@ -600,8 +598,8 @@ export default function ScaleTravel({ route }: { route: string }) {
           }
         }
         if (e.type === "crossing") {
-          const dir = dirToward(e.from, e.to);
-          const dest = offeredDoor(route, e.from, e.to, offerRef.current, pointRef.current)?.door;
+          const dir = e.dir;
+          const dest = offeredDoor(route, e.from, dir, offerRef.current, pointRef.current)?.door;
           if (dest && dest.route !== route) {
             recordEnteredFrom(dest.band.id, doorMemoryFor(route) ?? e.from);
             leavingRef.current = true;

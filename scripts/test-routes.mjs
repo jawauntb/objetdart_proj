@@ -159,6 +159,7 @@ const expectedKeys = [
   "marsh",
   "orb",
   "pebble",
+  "plank",
   "reef",
   "root",
   "spring",
@@ -202,7 +203,7 @@ assert.ok(NAVIGATION_ROUTES.every(Boolean), "navigation order should contain onl
 const navKeys = NAVIGATION_ROUTES.map((route) => route.key);
 const axisKeys = axisNavigationKeys(routeRefs);
 assert.equal(axisKeys[0], "manifold", "axis opens at the manifold");
-assert.equal(axisKeys[axisKeys.length - 1], "quanta", "axis ends at the quanta");
+assert.equal(axisKeys[axisKeys.length - 1], "plank", "axis ends at the plank — the last floorboard under the quanta");
 assert.ok(navKeys.indexOf("manifold") < navKeys.indexOf("stars"), "manifold above stars");
 assert.ok(navKeys.indexOf("stars") < navKeys.indexOf("earth"), "stars above earth");
 assert.ok(navKeys.indexOf("earth") < navKeys.indexOf("atlas"), "earth above atlas");

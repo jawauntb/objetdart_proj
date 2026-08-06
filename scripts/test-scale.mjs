@@ -89,7 +89,7 @@ assert.equal(bandAt(Math.log10(4e16)).id, "stars");
 assert.equal(bandAt(Math.log10(2e19)).id, "galaxy");
 assert.equal(bandAt(21).id, "space");
 assert.equal(bandAt(999).id, "manifold");
-assert.equal(bandAt(-999).id, "quanta");
+assert.equal(bandAt(-999).id, "plank");
 
 // — bandBlend: pure in the interior, symmetric crossfade near a wall —
 const mid = bandBlend(6.0);
@@ -239,7 +239,7 @@ assert.equal(entryScaleFor("/colophon"), null);
   assert.equal(travelNeighbor("olympus", -1), "coast", "the peak descends through fog to the sea");
   assert.equal(travelNeighbor("olympus", 1), "atmosphere", "the peak rises into the air");
   assert.equal(travelNeighbor("stars", -1), "atlas", "the sky descends onto the map");
-  assert.equal(travelNeighbor("manifold", 1), null, "the axis ends above the manifold");
+  assert.equal(travelNeighbor("manifold", 1), "plank", "the fold's ceiling wraps to the floor — the ouroboros");
   assert.equal(travelNeighbor("manifold", -1), "space", "the fold descends into the web");
   // The upper axis is metric-monotone after the sky re-cut: no override
   // anywhere from the ground to the web — each of these is plain adjacency,
@@ -398,6 +398,124 @@ assert.equal(entryScaleFor("/colophon"), null);
       assert.equal(bandAt(landing).id, dest.id, `arrival into ${dest.id} lands inside it`);
     }
   }
+
+  // — The ouroboros: the axis's glued ends are doors, not clamps —
+  // Below the smallest length there is no smaller, only the whole: the
+  // plank's floor opens onto the fold, and the fold's ceiling falls back
+  // into the foam. These pins catch a cosmology edit that quietly turns
+  // the loop back into a line — or an end-wall gate in stepScale that
+  // forgets travelNeighbor can declare a door where the metric axis ends.
+  assert.equal(travelNeighbor("plank", -1), "manifold", "the plank's floor opens onto the fold");
+  assert.equal(travelNeighbor("manifold", 1), "plank", "the fold's ceiling falls back into the foam");
+
+  // Sustained push at the floor: detent, edges toward the fold, then a
+  // crossing — the very sequence an interior wall gives, so a hand cannot
+  // tell the glue from a seam. The bug: stepScale clamping at SCALE_MIN
+  // with no detent and no door, the world ending where it should wrap.
+  {
+    let st = initialScaleState(SCALE_MIN + 0.05);
+    const seen = [];
+    let elapsed = 0;
+    let crossing = null;
+    for (let i = 0; i < 200 && !crossing; i++) {
+      const r = stepScale(st, { zoomVel: -2.6, active: true }, 16);
+      st = r.state;
+      elapsed += 16;
+      for (const e of r.events) {
+        seen.push(e);
+        if (e.type === "crossing") crossing = e;
+      }
+    }
+    const detent = seen.find((e) => e.type === "detent");
+    assert.ok(detent, "the floor is a felt stop before it is a door (no detent = no wall)");
+    assert.equal(detent.band, "plank", "the detent names the band whose floor was struck");
+    const edges = seen.filter((e) => e.type === "edge");
+    assert.ok(edges.length > 0, "pressing the floor accumulates visible intent (no edge = silent travel)");
+    for (const e of edges) {
+      assert.equal(e.toward, "manifold", "the floor's edge points through the glue, at the fold");
+      assert.equal(e.dir, -1, "the edge keeps the metric direction of the push (a wrapped door is still DOWN)");
+    }
+    assert.ok(crossing, "sustained intent at the floor must break through — the wall would strand the hand");
+    assert.equal(crossing.from, "plank", "the crossing leaves the plank");
+    assert.equal(crossing.to, "manifold", "and arrives at the fold — the ouroboros, walked");
+    assert.equal(crossing.dir, -1, "the crossing carries dir=-1: films and memory need the metric sense of the step");
+    assert.ok(
+      elapsed >= TRAVEL_INTENT_MS && elapsed <= TRAVEL_INTENT_MS + 400,
+      `the glue costs the same sustained intent as any seam (crossed at ${elapsed}ms)`,
+    );
+  }
+
+  // A short push at the floor never crosses: the wall holds and intent
+  // decays. The bug: the end-door skipping the intent integrator, so one
+  // stray pinch at the bottom of the world teleports to the top.
+  {
+    let st = { ...initialScaleState(SCALE_MIN + 0.001), v: -2.6 };
+    let crossed = false;
+    for (let i = 0; i < 3; i++) {
+      const r = stepScale(st, { zoomVel: -2.6, active: true }, 16);
+      st = r.state;
+      crossed ||= r.events.some((e) => e.type === "crossing");
+    }
+    for (let i = 0; i < 120; i++) {
+      const r = stepScale(st, { zoomVel: 0, active: false }, 16);
+      st = r.state;
+      crossed ||= r.events.some((e) => e.type === "crossing");
+    }
+    assert.equal(crossed, false, "a 48ms tap at the floor is not intent — the wall holds");
+    assert.equal(st.intentMs, 0, "released intent decays to nothing (a residue would cross on the next graze)");
+    assert.equal(bandAt(st.s).id, "plank", "the hand stays on the plank");
+  }
+
+  // The mirror at the ceiling: pushing out of the fold wraps to the floor.
+  // The bug: the glue wired one-way, so the loop reads as a cul-de-sac
+  // from above.
+  {
+    let st = initialScaleState(SCALE_MAX - 0.05);
+    let crossing = null;
+    for (let i = 0; i < 200 && !crossing; i++) {
+      const r = stepScale(st, { zoomVel: 2.6, active: true }, 16);
+      st = r.state;
+      crossing = r.events.find((e) => e.type === "crossing") ?? null;
+    }
+    assert.ok(crossing, "sustained push at the fold's ceiling must break through");
+    assert.equal(crossing.from, "manifold", "the crossing leaves the fold");
+    assert.equal(crossing.to, "plank", "and lands on the plank — the other half of the ouroboros");
+    assert.equal(crossing.dir, 1, "dir=+1 even through the glue: the hand pinched OUT, and the event says so");
+  }
+
+  // An interior wall's crossing still carries the metric dir — the new
+  // field must not exist only at the ends. The bug: dir stamped solely by
+  // the end-door branch, leaving every seam crossing undefined.
+  {
+    let st = initialScaleState(-19.05); // the quanta's ceiling
+    let crossing = null;
+    for (let i = 0; i < 200 && !crossing; i++) {
+      const r = stepScale(st, { zoomVel: 2.6, active: true }, 16);
+      st = r.state;
+      crossing = r.events.find((e) => e.type === "crossing") ?? null;
+    }
+    assert.ok(crossing, "the quanta's ceiling still opens");
+    assert.equal(crossing.from, "quanta", "the crossing leaves the quanta");
+    assert.equal(crossing.to, "quarks", "an interior seam keeps its metric neighbor");
+    assert.equal(crossing.dir, 1, "an interior crossing carries dir too — not only the glued ends");
+  }
+
+  // The glue's landings: wrapped travel still arrives INSIDE the band it
+  // names. The bug: entryScaleInto handed a wrapped dir and landing on the
+  // wrong wall — or outside the band entirely — so the film ends where the
+  // room is not.
+  const fold = SCALE_BANDS.find((b) => b.id === "manifold");
+  const plank = SCALE_BANDS.find((b) => b.id === "plank");
+  assert.equal(
+    bandAt(entryScaleInto(fold, -1)).id,
+    "manifold",
+    "falling through the floor lands inside the fold, at its widest edge",
+  );
+  assert.equal(
+    bandAt(entryScaleInto(plank, 1)).id,
+    "plank",
+    "pinching out past the fold lands inside the plank, at its floor edge",
+  );
 }
 
 // — Per-route doors: rooms sharing one band open onto different worlds —
