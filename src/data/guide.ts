@@ -1466,6 +1466,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
  */
 export const GUIDE_ROOMS: GuideRoom[] = [...CORE_GUIDE_ROOMS, ...roomGuideEntries()];
 
+/**
+ * Keyed lookup — the second half of the route → entry path the help control
+ * takes (`src/lib/guide-route.ts` is the first half, route → key). The chrome
+ * `?` on every screen renders *this* entry and writes no prose of its own, so
+ * editing a manifest or the entries above is the only way to change what it
+ * says. `scripts/test-room-help.mjs` pins the lookup's totality over
+ * `SITE_ROUTES` and the component's silence.
+ */
+export const GUIDE_ROOM_BY_KEY: Record<string, GuideRoom> = Object.fromEntries(
+  GUIDE_ROOMS.map((room) => [room.key, room]),
+);
+
 // ---------------------------------------------------------------------------
 // the workshop — how the machinery is kept
 // ---------------------------------------------------------------------------

@@ -72,6 +72,7 @@ test is a law, a law without one is a wish.
 | an object that claims a gesture verb implements it | `test:scene` |
 | navigation order is derived from the scale graph, never hand-sorted | `test:routes` |
 | the guide documents exactly the rooms that exist, with screenshots | `test:guide` |
+| the chrome `?` mirrors the guide — every route resolves to one entry, and the component writes no room prose | `test:room-help` |
 | every room key sits on a band, in a peer circle, or in `SCALE_EXEMPT_KEYS` | `test:routes` |
 
 ### What `test:room-liveness` checks, and why it exists
@@ -127,8 +128,19 @@ And the laws that no test can reach — hold these yourself:
   is raised friction, and raised friction is a bug.
 - **State lands in ≥2 senses in the same frame** (sight + sound at minimum; haptics
   where hardware allows). The water on `/` is the reference feel.
-- **No instructions, ever.** No new explanatory copy, labels, tooltips, or onboarding.
-  Discovery is physical: glimmers only, after ~20s idle.
+- **No instructions in the room, ever.** No new explanatory copy, labels, tooltips, or
+  onboarding in the material. Discovery is physical: glimmers only, after ~20s idle.
+
+  This law was narrowed once, deliberately, by the owner, and the narrowing is the
+  whole of it: the site chrome now carries a `?` at the bottom right of every screen
+  (`src/components/RoomHelp.tsx`) that opens the current route's field-guide entry.
+  It is a **sought** surface, never a volunteered one — nothing auto-opens, there is
+  no first-run popup, no `?` sitting inside the canvas, and the room behind it still
+  explains nothing about itself. And it explains without writing: it renders the
+  room's own `GUIDE_ROOMS` entry, so it is a **mirror of `/guide`**, not a second
+  copy of it, and it cannot drift from the guide because it has no words of its own
+  to drift with. The ban on copy, labels and tooltips *inside* rooms stands exactly
+  where it stood; discovery is still physical, and help is still asked for.
 - **Voice**: lowercase product copy, two of the three registers
   (devotional/operational/oceanic) in every line, no marketing verbs, no emoji.
 - **Build in one room, then extract the law** — prove a mechanic on a single route
@@ -250,6 +262,16 @@ so the rooms never have to — in-room copy stays instruction-free, always.
   guide drift apart, and when a documented room has no screenshot. That failure
   is the reminder working, not an obstacle — never silence it by deleting the
   entry you should be updating.
+- **The guide has one mirror and no copies.** The chrome `?` on every screen
+  renders the current route's own entry and nothing else: route → key by
+  `guideKeyForPath` (`src/lib/guide-route.ts`, reading `SITE_ROUTES`), key →
+  entry by `GUIDE_ROOM_BY_KEY` (`src/data/guide.ts`). Editing a manifest or
+  `src/data/guide.ts` is the only way to change what the `?` says — there is
+  nowhere else to type it. `npm run test:room-help` keeps both halves total
+  over every registered route, and fails the moment a room key, a route, or a
+  line of a room's copy appears in the component. A route that deliberately has
+  no entry (`/compare`, `/reading/<hash>`) renders no `?` at all rather than an
+  empty one, and says so by name in that test.
 - The same law extends to the other load-bearing docs: a change that makes
   `DESIGN.md`, `docs/gesture-grammar.md`, or `docs/new-room.md` false must edit
   them in the same PR.
@@ -330,7 +352,9 @@ audit above is what happened when it was written as paragraphs.
 - [ ] The room mounts **`<AxisChrome route="…" />`** from its page, and binds pinch or
       `pan2` only if the registry says `frame: "own"`.
 - [ ] Reduced motion, keyboard, and 390px all still work.
-- [ ] No new explanatory copy. No emoji. Two of three registers in any line you wrote.
+- [ ] No new explanatory copy in the room. The chrome `?` mirrors `/guide` and is the
+      only surface that explains — if the visitor needs telling, the guide entry is
+      where you tell them. No emoji. Two of three registers in any line you wrote.
 - [ ] `src/data/guide.ts` updated and the screenshot re-shot, in this PR.
 - [ ] Anything you extracted into `src/lib/` has a consumer in `src/`, in this PR.
 
