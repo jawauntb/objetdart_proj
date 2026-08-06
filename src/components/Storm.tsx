@@ -434,6 +434,12 @@ export default function Storm() {
       { yFrac: 0.92, ampBase: 36, k: 0.0058, phaseSpeed: 0.46, compound: 0.66, offset: 4.7,
         lineColor: "rgba(20, 30, 50, 0.92)", fillColor: "rgba(14, 32, 64, 0.46)" },
     ];
+    // per-layer sample buffers, allocated once and overwritten every frame
+    // (every index is rewritten each pass, so reuse is safe) instead of
+    // allocating two fresh arrays per layer per frame.
+    const WAVE_SAMPLES = 120;
+    const layerXs: number[][] = layers.map(() => new Array(WAVE_SAMPLES + 1).fill(0));
+    const layerYs: number[][] = layers.map(() => new Array(WAVE_SAMPLES + 1).fill(0));
 
     const audio = getFieldAudio();
     audio.start();
@@ -1490,7 +1496,7 @@ export default function Storm() {
       const ampMul = 0.4 + s * 1.6;
       const freqMul = (1.0 + s * 0.6) * freqMulDial;
 
-      const samples = 120;
+      const samples = WAVE_SAMPLES;
       const step = w / samples;
       const breakThreshold = 0.85 - s * 0.30;
       const emitRate = s > 0.05 ? s * 120 : 0;
@@ -1509,8 +1515,8 @@ export default function Storm() {
         const baseSpeed = layer.phaseSpeed * motion * freqMulDial;
         const phaseT = t * baseSpeed * (windPhase >= 0 ? 1 : -1) * Math.max(0.5, Math.abs(windPhase));
 
-        const xs: number[] = new Array(samples + 1);
-        const ys: number[] = new Array(samples + 1);
+        const xs = layerXs[li];
+        const ys = layerYs[li];
 
         const vortexCx = w * 0.5;
         const vortexCy = h * 0.65;

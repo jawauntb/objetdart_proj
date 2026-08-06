@@ -1056,17 +1056,6 @@ export default function Growth() {
       const size = need + 8;
       vineScratch = { x: new Float64Array(size), y: new Float64Array(size), v: new Float64Array(size) };
     };
-    // reused every frame (fields mutated in draw, never recreated) — the
-    // per-system draw fx no longer allocates a fresh object each rAF tick
-    const fx: SystemFx = {
-      dt: 0,
-      reduce: false,
-      breath: 0,
-      onBloom,
-      detail: 1,
-      grad: gradCache,
-      scratch: vineScratch,
-    };
     // two-finger pan (grammar §5): a decorative depth offset on the field's
     // backdrop/vector-field/global curve layers, eased and self-centering
     let panX = 0;
@@ -1854,6 +1843,18 @@ export default function Growth() {
     }
     setHasGrowth(field.systems.some((s) => s.retiringAt == null));
 
+    // reused every frame (fields mutated in place below, never recreated) —
+    // the per-system draw fx no longer allocates a fresh object each rAF tick
+    const fx: SystemFx = {
+      dt: 0,
+      reduce: false,
+      breath: 0,
+      onBloom,
+      detail: 1,
+      grad: gradCache,
+      scratch: vineScratch,
+    };
+
     const draw = (nowMs: number) => {
       const tier = governor.beginFrame(nowMs);
       if (sleeping) { raf = requestAnimationFrame(draw); return; } // hard pause
@@ -1917,9 +1918,8 @@ export default function Growth() {
       params.rest = mix(params.rest, active === "cycle" ? 0.22 : 0.02, reduce ? 0.026 : 0.010);
 
       // shared breath: the audio swell clock when audible, RAF when not
-      const audioT = (() => {
-        try { return getFieldAudio().getAudioTime(); } catch { return null; }
-      })();
+      let audioT: number | null = null;
+      try { audioT = getFieldAudio().getAudioTime(); } catch { audioT = null; }
       const bt = audioT != null ? audioT : nowMs / 1000;
       const breath = bt * Math.PI * 2 * 0.14;
 
@@ -1928,25 +1928,62 @@ export default function Growth() {
       drawVectorField(ctx, width, height, field.time, active, params, detail.samples, panX, panY);
       drawGlobalCurve(ctx, width, height, field.time, active, params, panX, panY);
 
-      field.traces = field.traces.filter((trace) => (nowMs - trace.born) < 1500);
-      field.traces.forEach((trace) => drawTrace(ctx, trace, width, height, nowMs, gradCache));
+      // in-place compaction — same kept order as the old .filter(), but no
+      // new array (and no new callback closure) allocated when nothing
+      // actually aged out this frame, which is most frames
+      {
+        const traces = field.traces;
+        let write = 0;
+        for (let read = 0; read < traces.length; read += 1) {
+          const trace = traces[read];
+          if (nowMs - trace.born < 1500) {
+            if (write !== read) traces[write] = trace;
+            write += 1;
+          }
+        }
+        traces.length = write;
+      }
+      for (let i = 0; i < field.traces.length; i += 1) {
+        drawTrace(ctx, field.traces[i], width, height, nowMs, gradCache);
+      }
       // vines compete for light and space, and two rooted close enough graft
       // into a third thing — throttled, an O(n²) pass over a capped population
       if (nowMs - lastCompeteAt > 260) {
         lastCompeteAt = nowMs;
         applyVineCompetitionAndGraft();
       }
-      const beforeCount = field.systems.length;
-      field.systems = field.systems.filter((system) => {
-        if (system.retiringAt != null) return field.clock - system.retiringAt < RETIRE_MS;
-        return system.immortal || (field.clock - system.born) < 25000;
-      });
-      if (field.systems.length !== beforeCount) {
-        const standing = field.systems.some((s) => s.retiringAt == null);
-        setHasGrowth(standing);
+      // same in-place compaction as traces above — the population is capped
+      // at 42, and most frames retire nothing, so skip the reallocation
+      {
+        const systems = field.systems;
+        let write = 0;
+        let removed = false;
+        for (let read = 0; read < systems.length; read += 1) {
+          const system = systems[read];
+          const keep = system.retiringAt != null
+            ? field.clock - system.retiringAt < RETIRE_MS
+            : system.immortal || (field.clock - system.born) < 25000;
+          if (keep) {
+            if (write !== read) systems[write] = system;
+            write += 1;
+          } else {
+            removed = true;
+          }
+        }
+        if (removed) {
+          systems.length = write;
+          setHasGrowth(systems.some((s) => s.retiringAt == null));
+        }
       }
-      const fx: SystemFx = { dt: dt * timeScale, reduce, breath, onBloom, detail: detail.samples, grad: gradCache };
-      field.systems.forEach((system) => drawSystem(ctx, system, width, height, field.clock, params, active, fx));
+      fx.dt = dt * timeScale;
+      fx.reduce = reduce;
+      fx.breath = breath;
+      fx.detail = detail.samples;
+      ensureVineScratch(Math.max(10, Math.round(34 * detail.samples)) + 1);
+      fx.scratch = vineScratch;
+      for (let i = 0; i < field.systems.length; i += 1) {
+        drawSystem(ctx, field.systems[i], width, height, field.clock, params, active, fx);
+      }
 
       // night (vessel: flip face-down) — the field hushes under a veil
       if (nightAmt > 0.01) {
@@ -2024,13 +2061,19 @@ export default function Growth() {
           ctx.beginPath();
           ctx.arc(holdUI.x, holdUI.y, radius, 0, Math.PI * 2);
           ctx.stroke();
-          const core = ctx.createRadialGradient(holdUI.x, holdUI.y, 0, holdUI.x, holdUI.y, radius * 1.3);
-          core.addColorStop(0, colorAlpha(cfg.tone, 0.20 + holdCharge * 0.20));
-          core.addColorStop(1, colorAlpha(cfg.tone, 0));
-          ctx.fillStyle = core;
+          // the cached per-mode glow (tone alpha 1 → 0, unit radius) scaled
+          // and positioned via transform instead of a fresh CanvasGradient
+          // every frame this UI is up — same technique as drawSystem's root
+          // glow and drawTrace's ring
+          ctx.save();
+          ctx.translate(holdUI.x, holdUI.y);
+          ctx.scale(radius * 1.3, radius * 1.3);
+          ctx.globalAlpha = 0.20 + holdCharge * 0.20;
+          ctx.fillStyle = gradCache.glow.get(active) ?? colorAlpha(cfg.tone, 0.20 + holdCharge * 0.20);
           ctx.beginPath();
-          ctx.arc(holdUI.x, holdUI.y, radius * 1.3, 0, Math.PI * 2);
+          ctx.arc(0, 0, 1, 0, Math.PI * 2);
           ctx.fill();
+          ctx.restore();
         }
       }
 

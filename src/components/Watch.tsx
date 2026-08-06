@@ -34,6 +34,29 @@ type Spark = { x: number; y: number; vx: number; vy: number; life: number; maxLi
 type Whisper = { text: string; x: number; y: number; t0: number; duration: number; hovered: boolean };
 type WatchMark = { id: number; label: string; tone: "ember" | "glass" | "wood" | "moon"; strength: number };
 
+// Static per-layer geometry for the candle flame — hoisted out of the render
+// loop so it isn't rebuilt (a fresh array + 4 objects) every single frame.
+// Only the `fillStyle` string (which depends on the per-frame flameScale)
+// is computed inside the loop.
+const FLAME_LAYERS = [
+  { h: 26, w: 8,   freq: 4.5, off: 0,   leanMul: 0.6,  r: 255, g: 215, b: 150, a: 0.92, scaleAlpha: true },
+  { h: 20, w: 6.4, freq: 5.8, off: 1.3, leanMul: 0.75, r: 255, g: 200, b: 130, a: 0.96, scaleAlpha: true },
+  { h: 14, w: 4.6, freq: 7.0, off: 2.4, leanMul: 0.9,  r: 255, g: 165, b: 90,  a: 0.98, scaleAlpha: true },
+  { h: 9,  w: 3.0, freq: 9.0, off: 3.7, leanMul: 1.1,  r: 255, g: 230, b: 200, a: 0.98, scaleAlpha: false },
+] as const;
+
+// Static palette-per-morph-phase for the picture frame's procedural sea
+// scene — hoisted out of the render loop for the same reason as above; this
+// used to allocate a fresh array of 5 objects (each with 3 nested arrays)
+// every frame regardless of whether the frame's morph phase had changed.
+const FRAME_PALETTES = [
+  { sky: [60, 80, 110], sea: [40, 70, 110], wave: [200, 220, 230] },
+  { sky: [110, 160, 210], sea: [40, 100, 160], wave: [240, 240, 240] },
+  { sky: [180, 100, 70], sea: [80, 60, 100], wave: [240, 200, 180] },
+  { sky: [20, 30, 60], sea: [10, 18, 40], wave: [200, 210, 240] },
+  { sky: [50, 60, 80], sea: [30, 50, 80], wave: [255, 255, 255] },
+] as const;
+
 export default function Watch() {
   // page-specific ambient bed: precise ticks over far water
   useEffect(() => { getFieldAudio().setAmbientProfile("watch"); }, []);
@@ -1380,7 +1403,9 @@ export default function Watch() {
       ctx.lineTo(g.winRight, (g.winTop + g.winBottom) / 2);
       ctx.stroke();
 
-      windowBreath.current = windowBreath.current.filter((b) => now - b.t0 < 1400);
+      for (let i = windowBreath.current.length - 1; i >= 0; i--) {
+        if (now - windowBreath.current[i].t0 >= 1400) windowBreath.current.splice(i, 1);
+      }
       if (windowBreath.current.length > 0 && breathSpriteCtx) {
         ctx.save();
         ctx.beginPath();
@@ -1493,14 +1518,7 @@ export default function Watch() {
         const phase = frame.current.morphPhase;
         // small evolving sea scene: gradient sky + horizon + 3 wave lines.
         // The palette shifts with phase: 0 calm dawn, 1 noon, 2 dusk, 3 night, 4 storm.
-        const palettes = [
-          { sky: [60, 80, 110], sea: [40, 70, 110], wave: [200, 220, 230] },
-          { sky: [110, 160, 210], sea: [40, 100, 160], wave: [240, 240, 240] },
-          { sky: [180, 100, 70], sea: [80, 60, 100], wave: [240, 200, 180] },
-          { sky: [20, 30, 60], sea: [10, 18, 40], wave: [200, 210, 240] },
-          { sky: [50, 60, 80], sea: [30, 50, 80], wave: [255, 255, 255] },
-        ];
-        const pal = palettes[phase % palettes.length];
+        const pal = FRAME_PALETTES[phase % FRAME_PALETTES.length];
         const sg = ctx.createLinearGradient(0, iy, 0, iy + ih * 0.5);
         sg.addColorStop(0, `rgb(${pal.sky[0]}, ${pal.sky[1]}, ${pal.sky[2]})`);
         sg.addColorStop(1, `rgb(${pal.sky[0] * 0.8 | 0}, ${pal.sky[1] * 0.8 | 0}, ${pal.sky[2] * 0.85 | 0})`);
@@ -1605,7 +1623,9 @@ export default function Watch() {
       }
 
       // ── wall marks ──
-      wallMarks.current = wallMarks.current.filter((m) => now - m.t0 < 16000);
+      for (let i = wallMarks.current.length - 1; i >= 0; i--) {
+        if (now - wallMarks.current[i].t0 >= 16000) wallMarks.current.splice(i, 1);
+      }
       wallMarks.current.forEach((m) => {
         const age = (now - m.t0) / 16000;
         const a = Math.max(0, 0.45 * (1 - age));
@@ -1701,24 +1721,20 @@ export default function Watch() {
       const flameBase = g.candle.y - g.candle.h - 11;
       // Three / four layered flames each with slight independent wobble.
       if (cs.flameScale > 0.02) {
-        const baseLayers = [
-          { h: 26, w: 8, color: `rgba(255, 215, 150, ${0.92 * cs.flameScale})`, freq: 4.5, off: 0, leanMul: 0.6 },
-          { h: 20, w: 6.4, color: `rgba(255, 200, 130, ${0.96 * cs.flameScale})`, freq: 5.8, off: 1.3, leanMul: 0.75 },
-          { h: 14, w: 4.6, color: `rgba(255, 165, 90, ${0.98 * cs.flameScale})`, freq: 7.0, off: 2.4, leanMul: 0.9 },
-          { h: 9,  w: 3.0, color: `rgba(255, 230, 200, 0.98)`, freq: 9.0, off: 3.7, leanMul: 1.1 },
-        ];
-        baseLayers.forEach((L) => {
+        for (let li = 0; li < FLAME_LAYERS.length; li++) {
+          const L = FLAME_LAYERS[li];
           const wob = Math.sin(t * L.freq + L.off) * 0.7 * motion;
           const lh = L.h * cs.flameScale + wob;
           const lw = L.w * cs.flameScale;
           const lLean = leanX * L.leanMul;
-          ctx.fillStyle = L.color;
+          const alpha = L.scaleAlpha ? L.a * cs.flameScale : L.a;
+          ctx.fillStyle = `rgba(${L.r}, ${L.g}, ${L.b}, ${alpha})`;
           ctx.beginPath();
           ctx.moveTo(g.candle.x, flameBase);
           ctx.quadraticCurveTo(g.candle.x + lw + lLean, flameBase - lh * 0.55, g.candle.x + lLean * 0.5, flameBase - lh);
           ctx.quadraticCurveTo(g.candle.x - lw + lLean, flameBase - lh * 0.55, g.candle.x, flameBase);
           ctx.fill();
-        });
+        }
         // bright core point at the very base
         ctx.fillStyle = `rgba(255, 250, 220, ${cs.flameScale})`;
         ctx.beginPath();
@@ -1854,7 +1870,9 @@ export default function Watch() {
       ctx.moveTo(leftAtY(waterTop), waterTop);
       ctx.lineTo(rightAtY(waterTop), waterTop);
       ctx.stroke();
-      glassRipples.current = glassRipples.current.filter((r) => now - r.t0 < 1400);
+      for (let i = glassRipples.current.length - 1; i >= 0; i--) {
+        if (now - glassRipples.current[i].t0 >= 1400) glassRipples.current.splice(i, 1);
+      }
       glassRipples.current.forEach((r) => {
         const age = (now - r.t0) / 1400;
         const w0 = (gw - 6) * (0.2 + age * 0.8);

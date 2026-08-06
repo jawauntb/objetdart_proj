@@ -1728,7 +1728,10 @@ export default function QuantaField() {
       }
 
       // ——— excitations: walk, wrap or die, and answer the world ———
-      for (const e of [...excs]) {
+      // (decay() below reassigns `excs` to a filtered copy rather than
+      // mutating this array in place, so iterating it directly — without a
+      // defensive spread — is already safe and skips a per-frame copy.)
+      for (const e of excs) {
         if (e.retiringAt) continue;
         e.age += dt;
         e.ring *= Math.exp(-dt * 2.2);
@@ -1811,6 +1814,7 @@ export default function QuantaField() {
       for (let i = 0; i < excs.length; i++) {
         const a = excs[i];
         if (a.retiringAt) continue;
+        let met = false;
         for (let j = i + 1; j < excs.length; j++) {
           const b = excs[j];
           if (b.retiringAt || a.id !== b.id) continue;
@@ -1819,9 +1823,13 @@ export default function QuantaField() {
           if (Math.abs(a.x - b.x) > reach || Math.abs(a.y - b.y) > reach) continue;
           if (Math.hypot(a.x - b.x, a.y - b.y) > reach) continue;
           meet(a, b, nowReal);
+          met = true;
           break;
         }
-        if (!excs.includes(a)) break;
+        // only meet() can have mutated `excs` (annihilation/interference
+        // reassign it), so only re-check membership when it actually ran —
+        // this was previously an unconditional O(n) scan every outer step.
+        if (met && !excs.includes(a)) break;
       }
       if (metAt.size > 64) metAt.clear();
 

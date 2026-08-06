@@ -300,6 +300,10 @@ export default function FlowersGarden() {
     let plants: Plant[] = [];
     let plantCount = 0;
     const specks: Speck[] = [];
+    // reused every frame instead of `.filter()` / `[...plants]` (no per-frame
+    // array churn in the draw loop) — cleared and refilled, never reallocated
+    const livingScratch: Plant[] = [];
+    const paintOrderScratch: Plant[] = [];
     let width = 0;
     let height = 0;
     let rectLeft = 0;
@@ -473,6 +477,11 @@ export default function FlowersGarden() {
     // ————— helpers —————
     const audio = () => getFieldAudio();
     const note = (midi: number, ms = 120) => { try { audio().playNote(midi, ms); } catch { /* noop */ } };
+    // hoisted out of the draw loop so the per-frame breath read never
+    // allocates a fresh closure just to wrap the audio clock in a try/catch
+    const readAudioTime = (): number | null => {
+      try { return audio().getAudioTime(); } catch { return null; }
+    };
 
     // background wash + ambient glow — recomputed only on resize, never per
     // frame (a per-frame createLinearGradient/createRadialGradient is the
@@ -1618,7 +1627,7 @@ export default function FlowersGarden() {
       nightAmt += ((night ? 1 : 0) - nightAmt) * Math.min(1, dt * 1.4);
 
       // shared breath: the audio swell clock when audible, RAF when not
-      const audioT = (() => { try { return audio().getAudioTime(); } catch { return null; } })();
+      const audioT = readAudioTime();
       const bt = audioT != null ? audioT : now / 1000;
       const breath = bt * Math.PI * 2 * 0.14;
 
@@ -1675,7 +1684,9 @@ export default function FlowersGarden() {
       // the soil has. What is left is the plant's vigour, and vigour is what
       // it grows and blooms on, so a crowded corner visibly thins itself.
       {
-        const living = plants.filter((q) => q.wiltAt == null);
+        livingScratch.length = 0;
+        for (const q of plants) if (q.wiltAt == null) livingScratch.push(q);
+        const living = livingScratch;
         const rainOn = now < rainUntil;
         const frostOn = now < frostUntil;
         for (const p of living) {
@@ -1841,8 +1852,10 @@ export default function FlowersGarden() {
       ctx.restore();
 
       // plants, painter's order
-      const sorted = [...plants].sort((a, b) => a.ny - b.ny);
-      for (const p of sorted) drawPlant(p, now, breath);
+      paintOrderScratch.length = 0;
+      for (const p of plants) paintOrderScratch.push(p);
+      paintOrderScratch.sort((a, b) => a.ny - b.ny);
+      for (const p of paintOrderScratch) drawPlant(p, now, breath);
 
       // the wilted return to soil; the space is theirs to give back
       const wiltDur = reduce ? WILT_MS_REDUCED : WILT_MS;

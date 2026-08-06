@@ -216,6 +216,11 @@ export default function CellsPlasm() {
     // ————— state (all refs of the effect closure) —————
     let cells: Cell[] = [];
     let seedCount = 0;
+    // painter's-order cache: re-sorted only when the population actually
+    // changes (a seed, a divide, an engulf, a retirement finishing) — never
+    // a per-frame allocation + sort of an otherwise-stable list.
+    let paintOrder: Cell[] = [];
+    let paintOrderDirty = true;
     const motes: Mote[] = [];
     const wavefronts: Wavefront[] = [];
     const stirs: Stir[] = [];
@@ -488,6 +493,7 @@ export default function CellsPlasm() {
       seedCount += 1;
       const c = makeCell(seed, nx, ny, 0, 0.02);
       cells.push(c);
+      paintOrderDirty = true;
       retireOldest();
       // a seed enters the plasm: two senses in the same frame
       try { audio().spark(); } catch { /* noop */ }
@@ -527,6 +533,7 @@ export default function CellsPlasm() {
       b.pushX = -ax * 26; b.pushY = -ay * 26;
       cells = cells.filter((c) => c !== parent);
       cells.push(a, b);
+      paintOrderDirty = true;
       retireOldest();
       // the spindle: two poles on the division axis with the fibres strung
       // between them, drawn while the daughters are still pulling apart
@@ -630,6 +637,7 @@ export default function CellsPlasm() {
       made.axis = big.axis;
       cells = cells.filter((c) => c !== big && c !== small);
       cells.push(made);
+      paintOrderDirty = true;
       retireOldest();
       // one meal, three senses, one frame
       try { audio().thud(); } catch { /* noop */ }
@@ -1442,7 +1450,8 @@ export default function CellsPlasm() {
       const gravY = streamY + tiltLeanY * 0.5;
 
       // shared breath: the audio swell clock when audible, RAF when not
-      const audioT = (() => { try { return audio().getAudioTime(); } catch { return null; } })();
+      let audioT: number | null;
+      try { audioT = audio().getAudioTime(); } catch { audioT = null; }
       const bt = audioT != null ? audioT : now / 1000;
       const breath = bt * Math.PI * 2 * 0.14;
 

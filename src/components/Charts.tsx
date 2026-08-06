@@ -500,6 +500,15 @@ export default function Charts() {
       typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+    // Reusable scratch buffer for Panel 2's derivative-line points, sized to
+    // the fixed candle count. Filled in place every frame in drawPanel2
+    // instead of allocating a fresh array of {x,y,v} objects each frame.
+    const p2PtsBuf: { x: Float64Array; y: Float64Array; v: Float64Array } = {
+      x: new Float64Array(CANDLE_COUNT),
+      y: new Float64Array(CANDLE_COUNT),
+      v: new Float64Array(CANDLE_COUNT),
+    };
+
     // ── performance contract (room-runtime): frame governor + DPR ceiling,
     // shared with every other room. Visibility pause already lived here
     // (document.hidden below) — gallery-pause joins it. ──
@@ -652,7 +661,7 @@ export default function Charts() {
       ctx.save();
       ctx.translate(pan.x, pan.y);
       drawPanel1(ctx, L, candles, hoverIdx, p1RangeRef, lens.cur, waveOff, detail.particles);
-      drawPanel2(ctx, L, d1, d1Ema, p2RangeRef, waveOff);
+      drawPanel2(ctx, L, d1, d1Ema, p2RangeRef, waveOff, p2PtsBuf);
       drawPanel3(ctx, L, rsi, p3RangeRef, waveOff);
 
       // volatility handle lives in the left gutter beside Panel 1
@@ -1998,6 +2007,7 @@ function drawPanel2(
   d1Ema: ReadonlyArray<number>,
   rangeRef: React.MutableRefObject<{ top: number; bot: number; yMin: number; yMax: number }>,
   waveOff?: (i: number) => number,
+  ptsBuf?: { x: Float64Array; y: Float64Array; v: Float64Array },
 ) {
   const top = L.p2Top + 18;
   const bot = L.p2Top + L.p2H - 6;
@@ -2041,20 +2051,27 @@ function drawPanel2(
   // amber fill from zero-line down for negative, top cyan fill for positive.
   // For the line itself we use segment-by-segment stroke with sign-coloured
   // segments.
-  const pts: Array<{ x: number; y: number; v: number }> = [];
+  // Points are filled into the caller's reusable buffer (sized for the fixed
+  // candle count) in place, rather than allocating a fresh array of {x,y,v}
+  // objects every frame.
+  const px = ptsBuf ? ptsBuf.x : new Float64Array(N);
+  const py = ptsBuf ? ptsBuf.y : new Float64Array(N);
+  const pv = ptsBuf ? ptsBuf.v : new Float64Array(N);
   for (let i = 0; i < N; i++) {
     const off = waveOff ? waveOff(i) * h * 0.06 : 0;
-    pts.push({ x: xOf(i), y: yOf(d1[i]) + off, v: d1[i] });
+    px[i] = xOf(i);
+    py[i] = yOf(d1[i]) + off;
+    pv[i] = d1[i];
   }
 
   // soft fill under the line, faint
   ctx.beginPath();
-  ctx.moveTo(pts[0].x, zy);
-  for (let i = 0; i < pts.length - 1; i++) {
-    const cp1x = (pts[i].x + pts[i + 1].x) / 2;
-    ctx.bezierCurveTo(cp1x, pts[i].y, cp1x, pts[i + 1].y, pts[i + 1].x, pts[i + 1].y);
+  ctx.moveTo(px[0], zy);
+  for (let i = 0; i < N - 1; i++) {
+    const cp1x = (px[i] + px[i + 1]) / 2;
+    ctx.bezierCurveTo(cp1x, py[i], cp1x, py[i + 1], px[i + 1], py[i + 1]);
   }
-  ctx.lineTo(pts[pts.length - 1].x, zy);
+  ctx.lineTo(px[N - 1], zy);
   ctx.closePath();
   const grad = ctx.createLinearGradient(0, top, 0, bot);
   grad.addColorStop(0, "rgba(120,210,230,0.16)");
@@ -2067,10 +2084,8 @@ function drawPanel2(
   ctx.lineWidth = 1.6;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  for (let i = 0; i < pts.length - 1; i++) {
-    const a = pts[i];
-    const b = pts[i + 1];
-    const sign = (a.v + b.v) / 2;
+  for (let i = 0; i < N - 1; i++) {
+    const sign = (pv[i] + pv[i + 1]) / 2;
     const t = Math.max(-1, Math.min(1, sign / Math.max(0.001, m)));
     // mix amber (negative) → cyan (positive)
     const color =
@@ -2078,10 +2093,10 @@ function drawPanel2(
         ? `rgba(${Math.round(120 - t * 30)}, ${Math.round(210)}, ${Math.round(230)}, 0.92)`
         : `rgba(${Math.round(255)}, ${Math.round(180 + t * 30)}, ${Math.round(110 + t * 20)}, 0.92)`;
     ctx.strokeStyle = color;
-    const cp1x = (a.x + b.x) / 2;
+    const cp1x = (px[i] + px[i + 1]) / 2;
     ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.bezierCurveTo(cp1x, a.y, cp1x, b.y, b.x, b.y);
+    ctx.moveTo(px[i], py[i]);
+    ctx.bezierCurveTo(cp1x, py[i], cp1x, py[i + 1], px[i + 1], py[i + 1]);
     ctx.stroke();
   }
 
@@ -2089,16 +2104,16 @@ function drawPanel2(
   ctx.strokeStyle = "rgba(244,238,222,0.55)";
   ctx.lineWidth = 1;
   ctx.beginPath();
+  const emaOff = (j: number) => (waveOff ? waveOff(j) * h * 0.06 : 0);
   for (let i = 0; i < d1Ema.length; i++) {
-    const emaOff = (j: number) => (waveOff ? waveOff(j) * h * 0.06 : 0);
     const x = xOf(i);
     const y = yOf(d1Ema[i]) + emaOff(i);
     if (i === 0) ctx.moveTo(x, y);
     else {
-      const px = xOf(i - 1);
-      const py = yOf(d1Ema[i - 1]) + emaOff(i - 1);
-      const cp1x = (px + x) / 2;
-      ctx.bezierCurveTo(cp1x, py, cp1x, y, x, y);
+      const pxv = xOf(i - 1);
+      const pyv = yOf(d1Ema[i - 1]) + emaOff(i - 1);
+      const cp1x = (pxv + x) / 2;
+      ctx.bezierCurveTo(cp1x, pyv, cp1x, y, x, y);
     }
   }
   ctx.stroke();

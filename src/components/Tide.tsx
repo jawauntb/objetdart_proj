@@ -67,6 +67,38 @@ function phaseName(illum: number, waxing: boolean): string {
   return waxing ? "waxing gibbous" : "waning gibbous";
 }
 
+// Swell line specs are constant — hoisted out of the render loop so the
+// per-frame draw doesn't allocate a fresh array of 4 objects every frame.
+const TIDE_SWELLS = [
+  { off: 0.04, amp: 6, freq: 0.011, color: "rgba(160, 200, 230, 0.42)" },
+  { off: 0.13, amp: 10, freq: 0.0095, color: "rgba(120, 170, 210, 0.5)" },
+  { off: 0.24, amp: 15, freq: 0.008, color: "rgba(80, 130, 180, 0.6)" },
+  { off: 0.34, amp: 21, freq: 0.0065, color: "rgba(50, 100, 150, 0.72)" },
+] as const;
+
+// Per-hop arc heights for the skipped-stone flight path (§ vessel knock) —
+// hoisted so the flight-path branch doesn't allocate a tuple array per frame.
+const STONE_HOP_HEIGHTS = [16, 11, 7] as const;
+
+// glimmer's seeded draw — same shape as hash01 but slot-parameterised so the
+// idle-glimmer block can call it without allocating a closure every frame.
+function tideGlimmerSeed(slot: number, n: number): number {
+  const v = Math.sin((slot + n) * 127.1) * 43758.5453;
+  return v - Math.floor(v);
+}
+
+// one tick of the tide staff (label + line) — a plain function so the
+// render loop doesn't build a [number, string] tuple array every frame.
+function drawTideStaffTick(ctx: CanvasRenderingContext2D, staffX: number, ty: number, label: string) {
+  ctx.strokeStyle = "rgba(242, 238, 230, 0.35)";
+  ctx.beginPath();
+  ctx.moveTo(staffX - 5, ty);
+  ctx.lineTo(staffX + 5, ty);
+  ctx.stroke();
+  ctx.fillStyle = "rgba(242, 238, 230, 0.42)";
+  ctx.fillText(label, staffX + 10, ty);
+}
+
 export default function Tide() {
   // keep the page ambient bed: slow lunar water and buoy pulse
   useEffect(() => { getFieldAudio().setAmbientProfile("tide"); }, []);
@@ -1003,13 +1035,7 @@ export default function Tide() {
 
       // swell lines — cadence quickens toward high tide
       const speed = 0.3 + (tideN * 0.5 + 0.5) * 0.9 + Math.abs(wind) * 0.7;
-      const swells = [
-        { off: 0.04, amp: 6, freq: 0.011, color: "rgba(160, 200, 230, 0.42)" },
-        { off: 0.13, amp: 10, freq: 0.0095, color: "rgba(120, 170, 210, 0.5)" },
-        { off: 0.24, amp: 15, freq: 0.008, color: "rgba(80, 130, 180, 0.6)" },
-        { off: 0.34, amp: 21, freq: 0.0065, color: "rgba(50, 100, 150, 0.72)" },
-      ];
-      for (const s of swells) {
+      for (const s of TIDE_SWELLS) {
         const y0 = waterY + (h - waterY) * s.off;
         ctx.strokeStyle = s.color;
         ctx.lineWidth = 1.3;
@@ -1095,22 +1121,26 @@ export default function Tide() {
           stoneSkip = null;
         } else if (motion) {
           // the stone in flight: a flat pale fleck arcing hop to hop,
-          // settling into the water after the last touch
-          const pts = [
-            { fx: STONE_LAUNCH_FX, at: 0 },
-            ...stoneSkip.bounces.map((b) => ({ fx: b.fx, at: b.at })),
-          ];
+          // settling into the water after the last touch. Walks the launch
+          // point + bounces in place (no per-frame array/spread/map — the
+          // launch point plus stoneSkip.bounces already hold every (fx, at)
+          // pair the old `pts` array copied).
           let sx = lastBounce.fx * w;
           let sy = waterY;
           let alpha = 0.85;
           if (skipAge <= lastBounce.at) {
-            for (let k = 0; k < pts.length - 1; k++) {
-              if (skipAge >= pts[k].at && skipAge < pts[k + 1].at) {
-                const u = (skipAge - pts[k].at) / (pts[k + 1].at - pts[k].at);
-                sx = lerp(pts[k].fx, pts[k + 1].fx, u) * w;
-                sy = waterY - Math.sin(u * Math.PI) * [16, 11, 7][k];
+            let prevFx: number = STONE_LAUNCH_FX;
+            let prevAt = 0;
+            for (let k = 0; k < stoneSkip.bounces.length; k++) {
+              const b = stoneSkip.bounces[k];
+              if (skipAge >= prevAt && skipAge < b.at) {
+                const u = (skipAge - prevAt) / (b.at - prevAt);
+                sx = lerp(prevFx, b.fx, u) * w;
+                sy = waterY - Math.sin(u * Math.PI) * STONE_HOP_HEIGHTS[k];
                 break;
               }
+              prevFx = b.fx;
+              prevAt = b.at;
             }
           } else {
             const sink = (skipAge - lastBounce.at) / 600;
@@ -1139,18 +1169,11 @@ export default function Tide() {
       ctx.moveTo(staffX, hiY);
       ctx.lineTo(staffX, loY);
       ctx.stroke();
-      const ticks: Array<[number, string]> = [[hiY, "high"], [meanSeaY, "mean"], [loY, "low"]];
       ctx.font = "10px var(--font-mono, monospace)";
       ctx.textBaseline = "middle";
-      for (const [ty, label] of ticks) {
-        ctx.strokeStyle = "rgba(242, 238, 230, 0.35)";
-        ctx.beginPath();
-        ctx.moveTo(staffX - 5, ty);
-        ctx.lineTo(staffX + 5, ty);
-        ctx.stroke();
-        ctx.fillStyle = "rgba(242, 238, 230, 0.42)";
-        ctx.fillText(label, staffX + 10, ty);
-      }
+      drawTideStaffTick(ctx, staffX, hiY, "high");
+      drawTideStaffTick(ctx, staffX, meanSeaY, "mean");
+      drawTideStaffTick(ctx, staffX, loY, "low");
       // float at the current level
       const floatY = meanSeaY - tideN * swing;
       ctx.fillStyle = "rgba(200, 115, 42, 0.95)";
@@ -1279,14 +1302,16 @@ export default function Tide() {
       // Moon halo weather event: soft cool ring around the moon
       drawTideMoonhalo(ctx, weather, simNow, mx, my, moonR);
 
-      // publish geometry for hit-testing
-      geomRef.current = {
-        earth: { x: ex, y: ey, r: earthR },
-        moon: { x: mx, y: my, r: moonR },
-        sun: { x: sx, y: sy, r: sunR },
-        orbitR,
-        sunOrbitR,
-      };
+      // publish geometry for hit-testing — mutate the persistent geom object
+      // in place rather than allocating a fresh nested object graph every
+      // frame; consumers only ever read via geomRef.current.*, never rely
+      // on the object identity changing.
+      const geom = geomRef.current;
+      geom.earth.x = ex; geom.earth.y = ey; geom.earth.r = earthR;
+      geom.moon.x = mx; geom.moon.y = my; geom.moon.r = moonR;
+      geom.sun.x = sx; geom.sun.y = sy; geom.sun.r = sunR;
+      geom.orbitR = orbitR;
+      geom.sunOrbitR = sunOrbitR;
 
       // ── candle on the sill (kept atmosphere + flame-lean) ─────────
       const narrow = w < 700;
@@ -1373,9 +1398,8 @@ export default function Tide() {
       // where a scrub would land — a physical hint, never text.
       if (performance.now() - lastGestureAt > 20000) {
         const slot = Math.floor(now / 9000);
-        const gseed = (n: number) => { const v = Math.sin((slot + n) * 127.1) * 43758.5453; return v - Math.floor(v); };
-        const gx = (0.2 + gseed(0) * 0.6) * w;
-        const gy = waterY + (0.2 + gseed(7) * 0.5) * Math.max(40, h - waterY - 60);
+        const gx = (0.2 + tideGlimmerSeed(slot, 0) * 0.6) * w;
+        const gy = waterY + (0.2 + tideGlimmerSeed(slot, 7) * 0.5) * Math.max(40, h - waterY - 60);
         const pulse = motion ? 0.5 + Math.sin(now / 480) * 0.5 : 0.5;
         ctx.strokeStyle = `rgba(220, 235, 255, ${0.05 + pulse * 0.08})`;
         ctx.lineWidth = 1;
