@@ -47,6 +47,12 @@ import {
 const TAU = Math.PI * 2;
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
+// deterministic hash for the idle glimmer (grammar §6) — a plain function so
+// the render loop never allocates a closure over `slot` every frame while idle
+const glimmerSeed = (slot: number, n: number): number => {
+  const v = Math.sin((slot + n) * 127.1) * 43758.5453;
+  return v - Math.floor(v);
+};
 
 // ── palette ──────────────────────────────────────────────────────────────
 // The cream field with dark comet tails: mostly warm ambers, with blue and
@@ -1321,9 +1327,8 @@ export default function Comb() {
       // floats where a circling finger would stir — physical, never text.
       if (now - lastGestureAt > 20000) {
         const slot = Math.floor(now / 9000);
-        const gseed = (n: number) => { const v = Math.sin((slot + n) * 127.1) * 43758.5453; return v - Math.floor(v); };
-        const gx = (0.22 + gseed(0) * 0.56) * w;
-        const gy = (0.25 + gseed(7) * 0.5) * h;
+        const gx = (0.22 + glimmerSeed(slot, 0) * 0.56) * w;
+        const gy = (0.25 + glimmerSeed(slot, 7) * 0.5) * h;
         const pulse = reduced ? 0.5 : 0.5 + Math.sin(now / 480) * 0.5;
         ctx.strokeStyle = `rgba(124,90,51,${(0.05 + pulse * 0.07).toFixed(3)})`;
         ctx.lineWidth = 1;

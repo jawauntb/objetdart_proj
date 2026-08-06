@@ -567,6 +567,26 @@ export default function MountainPeak() {
     let glDirty = true;
     let lastGlAt = 0;
     let lastSig = Infinity;
+    // Per-stone jitter (colour + x offset) for each standing cairn, derived
+    // once from the cairn's own seed via mulberry32 — the values are static
+    // (the seed never changes for a live cairn), so they are computed once
+    // and cached instead of re-running a fresh PRNG for every stone, every
+    // frame. A dropped/replaced cairn is a new object, so the cache falls
+    // out of the WeakMap on its own.
+    const cairnJitter = new WeakMap<Cairn, number[]>();
+    const jitterForCairn = (c: Cairn): number[] => {
+      let arr = cairnJitter.get(c);
+      if (!arr) {
+        const rng = mulberry32(c.seed);
+        arr = [];
+        for (let s = 0; s < c.stones; s++) arr.push(rng(), rng(), rng(), rng());
+        cairnJitter.set(c, arr);
+      }
+      return arr;
+    };
+    // The reusable scratch array the 2D fallback's cornice pass fills each
+    // frame — same backing store every call instead of a fresh array.
+    const crestsScratch: { x: number; y: number; a: number; w: number }[] = [];
 
     resize();
     const ro = new ResizeObserver(resize);
@@ -687,6 +707,11 @@ export default function MountainPeak() {
       toppled: boolean;
       tier: number;
       intensity: number;
+      /** Same per-stone jitter cache as a cairn's, keyed to this one hold
+       *  instead of a WeakMap since only one gather is ever live: filled
+       *  lazily as `stones` grows, never replayed from the top. */
+      jitter: number[];
+      jrng: (() => number) | null;
     };
     let gather: Gather | null = null;
     let lastGatherSoundAt = 0;
@@ -964,6 +989,8 @@ export default function MountainPeak() {
               toppled: false,
               tier: 0,
               intensity: e.intensity,
+              jitter: [],
+              jrng: null,
             };
             return;
           }
@@ -1171,7 +1198,10 @@ export default function MountainPeak() {
 
       const step = Math.max(2, Math.round(3 / Math.max(0.4, samples)));
       const focal = focalPx();
-      const crests: { x: number; y: number; a: number; w: number }[] = [];
+      // Reused scratch array — same backing store every call instead of a
+      // fresh one each frame this fallback path draws.
+      const crests = crestsScratch;
+      crests.length = 0;
       for (let r = RANGES.length - 1; r >= 0; r--) {
         const d = RANGES[r];
         const oct = r <= 1 ? 6 : r <= 4 ? 5 : r <= 8 ? 4 : 3;
@@ -1377,7 +1407,7 @@ export default function MountainPeak() {
       // ——— the cairns, and what the hand is doing to them ———
       for (let i = 0; i < cairns.length; i++) {
         const c = cairns[i];
-        const rng = mulberry32(c.seed);
+        const jitter = jitterForCairn(c);
         const charge = gather && gather.onCairn === i ? gather.charge : 0;
         const x = c.x * width;
         const y = c.y * height;
@@ -1390,11 +1420,12 @@ export default function MountainPeak() {
           ctx.stroke();
         }
         for (let s = 0; s < c.stones; s++) {
+          const j = s * 4;
           const fade = charge > 0 ? 0.9 - charge * 0.45 : 0.9;
-          ctx.fillStyle = `rgba(${90 + rng() * 40},${85 + rng() * 30},${70 + rng() * 20},${fade})`;
+          ctx.fillStyle = `rgba(${90 + jitter[j] * 40},${85 + jitter[j + 1] * 30},${70 + jitter[j + 2] * 20},${fade})`;
           ctx.beginPath();
           ctx.ellipse(
-            x + (rng() - 0.5) * 4 + shiver * (s / Math.max(1, c.stones)),
+            x + (jitter[j + 3] - 0.5) * 4 + shiver * (s / Math.max(1, c.stones)),
             y - s * 5,
             6 - s * 0.4,
             3.5,
@@ -1422,11 +1453,17 @@ export default function MountainPeak() {
         ctx.lineWidth = 1;
         ctx.arc(g.x, g.y, 9 + dust * 12, 0, Math.PI * 2);
         ctx.stroke();
-        const rng = mulberry32(mix32(Math.round(g.x), Math.round(g.y)));
+        // filled lazily, in order, as `stones` grows — never re-seeded and
+        // replayed from the top the way a fresh mulberry32() per frame would
+        if (!g.jrng) g.jrng = mulberry32(mix32(Math.round(g.x), Math.round(g.y)));
+        while (g.jitter.length < g.stones * 4) {
+          g.jitter.push(g.jrng(), g.jrng(), g.jrng(), g.jrng());
+        }
         for (let s = 0; s < g.stones; s++) {
-          ctx.fillStyle = `rgba(${96 + rng() * 40},${90 + rng() * 30},${74 + rng() * 20},0.8)`;
+          const j = s * 4;
+          ctx.fillStyle = `rgba(${96 + g.jitter[j] * 40},${90 + g.jitter[j + 1] * 30},${74 + g.jitter[j + 2] * 20},0.8)`;
           ctx.beginPath();
-          ctx.ellipse(g.x + (rng() - 0.5) * 4, g.y - s * 5, 6 - s * 0.4, 3.5, 0, 0, Math.PI * 2);
+          ctx.ellipse(g.x + (g.jitter[j + 3] - 0.5) * 4, g.y - s * 5, 6 - s * 0.4, 3.5, 0, 0, Math.PI * 2);
           ctx.fill();
         }
       }

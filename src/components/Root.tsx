@@ -700,6 +700,11 @@ export default function Root() {
     const nodeUB = new Float32Array(MAX_NODES * 4);
     const rippleU = new Float32Array(MAX_RIPPLES * 4);
     const ripples: { x: number; y: number; t0: number; intensity: number }[] = [];
+    // Reused scratch maps for the per-frame ledger↔population sync below —
+    // the Map object itself is allocated once; every frame only clears and
+    // refills it, so the node-count-bounded lookups stay allocation-free.
+    const frameLedgerById = new Map<number, RootNode>();
+    const frameItemById = new Map<number, TipView>();
 
     // ——— the live axes the shader lenses over, all continuous ———
     let lens = 0;
@@ -764,19 +769,26 @@ export default function Root() {
     const syncPopulationFromLedger = (now: number) => {
       const items = population.items;
       const ledger: RootNode[] = state.nodes;
-      const byId = new Map<number, RootNode>();
+      const byId = frameLedgerById;
+      byId.clear();
       for (const n of ledger) byId.set(n.id, n);
+      const itemById = frameItemById;
+      itemById.clear();
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.presence >= 1) itemById.set(item.id, item);
+      }
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
         if (item.presence < 1) continue;
-        if (!ledger.some((n) => n.id === item.id)) item.presence = 0.999;
+        if (!byId.has(item.id)) item.presence = 0.999;
       }
       for (const n of ledger) {
         if (n.parentId === null) continue;
         const parent = byId.get(n.parentId);
         const parentNx = parent ? parent.x : n.x;
         const parentNy = parent ? parent.y : n.y;
-        let item = items.find((it) => it.id === n.id && it.presence >= 1);
+        let item = itemById.get(n.id);
         if (!item) {
           item = {
             id: n.id,
@@ -1283,7 +1295,8 @@ export default function Root() {
           clocksFrom({ time: reduced ? 12 : t, turbulence: agitation, reducedMotion: reduced }),
           prog,
         );
-        const byId = new Map<number, RootNode>();
+        const byId = frameLedgerById;
+        byId.clear();
         for (const n of state.nodes) byId.set(n.id, n);
         let nN = 0;
         for (const n of state.nodes) {

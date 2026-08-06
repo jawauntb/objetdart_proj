@@ -1154,12 +1154,25 @@ export default function Beam() {
     window.addEventListener("resize", resize);
 
     // ── weather blending ─────────────────────────────────────────────────
-    const setV3 = (u: { value: THREE.Vector3 }, day: number[], nt: number[], m: number) => {
-      u.value.set(mix(day[0], nt[0], m), mix(day[1], nt[1], m), mix(day[2], nt[2], m));
+    // fused day-blend + night-blend in one pass — no intermediate array
+    // (the old blend3() returned a fresh [r,g,b] literal per call, and this
+    // runs 9x every single frame; setV3 now takes the two source triples
+    // directly and writes straight into the uniform's Vector3, so weather
+    // blending is steady-state garbage-free)
+    const setV3 = (
+      u: { value: THREE.Vector3 },
+      a: number[], b: number[], t: number,
+      nt: number[], m: number,
+    ) => {
+      u.value.set(
+        mix(mix(a[0], b[0], t), nt[0], m),
+        mix(mix(a[1], b[1], t), nt[1], m),
+        mix(mix(a[2], b[2], t), nt[2], m),
+      );
     };
-    const blend3 = (a: number[], b: number[], t: number): number[] => [
-      mix(a[0], b[0], t), mix(a[1], b[1], t), mix(a[2], b[2], t),
-    ];
+    // fixed 4-element list of uniform slots — allocated once, reused every
+    // frame instead of a new array literal per frame
+    const pals = [uniforms.uPal0, uniforms.uPal1, uniforms.uPal2, uniforms.uPal3];
 
     let raf = 0;
     let last = performance.now();
@@ -1279,15 +1292,14 @@ export default function Beam() {
       const A = WEATHERS[wi], B = WEATHERS[(wi + 1) % WEATHERS.length];
       const dusk = clamp(uniforms.uPupil.value * 0.55, 0, 1);
       const palMix = Math.max(nightMix, dusk * 0.4);
-      const pals = [uniforms.uPal0, uniforms.uPal1, uniforms.uPal2, uniforms.uPal3];
       for (let i = 0; i < 4; i++) {
-        setV3(pals[i], blend3(A.pal[i], B.pal[i], sm), NIGHT.pal[i], palMix);
+        setV3(pals[i], A.pal[i], B.pal[i], sm, NIGHT.pal[i], palMix);
       }
-      setV3(uniforms.uWarm, blend3(A.pal[0], B.pal[0], sm), NIGHT.pal[0], palMix);
-      setV3(uniforms.uCool, blend3(A.pal[2], B.pal[2], sm), NIGHT.pal[2], palMix);
-      setV3(uniforms.uTail, blend3(A.tail, B.tail, sm), NIGHT.tail, nightMix);
-      setV3(uniforms.uBg0, blend3(A.bg0, B.bg0, sm), NIGHT.bg0, Math.max(nightMix, dusk));
-      setV3(uniforms.uBg1, blend3(A.bg1, B.bg1, sm), NIGHT.bg1, Math.max(nightMix, dusk));
+      setV3(uniforms.uWarm, A.pal[0], B.pal[0], sm, NIGHT.pal[0], palMix);
+      setV3(uniforms.uCool, A.pal[2], B.pal[2], sm, NIGHT.pal[2], palMix);
+      setV3(uniforms.uTail, A.tail, B.tail, sm, NIGHT.tail, nightMix);
+      setV3(uniforms.uBg0, A.bg0, B.bg0, sm, NIGHT.bg0, Math.max(nightMix, dusk));
+      setV3(uniforms.uBg1, A.bg1, B.bg1, sm, NIGHT.bg1, Math.max(nightMix, dusk));
       uniforms.uBloomAmt.value = 0.92 + nightMix * 0.15 + uniforms.uPupil.value * 0.3;
 
       // apply the twist on top of the slow rotation for this frame

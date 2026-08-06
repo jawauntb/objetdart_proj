@@ -133,6 +133,15 @@ function seasonClimate(phase: number): Climate {
 
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 
+/** Lens readout tint per pool — fixed, so the draw loop never rebuilds it. */
+const POOL_TINT: Record<string, string> = {
+  litter: "206, 176, 116",
+  humus: "112, 76, 46",
+  mineral: "186, 190, 196",
+  mycelium: "228, 216, 186",
+  root: "216, 186, 130",
+};
+
 // ——— the ground, as one shader ——————————————————————————————————
 
 const FRAG_GROUND = `
@@ -1262,6 +1271,9 @@ export default function SoilGround() {
     window.addEventListener("pagehide", onHide);
 
     const register = spectralRegisterFor(entryScaleFor("/soil") ?? -2.5);
+    // Reused every frame rather than a fresh literal — clocksFrom only reads
+    // it synchronously and never keeps the reference.
+    const clocksInput = { time: 0, turbulence: 0, register, reducedMotion: false };
 
     // ——— the loop: O(visible), one rAF, never O(history) ———
     const draw = (now: number) => {
@@ -1306,12 +1318,10 @@ export default function SoilGround() {
 
       const mix = mixOf(soil);
       const t = audio.getAudioTime() ?? now / 1000;
-      const clocks = clocksFrom({
-        time: t,
-        turbulence: getTurbulence(),
-        register,
-        reducedMotion: reduced,
-      });
+      clocksInput.time = t;
+      clocksInput.turbulence = getTurbulence();
+      clocksInput.reducedMotion = reduced;
+      const clocks = clocksFrom(clocksInput);
 
       // ——— the ground ———
       let width = 0;
@@ -1370,18 +1380,24 @@ export default function SoilGround() {
         ctx.fillRect(0, 0, width, height);
         const h = HORIZON * height;
         let y = h;
-        const bands: [number, string][] = [
-          [mix.litter * 0.62 + 0.02, "#3a2716"],
-          [mix.humus * 0.66 + 0.06, "#231810"],
-          [mix.mineral * 0.8 + 0.1, "#2b241d"],
-          [1, "#161210"],
-        ];
-        for (const [thick, color] of bands) {
-          const hh = thick * (height - h);
-          ctx.fillStyle = color;
-          ctx.fillRect(0, y, width, hh);
-          y += hh;
-        }
+        // Unrolled rather than iterated over a per-frame tuple array — same
+        // four bands, same order, no allocation.
+        let hh = (mix.litter * 0.62 + 0.02) * (height - h);
+        ctx.fillStyle = "#3a2716";
+        ctx.fillRect(0, y, width, hh);
+        y += hh;
+        hh = (mix.humus * 0.66 + 0.06) * (height - h);
+        ctx.fillStyle = "#231810";
+        ctx.fillRect(0, y, width, hh);
+        y += hh;
+        hh = (mix.mineral * 0.8 + 0.1) * (height - h);
+        ctx.fillStyle = "#2b241d";
+        ctx.fillRect(0, y, width, hh);
+        y += hh;
+        hh = 1 * (height - h);
+        ctx.fillStyle = "#161210";
+        ctx.fillRect(0, y, width, hh);
+        y += hh;
       }
 
       for (let i = marks.length - 1; i >= 0; i--) {
@@ -1417,17 +1433,10 @@ export default function SoilGround() {
         const pad = 16;
         const barW = Math.min(width - pad * 2, 300);
         const barY = height - 96;
-        const tint: Record<string, string> = {
-          litter: "206, 176, 116",
-          humus: "112, 76, 46",
-          mineral: "186, 190, 196",
-          mycelium: "228, 216, 186",
-          root: "216, 186, 130",
-        };
         let x = pad;
         for (const p of POOLS) {
           const w = barW * mix[p];
-          ctx.fillStyle = `rgba(${tint[p]}, 0.72)`;
+          ctx.fillStyle = `rgba(${POOL_TINT[p]}, 0.72)`;
           ctx.fillRect(x, barY, Math.max(0, w - 1), 9);
           x += w;
         }
@@ -1437,7 +1446,14 @@ export default function SoilGround() {
         const tim = timbreOfState(soil);
         let roots = 0;
         for (const o of orgs) if (o.kind === "root") roots++;
-        ctx.fillText(POOLS.map((p) => `${p} ${(soil.pools[p] * 100).toFixed(0)}`).join("  "), pad, barY + 24);
+        // Built with a loop rather than POOLS.map().join() — same string,
+        // no throwaway array on a path the lens keeps open for seconds.
+        let poolsLine = "";
+        for (let i = 0; i < POOLS.length; i++) {
+          if (i > 0) poolsLine += "  ";
+          poolsLine += `${POOLS[i]} ${(soil.pools[POOLS[i]] * 100).toFixed(0)}`;
+        }
+        ctx.fillText(poolsLine, pad, barY + 24);
         ctx.fillText(
           `rotted ${(decompositionOf(mix) * 100).toFixed(0)}%  ${tim.centroidHz.toFixed(0)}hz  ring ${tim.ringSec.toFixed(2)}s`,
           pad,
