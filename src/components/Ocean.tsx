@@ -102,6 +102,20 @@ export default function Ocean() {
     let uRipplesLoc: WebGLUniformLocation | null = null;
     let uRippleCountLoc: WebGLUniformLocation | null = null;
     let waterBuf: WebGLBuffer | null = null;
+    // Cache for the 2D fallback context on the water canvas (used only when
+    // WebGL is unavailable, or transiently during a context-loss/restore
+    // cycle). A canvas's context type is fixed after the first getContext()
+    // call, so the lookup only ever needs to happen once — avoids calling
+    // getContext() again on every fallback frame.
+    let waterCtx2d: CanvasRenderingContext2D | null = null;
+    let waterCtx2dInit = false;
+    // Scratch buffer for the per-frame ripple uniform upload — allocated
+    // once and overwritten in place every frame instead of a fresh
+    // Float32Array per draw call. Only the first `count*4` floats are ever
+    // read (uRippleCount gates the shader loop), so stale trailing values
+    // from a previous, larger frame are harmless.
+    const RIPPLE_UNIFORM_MAX = 12;
+    const rippleUniformData = new Float32Array(RIPPLE_UNIFORM_MAX * 4);
 
     // Factored so the whole program (shaders, buffer, uniform locations)
     // can be rebuilt after a lost/restored context — GPU resources don't
@@ -1401,29 +1415,31 @@ export default function Ocean() {
         if (uTiltLoc) gl.uniform2f(uTiltLoc, tiltSmoothed.x * 0.028 + windX * 0.02, tiltSmoothed.y * 0.022);
 
         if (uRipplesLoc && uRippleCountLoc) {
-          const MAX = 12;
-          const data = new Float32Array(MAX * 4);
           const cw = surf.clientWidth || 1;
           const ch = surf.clientHeight || 1;
           let count = 0;
-          for (let i = ripples.current.length - 1; i >= 0 && count < MAX; i--) {
+          for (let i = ripples.current.length - 1; i >= 0 && count < RIPPLE_UNIFORM_MAX; i--) {
             const r = ripples.current[i];
             const age = (simNow - r.t0) / 1000;
             if (age > 2.8) continue;
-            data[count * 4 + 0] = r.x / cw;
-            data[count * 4 + 1] = r.y / ch;
-            data[count * 4 + 2] = age;
-            data[count * 4 + 3] = r.strength;
+            rippleUniformData[count * 4 + 0] = r.x / cw;
+            rippleUniformData[count * 4 + 1] = r.y / ch;
+            rippleUniformData[count * 4 + 2] = age;
+            rippleUniformData[count * 4 + 3] = r.strength;
             count++;
           }
-          gl.uniform4fv(uRipplesLoc, data);
+          gl.uniform4fv(uRipplesLoc, rippleUniformData);
           gl.uniform1i(uRippleCountLoc, count);
         }
 
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       } else {
         // fallback depth gradient
-        const wctx = water.getContext("2d");
+        if (!waterCtx2dInit) {
+          waterCtx2dInit = true;
+          waterCtx2d = water.getContext("2d");
+        }
+        const wctx = waterCtx2d;
         if (wctx) {
           const dpr = resolveDpr(isEmbeddedFrame() ? "medium" : "high", { embedded: isEmbeddedFrame(), maxDpr: 2 });
           wctx.setTransform(dpr, 0, 0, dpr, 0, 0);

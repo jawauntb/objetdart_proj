@@ -687,6 +687,16 @@ function drawTrace(
   ctx.restore();
 }
 
+/** Reusable per-frame scratch for a vine's sampled curve (SoA typed arrays,
+ * grown only when a tier bump needs more samples than currently held) — the
+ * points a vine walks are read back three times a frame (stroke, leaves,
+ * decay tip) without allocating an {x,y,v,u} object per sample per system. */
+type VineScratch = {
+  x: Float64Array;
+  y: Float64Array;
+  v: Float64Array;
+};
+
 type SystemFx = {
   dt: number;
   reduce: boolean;
@@ -697,6 +707,7 @@ type SystemFx = {
   /** Governed detail (room-runtime): scales the vine's sample count by tier. */
   detail: number;
   grad: GradCache;
+  scratch: VineScratch;
 };
 
 const RETIRE_MS = 1500;
@@ -756,8 +767,17 @@ function drawSystem(
     return { x, y, v, u };
   };
 
-  const points: Array<{ x: number; y: number; v: number; u: number }> = [];
-  for (let i = 0; i <= samples; i += 1) points.push(pointAt((i / samples) * progress));
+  // sampled once into the shared scratch (SoA typed arrays, grown not
+  // reallocated) instead of pushing an {x,y,v,u} literal per sample — the
+  // hazard the performance contract names for per-frame object churn
+  const scratch = fx.scratch;
+  const pointCount = samples + 1;
+  for (let i = 0; i <= samples; i += 1) {
+    const p = pointAt((i / samples) * progress);
+    scratch.x[i] = p.x;
+    scratch.y[i] = p.y;
+    scratch.v[i] = p.v;
+  }
 
   ctx.save();
   ctx.translate(rootX, rootY);
@@ -789,10 +809,11 @@ function drawSystem(
   // stroke the vine with the cached per-mode gradient (0,0)→(1,0), mapped
   // onto the actual root→tip direction via transform instead of building a
   // fresh CanvasGradient every frame (the performance contract's hazard).
+  const tipX = pointCount > 0 ? scratch.x[pointCount - 1] : rootX;
+  const tipY = pointCount > 0 ? scratch.y[pointCount - 1] : rootY;
   {
-    const tip = points[points.length - 1] ?? { x: rootX, y: rootY };
-    const tipAngle = Math.atan2(tip.y - rootY, tip.x - rootX);
-    const tipDist = Math.max(1, Math.hypot(tip.x - rootX, tip.y - rootY));
+    const tipAngle = Math.atan2(tipY - rootY, tipX - rootX);
+    const tipDist = Math.max(1, Math.hypot(tipX - rootX, tipY - rootY));
     const ca = Math.cos(-tipAngle);
     const sa = Math.sin(-tipAngle);
     ctx.save();
@@ -805,29 +826,33 @@ function drawSystem(
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
     ctx.beginPath();
-    points.forEach((point, index) => {
-      const dx = point.x - rootX;
-      const dy = point.y - rootY;
+    for (let index = 0; index < pointCount; index += 1) {
+      const dx = scratch.x[index] - rootX;
+      const dy = scratch.y[index] - rootY;
       const lx = (dx * ca - dy * sa) / tipDist;
       const ly = (dx * sa + dy * ca) / tipDist;
       if (index === 0) ctx.moveTo(lx, ly);
       else ctx.lineTo(lx, ly);
-    });
+    }
     ctx.stroke();
     ctx.restore();
   }
 
-  for (let i = 5; i < points.length; i += 6) {
-    const point = points[i];
-    const next = points[Math.min(points.length - 1, i + 1)] ?? point;
-    const angle = Math.atan2(next.y - point.y, next.x - point.x);
+  for (let i = 5; i < pointCount; i += 6) {
+    const px = scratch.x[i];
+    const py = scratch.y[i];
+    const nextI = Math.min(pointCount - 1, i + 1);
+    const nx = scratch.x[nextI];
+    const ny = scratch.y[nextI];
+    const pv = scratch.v[i];
+    const angle = Math.atan2(ny - py, nx - px);
     const side = i % 2 === 0 ? -1 : 1;
-    const leaf = (5 + point.v * 9) * (1 - collapse * 0.45) * life;
+    const leaf = (5 + pv * 9) * (1 - collapse * 0.45) * life;
     if (leaf < 2) continue;
     ctx.save();
-    ctx.translate(point.x, point.y);
+    ctx.translate(px, py);
     ctx.rotate(angle + side * 1.15);
-    ctx.fillStyle = colorAlpha(tone, alpha * (0.22 + point.v * 0.26));
+    ctx.fillStyle = colorAlpha(tone, alpha * (0.22 + pv * 0.26));
     ctx.beginPath();
     ctx.ellipse(leaf * 0.62, 0, leaf, leaf * 0.34, 0, 0, Math.PI * 2);
     ctx.fill();
@@ -887,13 +912,12 @@ function drawSystem(
   }
 
   if (collapse > 0.08 || system.mode === "decay") {
-    const tip = points[points.length - 1];
     const fallAlpha = alpha * (collapse * 0.62 + (system.mode === "decay" ? 0.16 : 0));
     for (let i = 0; i < 5; i += 1) {
       const n = hash(system.id * 13 + i * 8);
       const fallT = (clockMs * (0.09 + n * 0.04) + n) % 1;
-      const px = tip.x + (n - 0.5) * 54 + params.gravityX * 22 + params.wind * 30;
-      const py = tip.y + fallT * (80 + i * 12);
+      const px = tipX + (n - 0.5) * 54 + params.gravityX * 22 + params.wind * 30;
+      const py = tipY + fallT * (80 + i * 12);
       ctx.fillStyle = colorAlpha(tone, fallAlpha * (1 - fallT));
       ctx.beginPath();
       ctx.ellipse(px, py, 2.2 + n * 3, 0.8 + n * 1.8, system.phase + i, 0, Math.PI * 2);
@@ -1019,6 +1043,30 @@ export default function Growth() {
     let sleeping = docHidden || galleryPaused;
     const gradCache = buildGradCache(ctx);
     let bgGrad: { sky: CanvasGradient } | null = null;
+    // a vine's sampled curve, shared across every system/frame — grown only
+    // when a tier bump asks for more samples than currently held, never
+    // reallocated per system per frame (see drawSystem's scratch usage)
+    let vineScratch: VineScratch = {
+      x: new Float64Array(40),
+      y: new Float64Array(40),
+      v: new Float64Array(40),
+    };
+    const ensureVineScratch = (need: number) => {
+      if (vineScratch.x.length >= need) return;
+      const size = need + 8;
+      vineScratch = { x: new Float64Array(size), y: new Float64Array(size), v: new Float64Array(size) };
+    };
+    // reused every frame (fields mutated in draw, never recreated) — the
+    // per-system draw fx no longer allocates a fresh object each rAF tick
+    const fx: SystemFx = {
+      dt: 0,
+      reduce: false,
+      breath: 0,
+      onBloom,
+      detail: 1,
+      grad: gradCache,
+      scratch: vineScratch,
+    };
     // two-finger pan (grammar §5): a decorative depth offset on the field's
     // backdrop/vector-field/global curve layers, eased and self-centering
     let panX = 0;

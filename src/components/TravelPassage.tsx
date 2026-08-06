@@ -1055,10 +1055,11 @@ function makeBeadsFilm(seed: number): Film | null {
     drawForgeDust(ctx, w, h, seed ^ 0xd057, smoothstep(0.25, 0.75, u) * 0.55, u * 3);
     // The other worlds condense in, one by one.
     const beadIn = smoothstep(0.35, 0.85, u);
-    cast.forEach((cw, i) => {
+    for (let i = 0; i < cast.length; i++) {
+      const cw = cast[i];
       const a = clamp01(beadIn * cast.length - i * 0.55);
       drawBead(ctx, cw, anchors[i].x * w, anchors[i].y * h, m * 0.05 * cw.radius01 * 1.6, a * 0.95);
-    });
+    }
     // The globe: from filling the frame to one bead among them.
     const R = lerp(0.62 * m, 0.055 * m, easeInOut(smoothstep(0.05, 0.9, u)));
     const gx = lerp(0.5, 0.36, smoothstep(0.4, 0.95, u)) * w;
@@ -1112,7 +1113,8 @@ function makeOrbitfallFilm(seed: number): Film {
       }
     }
     // The supporting worlds settle onto their rails.
-    cast.forEach((cw, i) => {
+    for (let i = 0; i < cast.length; i++) {
+      const cw = cast[i];
       const or = orbits[i + 1];
       const th = free[i].th + u * 0.6;
       const ox = cx + Math.cos(th) * or * m * 1.35;
@@ -1120,7 +1122,7 @@ function makeOrbitfallFilm(seed: number): Film {
       const x = lerp(free[i].x * w, ox, settle);
       const y = lerp(free[i].y * h, oy, settle);
       drawBead(ctx, cw, x, y, m * 0.045 * cw.radius01 * (1.5 - u * 0.5), 0.95);
-    });
+    }
     // The sun ignites at centre — candle-gold, then white-hot core.
     if (ignite > 0) {
       const sunR = m * (0.02 + ignite * 0.05);
@@ -1998,6 +2000,9 @@ function makeQuantumFilm(seed: number): Film {
     sy: 0.28 + rng() * 0.4,
     ang: (i / 3) * TAU - Math.PI / 2,
   }));
+  // Reused every frame — the triplet's current screen position, written in
+  // place instead of a fresh array/objects per tick.
+  const pos = quarks.map(() => ({ x: 0, y: 0 }));
 
   const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
     const m = Math.min(w, h);
@@ -2018,11 +2023,13 @@ function makeQuantumFilm(seed: number): Film {
     const cx = w / 2;
     const cy = h / 2;
     const R = m * 0.1;
-    const pos = quarks.map((q) => {
+    for (let i = 0; i < quarks.length; i++) {
+      const q = quarks[i];
       const tx = cx + Math.cos(q.ang) * R;
       const ty = cy + Math.sin(q.ang) * R;
-      return { x: lerp(q.sx * w, tx, condense), y: lerp(q.sy * h, ty, condense) };
-    });
+      pos[i].x = lerp(q.sx * w, tx, condense);
+      pos[i].y = lerp(q.sy * h, ty, condense);
+    }
 
     // Confinement tubes: they draw closed as the triplet condenses.
     const tubeA = smoothstep(0.3, 0.85, u);
@@ -2073,6 +2080,9 @@ function makeConfineFilm(seed: number): Film {
   const chargeSprites = CHARGE_COLORS.map((c) => makeGlowSprite(mix(c, PAPER, 0.3), c, 0.5));
   const skinSprite = makeGlowSprite(mix(PAPER, CANDLE, 0.25), CANDLE, 0.4);
   const quarks = CHARGE_COLORS.map((_, i) => ({ ang: (i / 3) * TAU - Math.PI / 2 }));
+  // Reused every frame — written in place instead of a fresh array/objects
+  // per tick.
+  const pos = quarks.map(() => ({ x: 0, y: 0 }));
   // A quiet scatter behind everything — the vacuum this nucleon sits in.
   const dust: Array<{ x: number; y: number; ph: number }> = [];
   for (let i = 0; i < 60; i++) dust.push({ x: rng(), y: rng(), ph: rng() * TAU });
@@ -2092,10 +2102,11 @@ function makeConfineFilm(seed: number): Film {
     const cx = w / 2;
     const cy = h / 2;
     const R = m * 0.16 * (1 - close * 0.94);
-    const pos = quarks.map((q) => ({
-      x: cx + Math.cos(q.ang) * R,
-      y: cy + Math.sin(q.ang) * R,
-    }));
+    for (let i = 0; i < quarks.length; i++) {
+      const q = quarks[i];
+      pos[i].x = cx + Math.cos(q.ang) * R;
+      pos[i].y = cy + Math.sin(q.ang) * R;
+    }
 
     const tubeA = 1 - smoothstep(0.55, 0.92, u) * 0.85;
     ctx.save();
@@ -2284,6 +2295,13 @@ function makeChainFilm(seed: number): Film {
     ang: rng() > 0.5 ? -1 : 1,
     col: sideColors[Math.floor(rng() * sideColors.length)],
   }));
+  // Reused every frame — the backbone's current node positions, written in
+  // place instead of a fresh array/objects per tick.
+  const nodes: Array<{ x: number; y: number; a: number }> = Array.from({ length: CHAIN_LINKS }, () => ({
+    x: 0,
+    y: 0,
+    a: 0,
+  }));
 
   const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
     const m = Math.min(w, h);
@@ -2298,12 +2316,12 @@ function makeChainFilm(seed: number): Film {
     const amp = lerp(0, m * 0.05, smoothstep(0.1, 0.55, u));
     const x0 = cx - span / 2;
 
-    const nodes: Array<{ x: number; y: number; a: number }> = [];
     for (let i = 0; i < CHAIN_LINKS; i++) {
       const reach = clamp01(grow * CHAIN_LINKS - i * 0.75);
-      const x = x0 + step * i;
-      const y = cy + (i % 2 === 0 ? -amp : amp);
-      nodes.push({ x, y, a: reach });
+      const n = nodes[i];
+      n.x = x0 + step * i;
+      n.y = cy + (i % 2 === 0 ? -amp : amp);
+      n.a = reach;
     }
 
     ctx.strokeStyle = rgba(mix(PAPER, CANDLE, 0.1), 0.6);
@@ -2373,9 +2391,42 @@ const BASE_TINTS: RGB[] = [
  *   u = 1   it has twisted closed into the double helix, rungs snapped in
  *           as the strands wind
  */
+function drawHelixStrand(
+  ctx: CanvasRenderingContext2D,
+  pts: Array<{ x: number; y: number; z: number }>,
+): void {
+  ctx.beginPath();
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    if (i === 0) ctx.moveTo(p.x, p.y);
+    else ctx.lineTo(p.x, p.y);
+  }
+  ctx.stroke();
+}
+
+function drawHelixNode(ctx: CanvasRenderingContext2D, p: { x: number; y: number; z: number }, m: number, nodeA: number): void {
+  const depth = 0.5 + 0.5 * p.z;
+  ctx.fillStyle = rgba(mix(PAPER, CANDLE, 0.1), (0.5 + 0.5 * depth) * (0.3 + 0.7 * nodeA));
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, m * 0.006 * (0.6 + 0.4 * depth), 0, TAU);
+  ctx.fill();
+}
+
 function makeHelixFilm(seed: number): Film {
   const rng = seededRandom(seed);
   const bases = Array.from({ length: HELIX_N }, () => Math.floor(rng() * BASE_TINTS.length));
+  // Reused every frame — the two backbones' current screen positions,
+  // written in place instead of two fresh arrays of objects per tick.
+  const strandA: Array<{ x: number; y: number; z: number }> = Array.from({ length: HELIX_N }, () => ({
+    x: 0,
+    y: 0,
+    z: 0,
+  }));
+  const strandB: Array<{ x: number; y: number; z: number }> = Array.from({ length: HELIX_N }, () => ({
+    x: 0,
+    y: 0,
+    z: 0,
+  }));
 
   const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
     const m = Math.min(w, h);
@@ -2388,29 +2439,24 @@ function makeHelixFilm(seed: number): Film {
     const twist = easeInOut(smoothstep(0.05, 0.85, u));
     const radius = m * 0.09 * twist;
 
-    const strandA: Array<{ x: number; y: number; z: number }> = [];
-    const strandB: Array<{ x: number; y: number; z: number }> = [];
     for (let i = 0; i < HELIX_N; i++) {
       const t = i / (HELIX_N - 1);
       const ang = t * TAU * HELIX_TURNS;
       const y = y0 + t * span;
-      strandA.push({ x: cx + Math.cos(ang) * radius, y, z: Math.sin(ang) });
-      strandB.push({ x: cx + Math.cos(ang + Math.PI) * radius, y, z: Math.sin(ang + Math.PI) });
+      const a = strandA[i];
+      a.x = cx + Math.cos(ang) * radius;
+      a.y = y;
+      a.z = Math.sin(ang);
+      const b = strandB[i];
+      b.x = cx + Math.cos(ang + Math.PI) * radius;
+      b.y = y;
+      b.z = Math.sin(ang + Math.PI);
     }
 
-    const drawStrand = (pts: typeof strandA) => {
-      ctx.beginPath();
-      for (let i = 0; i < pts.length; i++) {
-        const p = pts[i];
-        if (i === 0) ctx.moveTo(p.x, p.y);
-        else ctx.lineTo(p.x, p.y);
-      }
-      ctx.stroke();
-    };
     ctx.strokeStyle = rgba(mix(PAPER, CANDLE, 0.15), 0.75);
     ctx.lineWidth = Math.max(1.2, m * 0.007);
-    drawStrand(strandA);
-    drawStrand(strandB);
+    drawHelixStrand(ctx, strandA);
+    drawHelixStrand(ctx, strandB);
 
     // Rungs snap in progressively, back strand behind, front in front.
     const rungIn = smoothstep(0.25, 0.98, u);
@@ -2430,13 +2476,8 @@ function makeHelixFilm(seed: number): Film {
     // Backbone nodes, brighter once the twist has begun to open them out.
     const nodeA = clamp01(twist * 4);
     for (let i = 0; i < HELIX_N; i++) {
-      for (const p of [strandA[i], strandB[i]]) {
-        const depth = 0.5 + 0.5 * p.z;
-        ctx.fillStyle = rgba(mix(PAPER, CANDLE, 0.1), (0.5 + 0.5 * depth) * (0.3 + 0.7 * nodeA));
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, m * 0.006 * (0.6 + 0.4 * depth), 0, TAU);
-        ctx.fill();
-      }
+      drawHelixNode(ctx, strandA[i], m, nodeA);
+      drawHelixNode(ctx, strandB[i], m, nodeA);
     }
   };
 
@@ -2650,6 +2691,9 @@ function makeSheetFilm(seed: number): Film {
   const scatter = anchors.map((a, i) => (i === centerI ? a : { x: rng(), y: rng() }));
   const membraneCol = mix(PAPER, AURORA, 0.3);
   const cellR = 0.1;
+  // Reused every frame — the settled screen position of each cell, written
+  // in place instead of a fresh array/objects per tick.
+  const pos = anchors.map(() => ({ x: 0, y: 0 }));
 
   const renderFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, u: number): void => {
     const m = Math.min(w, h);
@@ -2662,12 +2706,14 @@ function makeSheetFilm(seed: number): Film {
     const cy = h / 2;
 
     const cellIn = smoothstep(0.05, 0.7, u);
-    const pos = anchors.map((a, i) => {
+    for (let i = 0; i < anchors.length; i++) {
+      const a = anchors[i];
       const s = scatter[i];
       const nx = lerp(s.x, a.x, settle);
       const ny = lerp(s.y, a.y, settle);
-      return { x: cx + (nx - 0.5) * m * zoomOut, y: cy + (ny - 0.5) * m * zoomOut };
-    });
+      pos[i].x = cx + (nx - 0.5) * m * zoomOut;
+      pos[i].y = cy + (ny - 0.5) * m * zoomOut;
+    }
 
     for (let i = 0; i < pos.length; i++) {
       const reach = i === centerI ? 1 : clamp01(cellIn * pos.length - i * 0.3);

@@ -163,6 +163,15 @@ type Stored = {
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const clamp01 = (v: number) => clamp(v, 0, 1);
 
+// tubesOf's result depends only on kind ("pair" | "triplet") and never
+// changes for that kind — precompute both once so the per-frame physics and
+// draw passes (once per hadron, every frame) index a fixed array instead of
+// allocating a new one on every call.
+const TUBES_PAIR = tubesOf("pair");
+const TUBES_TRIPLET = tubesOf("triplet");
+const tubesFor = (kind: "pair" | "triplet"): Array<[number, number]> =>
+  kind === "pair" ? TUBES_PAIR : TUBES_TRIPLET;
+
 function colorAlpha(hex: string, alpha: number) {
   const v = parseInt(hex.slice(1), 16);
   return `rgba(${(v >> 16) & 255}, ${(v >> 8) & 255}, ${v & 255}, ${alpha})`;
@@ -783,7 +792,7 @@ export default function QuarksVacuum() {
 
     /** The room's one great law, executed: the tube snaps into a new pair. */
     const snap = (h: HadronEnt, tubeIdx: number) => {
-      const tubes = tubesOf(h.morph.kind);
+      const tubes = tubesFor(h.morph.kind);
       const [i, j] = tubes[tubeIdx];
       const qa = h.quarks[i];
       const qb = h.quarks[j];
@@ -1748,7 +1757,7 @@ export default function QuarksVacuum() {
       const feltAlpha = (1 - lens) * fade;
       const lensAlpha = lens * fade;
       const grow = h.closed ? 1 : 0.25 + 0.75 * h.growth;
-      const tubes = tubesOf(morph.kind);
+      const tubes = tubesFor(morph.kind);
       const shiverAmp = reduce ? 0 : h.shiver * 1.6;
 
       // cache screen coords
@@ -1998,7 +2007,7 @@ export default function QuarksVacuum() {
           dropFromResonance(h);
         }
 
-        const tubes = tubesOf(h.morph.kind);
+        const tubes = tubesFor(h.morph.kind);
         const dragged = drag.hadronId === h.id;
 
         // tube forces on screen geometry, applied in normalized space

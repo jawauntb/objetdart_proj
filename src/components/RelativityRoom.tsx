@@ -308,6 +308,14 @@ export default function RelativityRoom() {
       [0.5, "rgba(180,200,245,0.18)"],
       [1, "rgba(0,0,0,0)"],
     ]);
+    // same technique for the ray head glow: fixed color and radius, only
+    // alpha varies frame to frame, so a per-ray createRadialGradient (was
+    // called once per ray, every frame) becomes one cached sprite blitted
+    // with globalAlpha standing in for the baked 0.9 center alpha.
+    const rayHeadSprite = makeRadialSprite([
+      [0, "rgba(240, 246, 255, 0.9)"],
+      [1, "rgba(0,0,0,0)"],
+    ]);
 
     // ————— performance contract (room-runtime) —————
     const gov = createFrameGovernor();
@@ -1490,6 +1498,10 @@ export default function RelativityRoom() {
     wrap.addEventListener("blur", onBlur);
 
     // ————— field geometry: masses well the mesh, pulses ring through it —————
+    // one reused scratch object instead of a fresh { dx, dy } per call — this
+    // runs cols*rows times per frame in the mesh loop below, so allocating
+    // there was the single largest per-frame churn source in this room.
+    const dispScratch = { dx: 0, dy: 0 };
     const dispAt = (x: number, y: number, pts: MassPoint[]): { dx: number; dy: number } => {
       let dx = 0;
       let dy = 0;
@@ -1516,7 +1528,9 @@ export default function RelativityRoom() {
         dx += (ddx / d) * amp;
         dy += (ddy / d) * amp;
       }
-      return { dx, dy };
+      dispScratch.dx = dx;
+      dispScratch.dy = dy;
+      return dispScratch;
     };
 
     /** Reduced motion: light as still dashed geodesic traces, bent honestly. */
@@ -1774,6 +1788,11 @@ export default function RelativityRoom() {
       }
     };
 
+    // mesh grid scratch buffers — grown on demand, never reallocated once
+    // large enough (was `new Array(cols*rows)` twice, every single frame).
+    let meshVX = new Float32Array(0);
+    let meshVY = new Float32Array(0);
+
     // ————— the loop —————
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
@@ -1906,8 +1925,13 @@ export default function RelativityRoom() {
       if (pts.length > 0 || pulses.length > 0) {
         const cols = Math.ceil(width / meshGap) + 1;
         const rows = Math.ceil(height / meshGap) + 1;
-        const vx: number[] = new Array(cols * rows);
-        const vy: number[] = new Array(cols * rows);
+        const cellCount = cols * rows;
+        if (meshVX.length < cellCount) {
+          meshVX = new Float32Array(cellCount);
+          meshVY = new Float32Array(cellCount);
+        }
+        const vx = meshVX;
+        const vy = meshVY;
         for (let j = 0; j < rows; j++) {
           for (let i = 0; i < cols; i++) {
             const x = i * meshGap;
@@ -2142,13 +2166,12 @@ export default function RelativityRoom() {
           }
           if (n > 0) {
             const h = r.trail[n - 1];
-            const glow = ctx.createRadialGradient(h.x, h.y, 0, h.x, h.y, 7);
-            glow.addColorStop(0, `rgba(240, 246, 255, ${0.9 * (1 - lens * 0.7)})`);
-            glow.addColorStop(1, "rgba(0,0,0,0)");
-            ctx.fillStyle = glow;
-            ctx.beginPath();
-            ctx.arc(h.x, h.y, 7, 0, Math.PI * 2);
-            ctx.fill();
+            // cached sprite in place of a fresh createRadialGradient per ray,
+            // per frame — the 0.9 center alpha is baked in, globalAlpha
+            // reproduces the (1 - lens * 0.7) factor exactly.
+            ctx.globalAlpha = 1 - lens * 0.7;
+            ctx.drawImage(rayHeadSprite, h.x - 7, h.y - 7, 14, 14);
+            ctx.globalAlpha = 1;
           }
         }
         ctx.restore();

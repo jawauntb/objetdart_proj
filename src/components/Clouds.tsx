@@ -65,6 +65,13 @@ function hash01(n: number): number {
   return x - Math.floor(x);
 }
 
+/** Seeded draw for the idle glimmer spiral. Hoisted out of the render loop
+ *  so the loop never allocates a fresh closure per frame while idle. */
+function glimmerSeed(slot: number, n: number): number {
+  const v = Math.sin((slot + n) * 127.1) * 43758.5453;
+  return v - Math.floor(v);
+}
+
 /**
  * /clouds — Olympus. The cloud floor.
  *
@@ -1596,17 +1603,21 @@ export default function Clouds() {
       ctx.save();
       ctx.globalCompositeOperation = "screen";
       const origin = (0.18 + Math.sin(phase * Math.PI * 2) * 0.18) * w;
+      // The gradient's geometry (0, 58, 0, h) is identical for every shaft
+      // this frame — build it once and modulate per-shaft brightness with
+      // globalAlpha instead of allocating a new CanvasGradient per shaft.
+      const shaftGrad = ctx.createLinearGradient(0, 58, 0, h);
+      shaftGrad.addColorStop(0, "rgba(255, 239, 190, 1)");
+      shaftGrad.addColorStop(0.52, "rgba(166, 203, 224, 0.26)");
+      shaftGrad.addColorStop(1, "rgba(255, 239, 190, 0)");
+      ctx.fillStyle = shaftGrad;
       for (let i = 0; i < 5; i++) {
         const spread = 130 + i * 58;
         const x = origin + (i - 2.4) * spread + Math.sin(elapsed * 0.13 + i) * 18;
         const topWidth = 42 + i * 11;
         const lowerWidth = 210 + i * 46;
-        const g = ctx.createLinearGradient(0, 58, 0, h);
         const alpha = (isLight ? 0.070 : 0.040) * stormDip * (0.78 + Math.sin(elapsed * 0.20 + i) * 0.22);
-        g.addColorStop(0, `rgba(255, 239, 190, ${alpha.toFixed(3)})`);
-        g.addColorStop(0.52, `rgba(166, 203, 224, ${(alpha * 0.26).toFixed(3)})`);
-        g.addColorStop(1, "rgba(255, 239, 190, 0)");
-        ctx.fillStyle = g;
+        ctx.globalAlpha = alpha;
         ctx.beginPath();
         ctx.moveTo(x - topWidth, 58);
         ctx.lineTo(x + topWidth, 58);
@@ -1667,31 +1678,40 @@ export default function Clouds() {
       ctx.restore();
     };
 
+    // Takes the veil's fields as discrete params (rather than a RainVeil
+    // object) so drawWeatherCell's storm-rain call below doesn't have to
+    // allocate a throwaway object literal every frame per storm cell.
     const drawRainVeil = (
       ctx: CanvasRenderingContext2D,
-      veil: RainVeil,
+      veilX: number,
+      veilY: number,
+      veilT0: number,
+      veilStrength: number,
+      veilWidth: number,
+      veilSlant: number,
+      veilSeed: number,
       now: number,
       elapsed: number,
       isLight: boolean,
     ) => {
-      const age = (now - veil.t0) / 1000;
+      const age = (now - veilT0) / 1000;
       const fade = Math.max(0, 1 - age / 3.2);
       if (fade <= 0) return;
       ctx.save();
-      ctx.globalAlpha = fade * (0.18 + veil.strength * 0.24);
+      ctx.globalAlpha = fade * (0.18 + veilStrength * 0.24);
       ctx.strokeStyle = isLight ? "rgba(77, 93, 112, 0.24)" : "rgba(176, 213, 255, 0.34)";
-      ctx.lineWidth = 0.55 + veil.strength * 0.36;
+      ctx.lineWidth = 0.55 + veilStrength * 0.36;
       ctx.lineCap = "round";
-      const drops = 44 + Math.round(veil.strength * 42);
+      const drops = 44 + Math.round(veilStrength * 42);
       for (let i = 0; i < drops; i++) {
-        const seeded = (Math.sin((i + 1) * 98.233 + veil.seed) * 43758.5453) % 1;
+        const seeded = (Math.sin((i + 1) * 98.233 + veilSeed) * 43758.5453) % 1;
         const u = seeded < 0 ? seeded + 1 : seeded;
-        const x = veil.x - veil.width * 0.5 + u * veil.width + Math.sin(elapsed * 1.8 + i) * 6;
-        const y = veil.y + ((elapsed * (78 + veil.strength * 44) + i * 17 + veil.seed) % 170) - 52;
-        const len = 14 + veil.strength * 26 + (i % 4) * 3;
+        const x = veilX - veilWidth * 0.5 + u * veilWidth + Math.sin(elapsed * 1.8 + i) * 6;
+        const y = veilY + ((elapsed * (78 + veilStrength * 44) + i * 17 + veilSeed) % 170) - 52;
+        const len = 14 + veilStrength * 26 + (i % 4) * 3;
         ctx.beginPath();
         ctx.moveTo(x, y);
-        ctx.lineTo(x + veil.slant, y + len);
+        ctx.lineTo(x + veilSlant, y + len);
         ctx.stroke();
       }
       ctx.restore();
@@ -1742,16 +1762,13 @@ export default function Clouds() {
         if (cell.rain > 0.28) {
           drawRainVeil(
             ctx,
-            {
-              id: cell.id,
-              x: cell.x,
-              y: cell.y + 36 * s,
-              t0: now - 700,
-              strength: cell.rain * alpha,
-              width: 150 * s,
-              slant: -7 + windX * 20,
-              seed: cell.phase * 100,
-            },
+            cell.x,
+            cell.y + 36 * s,
+            now - 700,
+            cell.rain * alpha,
+            150 * s,
+            -7 + windX * 20,
+            cell.phase * 100,
             now,
             elapsed,
             isLight,
@@ -1993,7 +2010,19 @@ export default function Clouds() {
           rainVeils.splice(i, 1);
           continue;
         }
-        drawRainVeil(octx, veil, simNowMs, motionElapsed, isLight);
+        drawRainVeil(
+          octx,
+          veil.x,
+          veil.y,
+          veil.t0,
+          veil.strength,
+          veil.width,
+          veil.slant,
+          veil.seed,
+          simNowMs,
+          motionElapsed,
+          isLight,
+        );
       }
 
       for (let i = windStrokes.length - 1; i >= 0; i--) {
@@ -2034,6 +2063,9 @@ export default function Clouds() {
 
       // drifting Minoan wind glyphs — a chorus across altitudes
       const glyphColor = isLight ? "rgba(17, 29, 42, 0.32)" : "rgba(202, 225, 255, 0.38)";
+      // same RGB as glyphColor, precomputed once per frame so the trail dot
+      // loop below can build its rgba string without a per-dot regex replace
+      const glyphTrailRgb = isLight ? "17, 29, 42" : "202, 225, 255";
       // fainter during storm phase
       for (const g of glyphs) {
         if (!reduce) {
@@ -2059,7 +2091,7 @@ export default function Clouds() {
             const age = (now - dot.t0) / 1000;
             if (age > 0.9) { g.trail.splice(ti, 1); continue; }
             const a = Math.max(0, 1 - age / 0.9) * 0.55 * stormFade;
-            octx.fillStyle = glyphColor.replace(/[\d.]+\)$/, `${a.toFixed(3)})`);
+            octx.fillStyle = `rgba(${glyphTrailRgb}, ${a.toFixed(3)})`;
             octx.beginPath();
             octx.arc(dot.x, dot.y, 1.6, 0, Math.PI * 2);
             octx.fill();
@@ -2150,9 +2182,8 @@ export default function Clouds() {
       // never text.
       if (performance.now() - lastGestureAt > 20000) {
         const slot = Math.floor(now / 9000);
-        const gseed = (n: number) => { const v = Math.sin((slot + n) * 127.1) * 43758.5453; return v - Math.floor(v); };
-        const gx = (0.24 + gseed(0) * 0.52) * w;
-        const gy = h * (0.3 + gseed(7) * 0.3);
+        const gx = (0.24 + glimmerSeed(slot, 0) * 0.52) * w;
+        const gy = h * (0.3 + glimmerSeed(slot, 7) * 0.3);
         const pulse = reduce ? 0.5 : 0.5 + Math.sin(now / 480) * 0.5;
         octx.save();
         octx.strokeStyle = isLight

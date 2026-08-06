@@ -843,8 +843,36 @@ export default function Signal() {
 
     // small RGB lerp
     const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-    const mix = (c1: [number, number, number], c2: [number, number, number], t: number) =>
-      [lerp(c1[0], c2[0], t), lerp(c1[1], c2[1], t), lerp(c1[2], c2[2], t)] as const;
+    // mix() is called hundreds of times per frame (once per spectrum
+    // segment, once per spiral sample) — reuse a single output tuple
+    // instead of allocating a new array literal on every call. Every call
+    // site destructures the result immediately, so reuse is safe.
+    const mixOut: [number, number, number] = [0, 0, 0];
+    const mix = (c1: [number, number, number], c2: [number, number, number], t: number) => {
+      mixOut[0] = lerp(c1[0], c2[0], t);
+      mixOut[1] = lerp(c1[1], c2[1], t);
+      mixOut[2] = lerp(c1[2], c2[2], t);
+      return mixOut;
+    };
+
+    // waveform distortion field — sum of gaussian-like pulses centered on
+    // each injection x, falling off in space AND time. Defined once here
+    // (not inside the per-frame draw loop) so no closure is allocated per
+    // frame; dist/now are passed in explicitly instead of captured.
+    const SIGMA_X = 80;
+    const distortAt = (px: number, dist: WaveDistortion[], now: number): number => {
+      if (dist.length === 0) return 0;
+      let acc = 0;
+      for (let i = 0; i < dist.length; i++) {
+        const d = dist[i];
+        const u = (now - d.t0) / 1000 / DISTORT_LIFE; // 0..1
+        const timeFall = 1 - u; // linear decay over lifetime
+        const dx = px - d.x;
+        const spaceFall = Math.exp(-(dx * dx) / (2 * SIGMA_X * SIGMA_X));
+        acc += d.amount * timeFall * spaceFall;
+      }
+      return acc;
+    };
 
     // deterministic star field — frozen if reduced motion. Built once
     // (never per frame); the drawn count scales with the frame governor's
@@ -1239,26 +1267,15 @@ export default function Signal() {
       const waveAmp = Math.min(110, h * 0.10);
       const waveEmphasis = blend[1] + tuttiRef.current * 0.3;
 
-      // prune expired distortions, then sum the surviving ones at each x.
-      distortionsRef.current = distortionsRef.current.filter(
-        (d) => (now - d.t0) / 1000 < DISTORT_LIFE,
-      );
+      // prune expired distortions in place — filter() would allocate a new
+      // array every frame; compact-in-place keeps the same array identity.
       const dist = distortionsRef.current;
-      // For each rendered sample, the distortion is a sum of gaussian-like
-      // pulses centered on each injection x, falling off in space AND time.
-      const SIGMA_X = 80;
-      const distortAt = (px: number): number => {
-        if (dist.length === 0) return 0;
-        let acc = 0;
-        for (const d of dist) {
-          const u = (now - d.t0) / 1000 / DISTORT_LIFE; // 0..1
-          const timeFall = 1 - u; // linear decay over lifetime
-          const dx = px - d.x;
-          const spaceFall = Math.exp(-(dx * dx) / (2 * SIGMA_X * SIGMA_X));
-          acc += d.amount * timeFall * spaceFall;
-        }
-        return acc;
-      };
+      let writeIdx = 0;
+      for (let readIdx = 0; readIdx < dist.length; readIdx++) {
+        const d = dist[readIdx];
+        if ((now - d.t0) / 1000 < DISTORT_LIFE) dist[writeIdx++] = d;
+      }
+      dist.length = writeIdx;
 
       // glow underneath — fat, low-alpha pass
       ctx2d.strokeStyle = `rgba(244, 238, 222, ${(0.18 * waveEmphasis).toFixed(3)})`;
@@ -1268,7 +1285,7 @@ export default function Signal() {
       for (let i = 0; i < timeBuf.length; i++) {
         const x = (i / (timeBuf.length - 1)) * w;
         const v = (timeBuf[i] - 128) / 128; // -1..1
-        const y = waveY + v * waveAmp + distortAt(x);
+        const y = waveY + v * waveAmp + distortAt(x, dist, now);
         if (i === 0) ctx2d.moveTo(x, y);
         else ctx2d.lineTo(x, y);
       }
@@ -1281,7 +1298,7 @@ export default function Signal() {
       for (let i = 0; i < timeBuf.length; i++) {
         const x = (i / (timeBuf.length - 1)) * w;
         const v = (timeBuf[i] - 128) / 128;
-        const y = waveY + v * waveAmp + distortAt(x);
+        const y = waveY + v * waveAmp + distortAt(x, dist, now);
         if (i === 0) ctx2d.moveTo(x, y);
         else ctx2d.lineTo(x, y);
       }
@@ -1304,8 +1321,15 @@ export default function Signal() {
       const spiralEmphasis = blend[2] + tuttiRef.current * 0.3;
 
       // publish layout so the gesture handlers hit-test against the same
-      // numbers we just rendered (avoids any layout drift on resize).
-      layoutRef.current = { waveY, waveAmp, spiralR, cx, cy };
+      // numbers we just rendered (avoids any layout drift on resize). Mutate
+      // the existing object in place instead of allocating a new one every
+      // frame — readers only ever destructure the current values.
+      const layout = layoutRef.current;
+      layout.waveY = waveY;
+      layout.waveAmp = waveAmp;
+      layout.spiralR = spiralR;
+      layout.cx = cx;
+      layout.cy = cy;
 
       // advance the spiral rotation phase — slow drift, faster on hover,
       // and at the hand's own tempo while a tapped rhythm holds it

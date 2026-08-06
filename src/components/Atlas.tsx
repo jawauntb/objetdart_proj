@@ -1479,9 +1479,12 @@ export default function Atlas() {
       const tier = gov.beginFrame(now);
       if (sleeping) { raf = requestAnimationFrame(draw); return; } // no draw while hidden
       const detail = detailForTier(tier);
-      const rect = stage.getBoundingClientRect();
-      const w = rect.width;
-      const h = rect.height;
+      // metricsRef.current is kept current by the sibling ResizeObserver
+      // effect above (same `stage` element) and is already CSS-pixel width/
+      // height — reading it here avoids a forced-layout
+      // getBoundingClientRect() call every animation frame.
+      const w = metricsRef.current.width;
+      const h = metricsRef.current.height;
       const dtSec = Math.min(0.1, (now - prevNow) / 1000);
       prevNow = now;
       // three-finger hold dilates time: this sim clock (not the wall
@@ -3743,6 +3746,31 @@ export default function Atlas() {
 // drawn on the overlay canvas by Atlas's RAF loop. Same helper-at-
 // bottom pattern as Ocean.tsx so the render loop above stays readable.
 
+// Hoisted out of drawAtlasWeather/drawAtlasNatural: these were literal
+// arrays/objects re-allocated on every call, i.e. once per weather event
+// or per natural, per frame. The values never change, so one shared
+// reference (module scope, no DOM/canvas touched at import time — safe
+// under SSR) replaces the per-frame churn.
+const WEATHER_CLOUD_SPRITE_OPTS = {
+  width: 256,
+  height: 256,
+  stops: [
+    { offset: 0, color: "rgba(6, 10, 18, 1)" },
+    { offset: 1, color: "rgba(6, 10, 18, 0)" },
+  ],
+};
+const CAIRN_STONES: Array<{ y: number; rx: number; ry: number; c: string }> = [
+  { y: 2, rx: 8, ry: 4, c: "rgba(180, 154, 118, 0.95)" },
+  { y: -4, rx: 6, ry: 3.4, c: "rgba(196, 168, 130, 0.94)" },
+  { y: -9, rx: 4, ry: 2.6, c: "rgba(214, 188, 148, 0.9)" },
+];
+const FLOWER_HUES: Array<[number, number, number]> = [
+  [246, 208, 96],
+  [240, 132, 108],
+  [196, 170, 232],
+  [236, 236, 228],
+];
+
 /**
  * A single weather event painted into the overlay canvas at its current
  * age. Frame-relative — the sky belongs to the viewport, not the map —
@@ -3788,15 +3816,10 @@ function drawAtlasWeather(
     const rad = e.radius * Math.min(w, h) * 2.4;
     // Same colour every time this fires — only alpha (e.alpha * grow) and
     // radius vary — so the sprite bakes once, ever, through the shared
-    // radial-sprite cache, and this call is a Map lookup + a stamp.
-    const sprite = bakeRadialSprite("atlas-weather-cloud", {
-      width: 256,
-      height: 256,
-      stops: [
-        { offset: 0, color: "rgba(6, 10, 18, 1)" },
-        { offset: 1, color: "rgba(6, 10, 18, 0)" },
-      ],
-    });
+    // radial-sprite cache, and this call is a Map lookup + a stamp. The
+    // options object itself is hoisted (WEATHER_CLOUD_SPRITE_OPTS) so this
+    // per-frame call doesn't allocate a fresh literal every time.
+    const sprite = bakeRadialSprite("atlas-weather-cloud", WEATHER_CLOUD_SPRITE_OPTS);
     drawRadialStamp(ctx, sprite, cx, cy, rad, e.alpha * grow);
     return;
   }
@@ -3924,14 +3947,9 @@ function drawAtlasNatural(
     ctx.beginPath();
     ctx.ellipse(0, 5, 10, 3, 0, 0, Math.PI * 2);
     ctx.fill();
-    const stones = [
-      { y: 2, rx: 8, ry: 4, c: "rgba(180, 154, 118, 0.95)" },
-      { y: -4, rx: 6, ry: 3.4, c: "rgba(196, 168, 130, 0.94)" },
-      { y: -9, rx: 4, ry: 2.6, c: "rgba(214, 188, 148, 0.9)" },
-    ];
     ctx.strokeStyle = "rgba(78, 60, 40, 0.35)";
     ctx.lineWidth = 0.6;
-    for (const s of stones) {
+    for (const s of CAIRN_STONES) {
       ctx.fillStyle = s.c;
       ctx.beginPath();
       ctx.ellipse(0, s.y, s.rx, s.ry, 0, 0, Math.PI * 2);
@@ -3950,13 +3968,7 @@ function drawAtlasNatural(
     const petals = 4 + (n.seed % 3);
     const sway = Math.sin(t * 0.9 + n.seed * 0.01) * 0.05;
     ctx.rotate(sway);
-    const hues: Array<[number, number, number]> = [
-      [246, 208, 96],
-      [240, 132, 108],
-      [196, 170, 232],
-      [236, 236, 228],
-    ];
-    const c = hues[n.seed % hues.length];
+    const c = FLOWER_HUES[n.seed % FLOWER_HUES.length];
     for (let i = 0; i < petals; i++) {
       const ang = (i / petals) * Math.PI * 2;
       const px = Math.cos(ang) * 4.5;
