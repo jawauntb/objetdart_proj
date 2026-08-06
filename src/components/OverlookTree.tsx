@@ -79,6 +79,35 @@ const NODES = TREE.nodes;
 const MAX_DEPTH = Math.max(1, ...NODES.map((n) => n.depth));
 const MAX_ABS_X = Math.max(1, ...NODES.map((n) => Math.abs(PLACE[n.id].x)));
 
+// id → index, built once — the per-frame loop looked this up via a fresh
+// Map every frame; NODES never changes after module load, so the lookup
+// (and everything derived only from it below) is computed once here instead.
+const NODE_INDEX = new Map<string, number>(NODES.map((n, i) => [n.id, i]));
+const TRUNK_IDX: number[] = TREE.trunk
+  .map((id) => NODE_INDEX.get(id))
+  .filter((i): i is number => i !== undefined);
+const S_LO = Math.min(...NODES.map((n) => n.s));
+const S_HI = Math.max(...NODES.map((n) => n.s));
+const RULER_MARKS: Set<number> = (() => {
+  const marks = new Set<number>();
+  for (const n of NODES) {
+    marks.add(n.sMin);
+    marks.add(n.sMax);
+  }
+  return marks;
+})();
+// the two edge-stroke passes are always one of these two shapes — reused
+// instead of allocated per edge per frame.
+const EDGE_PASS_BOTH: readonly number[] = [0, 1];
+const EDGE_PASS_SOLID: readonly number[] = [1];
+// three-finger twist's season tint, indexed by season phase 0..3.
+const SEASON_TINTS = [
+  "rgba(90,150,110,0.05)",
+  "rgba(231,172,82,0.06)",
+  "rgba(200,110,60,0.06)",
+  "rgba(120,150,200,0.06)",
+] as const;
+
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const clamp01 = (v: number) => clamp(v, 0, 1);
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -189,6 +218,9 @@ function drawVignette(
    * through the heavier procedural arrays (spiral/flock/web) instead of
    * re-walking every element every frame regardless of quality tier. */
   richness = 1,
+  /** olympus' fog wash, pre-built once in unit space (0,0)→(0,1) and reused
+   * every frame via a local transform — never recreated per node per frame. */
+  fogGradient?: CanvasGradient,
 ) {
   const g = GEOM.get(id);
   if (!g) return;
@@ -614,12 +646,27 @@ function drawVignette(
         ctx.closePath();
         ctx.fill();
       }
-      const fog = ctx.createLinearGradient(0, fogY - r * 0.16, 0, r);
-      fog.addColorStop(0, "rgba(214, 220, 228, 0)");
-      fog.addColorStop(0.35, "rgba(210, 216, 226, 0.45)");
-      fog.addColorStop(1, "rgba(196, 205, 216, 0.72)");
-      ctx.fillStyle = fog;
-      ctx.fillRect(-r, fogY - r * 0.16, r * 2, r * 2);
+      if (fogGradient) {
+        // the gradient's stops live in unit space (0..1); translate+scale
+        // the CTM to the same (fogY - r*0.16)..r span the original per-frame
+        // gradient covered, so the fill lands on identical pixels without
+        // reallocating a CanvasGradient every node every frame.
+        const y0 = fogY - r * 0.16;
+        const span = r - y0;
+        ctx.save();
+        ctx.translate(0, y0);
+        ctx.scale(1, span);
+        ctx.fillStyle = fogGradient;
+        ctx.fillRect(-r, 0, r * 2, (r * 2) / span);
+        ctx.restore();
+      } else {
+        const fog = ctx.createLinearGradient(0, fogY - r * 0.16, 0, r);
+        fog.addColorStop(0, "rgba(214, 220, 228, 0)");
+        fog.addColorStop(0.35, "rgba(210, 216, 226, 0.45)");
+        fog.addColorStop(1, "rgba(196, 205, 216, 0.72)");
+        ctx.fillStyle = fog;
+        ctx.fillRect(-r, fogY - r * 0.16, r * 2, r * 2);
+      }
       break;
     }
     case "atlas": {
@@ -875,6 +922,14 @@ export default function OverlookTree() {
         /* noop */
       }
     };
+
+    // olympus' fog wash, built once in unit space and reused every frame
+    // via a transform (see drawVignette) instead of createLinearGradient
+    // being called per node per frame.
+    const fogGradient = ctx.createLinearGradient(0, 0, 0, 1);
+    fogGradient.addColorStop(0, "rgba(214, 220, 228, 0)");
+    fogGradient.addColorStop(0.35, "rgba(210, 216, 226, 0.45)");
+    fogGradient.addColorStop(1, "rgba(196, 205, 216, 0.72)");
 
     // ————— static pre-render: each node's disc base, once —————
     const BASE_PX = 96;

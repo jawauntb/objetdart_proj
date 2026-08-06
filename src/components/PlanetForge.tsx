@@ -629,8 +629,10 @@ export default function PlanetForge() {
     let glimmerAt = 0;
     let climateAccum = 0;
 
-    const reserve = () =>
-      Math.max(0, DUST_TOTAL - entries.reduce((s, e) => s + massOf(e.world), 0));
+    // Named once so `reserve()` (called every frame) doesn't allocate a
+    // fresh reducer closure on each call — same values in, same value out.
+    const sumMass = (s: number, e: Entry) => s + massOf(e.world);
+    const reserve = () => Math.max(0, DUST_TOTAL - entries.reduce(sumMass, 0));
 
     // The write itself is factored out so the shared idle writer can call
     // it after the requestIdleCallback debounce. The on-disk payload shape
@@ -733,17 +735,31 @@ export default function PlanetForge() {
 
     // ——— placement and hit testing ———
     type Placed = { e: Entry; x: number; y: number; R: number; focus: number };
-    const placeAll = (): Placed[] =>
-      entries.map((e) => {
+    // Every caller (the frame, hitWorld, stir) reads a Placed result and is
+    // done with it before placeAll is ever called again — nothing keeps one
+    // past its call — so the array and its entries are a fixed pool reused
+    // in place instead of a fresh map() allocation every frame.
+    const placedPool: Placed[] = [];
+    const placedView: Placed[] = [];
+    const placeAll = (): Placed[] => {
+      const S = scale();
+      while (placedPool.length < entries.length) {
+        placedPool.push({ e: entries[0], x: 0, y: 0, R: 0, focus: 0 });
+      }
+      placedView.length = entries.length;
+      for (let i = 0; i < entries.length; i++) {
+        const e = entries[i];
         const focus = e.id === focusId ? 1 : 0;
-        return {
-          e,
-          x: toPxX(e.x) + tiltX * 6,
-          y: toPxY(e.y) + tiltY * 6,
-          R: fieldR(e.world) * scale() * (1 + focus * 0.4 + e.flash * 0.1),
-          focus,
-        };
-      });
+        const p = placedPool[i];
+        p.e = e;
+        p.x = toPxX(e.x) + tiltX * 6;
+        p.y = toPxY(e.y) + tiltY * 6;
+        p.R = fieldR(e.world) * S * (1 + focus * 0.4 + e.flash * 0.1);
+        p.focus = focus;
+        placedView[i] = p;
+      }
+      return placedView;
+    };
 
     const hitWorld = (x: number, y: number, reach = 1.6): Placed | null => {
       let best: Placed | null = null;
@@ -1274,18 +1290,26 @@ export default function PlanetForge() {
     window.addEventListener("keyup", onKeyUp);
 
     // ——— physics ———
+    // One Body object per world, allocated once and reused: stepBodies
+    // mutates them in place, so each frame only needs to refresh the
+    // fields, never allocate a new object per world per frame.
     const bodies: Body[] = [];
+    const bodyPool: Body[] = [];
     const stepPhysics = (dt: number) => {
-      bodies.length = 0;
-      for (const e of entries) {
-        bodies.push({
-          x: e.x,
-          y: e.y,
-          vx: e.vx,
-          vy: e.vy,
-          mass: massOf(e.world),
-          radius: fieldR(e.world),
-        });
+      while (bodyPool.length < entries.length) {
+        bodyPool.push({ x: 0, y: 0, vx: 0, vy: 0, mass: 0, radius: 0 });
+      }
+      bodies.length = entries.length;
+      for (let i = 0; i < entries.length; i++) {
+        const e = entries[i];
+        const b = bodyPool[i];
+        b.x = e.x;
+        b.y = e.y;
+        b.vx = e.vx;
+        b.vy = e.vy;
+        b.mass = massOf(e.world);
+        b.radius = fieldR(e.world);
+        bodies[i] = b;
       }
       // Device tilt is real gravity here: the whole field leans with it.
       const ax = tiltX * 0.0016;
@@ -1304,7 +1328,10 @@ export default function PlanetForge() {
 
       // The star eats what falls into it; the dark keeps what leaves. Either
       // way the mass comes back — the reserve is what the living do not hold.
-      for (const e of [...entries]) {
+      // retire() reassigns `entries` to a new filtered array rather than
+      // mutating this one in place, so the for-of below (bound to today's
+      // array object at loop start) stays valid without a defensive copy.
+      for (const e of entries) {
         const r = Math.hypot(e.x - STAR.x, e.y - STAR.y);
         if (r < STAR_RADIUS + fieldR(e.world) * 0.4) {
           retire(e);

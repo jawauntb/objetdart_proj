@@ -119,6 +119,16 @@ const FATE_TINT: string[] = [
   "242, 238, 230",
 ];
 
+// Per-frame render constants, hoisted the same way FATE_TINT already is —
+// literal arrays that never change value have no business being rebuilt on
+// every rAF tick just because the code that reads them lives inside the
+// draw closure.
+const BAND_ALPHA: number[] = [0.3, 0.44, 0.62];
+const BUCKET_TINT: string[] = ["118, 138, 158", "168, 190, 206", "231, 172, 82", "226, 120, 90"];
+const BUCKET_ALPHA: number[] = [0.2, 0.34, 0.5, 0.72];
+const BUCKET_WIDTH: number[] = [0.8, 1, 1.2, 1.6];
+const MARK_TINT: string[] = ["150, 168, 200", "248, 240, 224", "226, 92, 64", "226, 140, 108"];
+
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 const clamp01 = (v: number) => clamp(v, 0, 1);
 
@@ -281,6 +291,12 @@ export default function TissueSheet() {
     let degrees = new Uint8Array(MAX_CELLS);
     let prevLive = new Uint8Array(0);
     let chord: Chord = { degree: [], num: [], den: [], ratio: [], weight: [] };
+    // The notation lens' num/den readout, cached alongside the chord it
+    // describes — `chord` only actually changes inside `recomputeChord`
+    // (a structural event, not a per-frame ease), so the label string only
+    // needs to be rebuilt there too, not re-mapped-and-joined every tick
+    // the lens happens to be open.
+    let chordLabel = "";
     let rough = 0;
     let chordAt = 0;
     let breakSoundAt = 0;
@@ -310,6 +326,7 @@ export default function TissueSheet() {
       degrees = degreesOf(sheet, degrees);
       chord = chordOf(degrees, sheet.n);
       rough = dissonance(chord);
+      chordLabel = chord.num.map((num, k) => `${num}/${chord.den[k]}`).join(" · ");
     };
 
     // ——— persistence ———
@@ -1335,6 +1352,36 @@ export default function TissueSheet() {
       },
     });
 
+    // The pit's throat sprite: fixed colour and geometry regardless of the
+    // sheet's state (only the stamp's radius and alpha vary, both handled
+    // by `drawRadialStamp` at draw time) — so, exactly like `cellSprite`
+    // above, it bakes once here rather than re-building the same spec
+    // object every frame the pit happens to be visible.
+    const pitSprite = bakeRadialSprite("tissue-pit-throat", {
+      width: 128,
+      height: 128,
+      stops: [
+        { offset: 0, color: "rgba(2, 3, 5, 1)" },
+        { offset: 1, color: "rgba(2, 3, 5, 0)" },
+      ],
+    });
+
+    // The backdrop sprite's own cache key, tracked here so the draw loop can
+    // skip re-building the spec object (and its nested inner/outer/stops
+    // literals) on every one of the many frames the key doesn't actually
+    // change — `bakeRadialSprite` itself only re-bakes on a genuine miss,
+    // but the call's arguments would still be freshly allocated every frame
+    // without this guard.
+    let bgSpriteKey = "";
+    let bgSpriteCanvas: HTMLCanvasElement | null = null;
+    // The edge-heat gradient depends only on `rough` (set once per
+    // `recomputeChord`, not eased per frame) and `width` — both stable
+    // across the vast majority of frames it's drawn on, so it's rebuilt
+    // only when one of them actually changes rather than every tick.
+    let edgeHeat = -1;
+    let edgeHeatWidth = -1;
+    let edgeHeatGradient: CanvasGradient | null = null;
+
     // ——— the loop ———
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
@@ -1516,9 +1563,10 @@ export default function TissueSheet() {
       const bg1r = Math.round(6 * dim);
       const bg1g = Math.round(7 * dim);
       const bg1b = Math.round(10 * dim);
-      const bgSprite = bakeRadialSprite(
-        `tissue-bg:${Math.round(width)}x${Math.round(height)}:${bg0r},${bg0g},${bg0b}:${bg1r},${bg1g},${bg1b}`,
-        {
+      const bgKey = `tissue-bg:${Math.round(width)}x${Math.round(height)}:${bg0r},${bg0g},${bg0b}:${bg1r},${bg1g},${bg1b}`;
+      if (bgKey !== bgSpriteKey) {
+        bgSpriteKey = bgKey;
+        bgSpriteCanvas = bakeRadialSprite(bgKey, {
           width,
           height,
           inner: { x: width / 2, y: height * 0.46, r: 12 },
@@ -1527,10 +1575,10 @@ export default function TissueSheet() {
             { offset: 0, color: `rgb(${bg0r}, ${bg0g}, ${bg0b})` },
             { offset: 1, color: `rgb(${bg1r}, ${bg1g}, ${bg1b})` },
           ],
-        },
-      );
-      if (bgSprite) {
-        ctx.drawImage(bgSprite, 0, 0, width, height);
+        });
+      }
+      if (bgSpriteCanvas) {
+        ctx.drawImage(bgSpriteCanvas, 0, 0, width, height);
       } else {
         ctx.fillStyle = `rgb(${bg1r}, ${bg1g}, ${bg1b})`;
         ctx.fillRect(0, 0, width, height);
@@ -1580,18 +1628,10 @@ export default function TissueSheet() {
           const py = oy + deepY * scale;
           const rr = 2.4 * scale;
           // Fixed colour, only alpha (0.8 * deepest) and radius vary — one
-          // normalized sprite, baked once, stamped and scaled to rr. The
-          // original's 1px inner radius (vs. this sprite's concentric 0) is
-          // sub-pixel at any rr this room reaches — invisible, never hoisted
-          // into a second cache key.
-          const pitSprite = bakeRadialSprite("tissue-pit-throat", {
-            width: 128,
-            height: 128,
-            stops: [
-              { offset: 0, color: "rgba(2, 3, 5, 1)" },
-              { offset: 1, color: "rgba(2, 3, 5, 0)" },
-            ],
-          });
+          // normalized sprite, baked once (above, alongside cellSprite) and
+          // stamped and scaled to rr. The original's 1px inner radius (vs.
+          // this sprite's concentric 0) is sub-pixel at any rr this room
+          // reaches — invisible, never hoisted into a second cache key.
           drawRadialStamp(ctx, pitSprite, px, py, rr, 0.8 * deepest);
         }
 
@@ -1618,7 +1658,7 @@ export default function TissueSheet() {
         // front reaches it and commits a fate: the gradient is already
         // there, and differentiation is only the reading of it.
         const waveK = reduced ? 0 : (Math.PI * 2) / Math.max(0.4, wavePeriod);
-        const bandAlpha = [0.3, 0.44, 0.62];
+        const bandAlpha = BAND_ALPHA;
         for (let f = 0; f <= INNER_FATE; f++) {
           for (let band = 0; band < 3; band++) {
             ctx.beginPath();
@@ -1724,9 +1764,9 @@ export default function TissueSheet() {
         // — the adhesion graph: four batched strokes, bucketed by strain —
         // Taut bonds glow warm; a bond near its breaking strain runs hot.
         const BUCKETS = 4;
-        const bucketTint = ["118, 138, 158", "168, 190, 206", "231, 172, 82", "226, 120, 90"];
-        const bucketAlpha = [0.2, 0.34, 0.5, 0.72];
-        const bucketWidth = [0.8, 1, 1.2, 1.6];
+        const bucketTint = BUCKET_TINT;
+        const bucketAlpha = BUCKET_ALPHA;
+        const bucketWidth = BUCKET_WIDTH;
         for (let b = 0; b < BUCKETS; b++) {
           ctx.beginPath();
           let any = false;
@@ -1879,7 +1919,7 @@ export default function TissueSheet() {
         // alone tells the four apart; a refusal holds its radius rather
         // than growing, which is what makes it read as "no".
         const MARK_LIFE = 620;
-        const markTint = ["150, 168, 200", "248, 240, 224", "226, 92, 64", "226, 140, 108"];
+        const markTint = MARK_TINT;
         for (let m = 0; m < MAX_MARKS; m++) {
           const age = now - markAt[m];
           if (markAt[m] <= 0 || age < 0 || age > MARK_LIFE) continue;
@@ -1903,11 +1943,7 @@ export default function TissueSheet() {
           ctx.textAlign = "left";
           const base = height - 104;
           ctx.fillStyle = "rgba(206, 222, 250, 0.72)";
-          ctx.fillText(
-            chord.num.map((num, k) => `${num}/${chord.den[k]}`).join(" · "),
-            18,
-            base,
-          );
+          ctx.fillText(chordLabel, 18, base);
           ctx.fillText(
             `${n} cells · adhesion ${(adhesion * 100).toFixed(0)} · roughness ${rough.toFixed(2)}`,
             18,
@@ -1949,11 +1985,15 @@ export default function TissueSheet() {
       // ——— the world-law, felt at the edge: a loose sheet reads warm
       if (rough > 1.2) {
         const heat = clamp01((rough - 1.2) / 3);
-        const g = ctx.createLinearGradient(0, 0, width, 0);
-        g.addColorStop(0, `rgba(200, 92, 40, ${heat * 0.1})`);
-        g.addColorStop(0.5, "rgba(0,0,0,0)");
-        g.addColorStop(1, `rgba(200, 92, 40, ${heat * 0.1})`);
-        ctx.fillStyle = g;
+        if (heat !== edgeHeat || width !== edgeHeatWidth) {
+          edgeHeat = heat;
+          edgeHeatWidth = width;
+          edgeHeatGradient = ctx.createLinearGradient(0, 0, width, 0);
+          edgeHeatGradient.addColorStop(0, `rgba(200, 92, 40, ${heat * 0.1})`);
+          edgeHeatGradient.addColorStop(0.5, "rgba(0,0,0,0)");
+          edgeHeatGradient.addColorStop(1, `rgba(200, 92, 40, ${heat * 0.1})`);
+        }
+        ctx.fillStyle = edgeHeatGradient!;
         ctx.fillRect(0, 0, width, height);
       }
 

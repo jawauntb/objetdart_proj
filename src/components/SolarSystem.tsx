@@ -553,12 +553,22 @@ export default function SolarSystem() {
     const cx = () => width / 2;
     const cy = () => height * 0.5;
 
-    /** World (x, y-with-incl, z) → screen, through rot + squash. */
+    /**
+     * World (x, y-with-incl, z) → screen, through rot + squash.
+     * Writes into a single reused scratch object rather than allocating a
+     * fresh one per call — this runs thousands of times a frame (every
+     * orbit/trail segment endpoint), so every caller must read .sx/.sy
+     * into locals before the next toScreen() call if it needs two points
+     * live at once (see the ring/trail/tie sites below).
+     */
+    const screenScratch = { sx: 0, sy: 0 };
     const toScreen = (x: number, y: number, z: number, sf: number) => {
       const rot = viewRot + tiltRot;
       const rx = x * Math.cos(rot) - y * Math.sin(rot);
       const ry = x * Math.sin(rot) + y * Math.cos(rot);
-      return { sx: cx() + rx * sf, sy: cy() + (ry * squash - z * 0.38) * sf };
+      screenScratch.sx = cx() + rx * sf;
+      screenScratch.sy = cy() + (ry * squash - z * 0.38) * sf;
+      return screenScratch;
     };
     /** Screen → world polar (r, θ) at a given per-body scale factor. */
     const toWorldPolar = (sx: number, sy: number, sf: number) => {
@@ -601,6 +611,21 @@ export default function SolarSystem() {
       orbitCache.set(el.seed, arr);
       orbitKey.set(el.seed, key);
       return arr;
+    };
+
+    // bodyColor(el) is a deterministic function of (seed, kind) but spins a
+    // seeded RNG and allocates a fresh RGB tuple every call; every body's
+    // element object is replaced (not mutated) whenever its color-relevant
+    // fields could change, so caching on object identity is exact and
+    // self-clearing — no manual invalidation, no unbounded growth.
+    const colorCache = new WeakMap<OrbitalElements, RGB>();
+    const colorFor = (el: OrbitalElements): RGB => {
+      let c = colorCache.get(el);
+      if (!c) {
+        c = bodyColor(el);
+        colorCache.set(el, c);
+      }
+      return c;
     };
 
     // ——— the instance buffers: allocated once, never grown ———
@@ -1583,8 +1608,9 @@ export default function SolarSystem() {
             const i3 = k * 3;
             const j3 = ((k + 2) % ORBIT_SAMPLES) * 3;
             const s0 = toScreen(path[i3], path[i3 + 1], path[i3 + 2], sf);
+            const s0x = s0.sx, s0y = s0.sy;
             const s1 = toScreen(path[j3], path[j3 + 1], path[j3 + 2], sf);
-            pushSeg(s0.sx, s0.sy, s1.sx, s1.sy, AURORA, 0.26 * orbitAlpha, 1.1);
+            pushSeg(s0x, s0y, s1.sx, s1.sy, AURORA, 0.26 * orbitAlpha, 1.1);
           }
         }
         pushBody(
@@ -1600,8 +1626,9 @@ export default function SolarSystem() {
         const pa = positionAt(bodies[lk.i], mu, simS);
         const pb = positionAt(bodies[lk.j], mu, simS);
         const sa = toScreen(pa.x, pa.y, pa.z, scaleFor(bodies[lk.i]));
+        const saX = sa.sx, saY = sa.sy;
         const sb = toScreen(pb.x, pb.y, pb.z, scaleFor(bodies[lk.j]));
-        pushSeg(sa.sx, sa.sy, sb.sx, sb.sy, AURORA, 0.1 * (1 - lk.detune / 0.015) * orbitAlpha, 0.8);
+        pushSeg(saX, saY, sb.sx, sb.sy, AURORA, 0.1 * (1 - lk.detune / 0.015) * orbitAlpha, 0.8);
       }
 
       // orbits, trails, bodies
@@ -1609,7 +1636,7 @@ export default function SolarSystem() {
         const el = bodies[i];
         const sf = scaleFor(el);
         const path = orbitPath(el);
-        const col = bodyColor(el);
+        const col = colorFor(el);
         const p = positionAt(el, mu, simS);
 
         // periapsis rings: the orbit states itself once a period (silent
@@ -1638,8 +1665,9 @@ export default function SolarSystem() {
             const i3 = k * 3;
             const j3 = ((k + 1) % ORBIT_SAMPLES) * 3;
             const s0 = toScreen(path[i3], path[i3 + 1], path[i3 + 2], sf);
+            const s0x = s0.sx, s0y = s0.sy;
             const s1 = toScreen(path[j3], path[j3 + 1], path[j3 + 2], sf);
-            pushSeg(s0.sx, s0.sy, s1.sx, s1.sy, PAPER, ringA, 1);
+            pushSeg(s0x, s0y, s1.sx, s1.sy, PAPER, ringA, 1);
           }
 
           // the trail: where the body just was, fading — motion made legible
@@ -1649,9 +1677,10 @@ export default function SolarSystem() {
               const kA = (((kNow - back) % ORBIT_SAMPLES) + ORBIT_SAMPLES) % ORBIT_SAMPLES;
               const kB = (((kNow - back + 1) % ORBIT_SAMPLES) + ORBIT_SAMPLES) % ORBIT_SAMPLES;
               const sA = toScreen(path[kA * 3], path[kA * 3 + 1], path[kA * 3 + 2], sf);
+              const sAx = sA.sx, sAy = sA.sy;
               const sB = toScreen(path[kB * 3], path[kB * 3 + 1], path[kB * 3 + 2], sf);
               const u = 1 - back / TRAIL_SEGMENTS;
-              pushSeg(sA.sx, sA.sy, sB.sx, sB.sy, col, u * u * 0.4 * orbitAlpha, 0.8 + u * 1.8);
+              pushSeg(sAx, sAy, sB.sx, sB.sy, col, u * u * 0.4 * orbitAlpha, 0.8 + u * 1.8);
             }
           }
         }
@@ -1777,7 +1806,7 @@ export default function SolarSystem() {
           }
           for (let i = 0; i < bodies.length; i++) {
             const el = bodies[i];
-            const col = bodyColor(el);
+            const col = colorFor(el);
             const y = yFor(freqOf(el));
             ctx.strokeStyle = rgba(col, (i === selIdx ? 0.4 : 0.22) * la);
             ctx.beginPath();

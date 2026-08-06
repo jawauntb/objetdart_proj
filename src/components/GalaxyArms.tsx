@@ -1512,8 +1512,18 @@ export default function GalaxyArms() {
           }
           save();
         }
-        const alive = regionsRef.current.filter((r) => regionLife(r, tau) > 0.01);
-        if (alive.length !== regionsRef.current.length) {
+        // Scan before allocating: on almost every frame nothing has died, and
+        // the array should not be rebuilt (and garbage produced) just to
+        // confirm that.
+        let anyDead = false;
+        for (let i = 0; i < regionsRef.current.length; i++) {
+          if (regionLife(regionsRef.current[i], tau) <= 0.01) {
+            anyDead = true;
+            break;
+          }
+        }
+        if (anyDead) {
+          const alive = regionsRef.current.filter((r) => regionLife(r, tau) > 0.01);
           regionsRef.current = alive;
           if (seeding >= alive.length) seeding = -1;
           save();
@@ -1536,9 +1546,15 @@ export default function GalaxyArms() {
         regionVec[i * 4 + 3] = reg.ignited >= 0 ? shellRadius(tau - reg.ignited) : 0;
       }
 
+      // The followed star's disc position, resolved once per frame — the
+      // same starState result the crest-crossing check, the camera lean, the
+      // shader uniform and the overlay mark all read below, instead of each
+      // re-deriving it (and each allocating its own result) separately.
+      const followPos = followIdx >= 0 && followLevel > 0.02 ? starPos(followIdx) : null;
+
       // ——— the followed star: ride the orbit, feel every arm go by ———
-      if (followIdx >= 0 && followLevel > 0.05) {
-        const sp = starPos(followIdx);
+      if (followPos && followLevel > 0.05) {
+        const sp = followPos;
         // one felt tick per crest crossed — the crest sits at the Jacobian's
         // own phase atan(k), and the tick rate is m·|Ω − Ωp| and no other
         // (armCrossingHz in lib/spiral.ts, where the tests pin it)
@@ -1583,10 +1599,9 @@ export default function GalaxyArms() {
       // the eye leans toward a ridden star, but never leaves the room
       let cx = 0;
       let cz = 0;
-      if (followIdx >= 0 && followLevel > 0.02) {
-        const sp = starPos(followIdx);
-        cx = sp.x * 0.5 * followLevel;
-        cz = sp.z * 0.5 * followLevel;
+      if (followPos) {
+        cx = followPos.x * 0.5 * followLevel;
+        cz = followPos.z * 0.5 * followLevel;
       }
       cam.x = cx - basis.fx * range;
       cam.y = 0.03 - basis.fy * range;
@@ -1672,9 +1687,8 @@ export default function GalaxyArms() {
         }
         starProg.setFloatArray("u_flares", flareVec);
         starProg.setFloatArray("u_regions", regionVec);
-        if (followIdx >= 0 && followLevel > 0.02) {
-          const sp = starPos(followIdx);
-          starProg.setVec3("u_follow", sp.x, sp.z, followLevel);
+        if (followPos) {
+          starProg.setVec3("u_follow", followPos.x, followPos.z, followLevel);
         } else {
           starProg.setVec3("u_follow", 0, 0, 0);
         }
@@ -1787,9 +1801,8 @@ export default function GalaxyArms() {
         ctx.stroke();
       }
       // the followed star's mark
-      if (followIdx >= 0 && followLevel > 0.02) {
-        const sp = starPos(followIdx);
-        const p = project(sp.x, sp.y, sp.z);
+      if (followPos) {
+        const p = project(followPos.x, followPos.y, followPos.z);
         if (p) {
           ctx.strokeStyle = `rgba(242, 238, 230, ${0.25 + followLevel * 0.5})`;
           ctx.lineWidth = 1;

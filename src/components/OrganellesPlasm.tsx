@@ -190,6 +190,12 @@ export default function OrganellesPlasm() {
     let lastSpanToneAt = 0;
     const lit = new Float32Array(MAX_ORGANELLES);
     const vel = new Float32Array(MAX_ORGANELLES * 2);
+    // the background wash only actually changes with size or season — cache
+    // it and rebuild on those, instead of a fresh CanvasGradient every frame
+    let bgGradient: CanvasGradient | null = null;
+    let bgGradW = -1;
+    let bgGradH = -1;
+    let bgGradWarm = -1;
 
     // ——— membrane in transit ———
     // A vesicle is membrane that has left one organ and not yet arrived at
@@ -718,10 +724,11 @@ export default function OrganellesPlasm() {
       const list = listRef.current;
       let best = -1;
       let bestD = Infinity;
+      const u = unit(); // does not depend on i — hoisted out of the loop
       for (let i = 0; i < list.length; i++) {
         const o = list[i];
         const d = Math.hypot(x - o.nx * width, y - o.ny * height);
-        const reach = Math.max(26, o.radius * unit() * (1 + o.amplitude) + 12);
+        const reach = Math.max(26, o.radius * u * (1 + o.amplitude) + 12);
         if (d < reach && d < bestD) {
           bestD = d;
           best = i;
@@ -1305,7 +1312,11 @@ export default function OrganellesPlasm() {
           if (ny < 0.02 || ny > 0.98) vel[i * 2 + 1] = -vel[i * 2 + 1] * 0.55;
           nx = clamp(nx, 0.02, 0.98);
           ny = clamp(ny, 0.02, 0.98);
-          list[i] = { ...o, nx, ny };
+          // mutate in place — this runs for every organelle every frame, and
+          // nothing downstream compares organelle object identity, so there
+          // is no need to allocate a fresh object here each tick
+          o.nx = nx;
+          o.ny = ny;
         }
       }
 
@@ -1456,17 +1467,22 @@ export default function OrganellesPlasm() {
       // season (three-finger twist) drifts the plasm's own slow cycle, a
       // faint warmth independent of anything the hand is doing
       const seasonWarm = Math.max(0, Math.sin(season * Math.PI * 2));
-      const bg = ctx.createRadialGradient(
-        width * 0.5,
-        height * 0.5,
-        10,
-        width * 0.5,
-        height * 0.5,
-        Math.max(width, height) * 0.8,
-      );
-      bg.addColorStop(0, `rgb(${16 + seasonWarm * 5}, ${19 + seasonWarm * 2}, 18)`);
-      bg.addColorStop(1, "rgb(8, 10, 10)");
-      ctx.fillStyle = bg;
+      if (bgGradient === null || bgGradW !== width || bgGradH !== height || bgGradWarm !== seasonWarm) {
+        bgGradient = ctx.createRadialGradient(
+          width * 0.5,
+          height * 0.5,
+          10,
+          width * 0.5,
+          height * 0.5,
+          Math.max(width, height) * 0.8,
+        );
+        bgGradient.addColorStop(0, `rgb(${16 + seasonWarm * 5}, ${19 + seasonWarm * 2}, 18)`);
+        bgGradient.addColorStop(1, "rgb(8, 10, 10)");
+        bgGradW = width;
+        bgGradH = height;
+        bgGradWarm = seasonWarm;
+      }
+      ctx.fillStyle = bgGradient;
       ctx.fillRect(0, 0, width, height);
 
       // the frame slides under two fingers; the dark stays put

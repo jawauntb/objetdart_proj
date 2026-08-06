@@ -679,6 +679,7 @@ export default function CellsPlasm() {
         p.pushX = (twinkleHash(seed % 991) - 0.5) * 90;
         p.pushY = (twinkleHash((seed + 7) % 991) - 0.5) * 90;
         cells.push(p);
+        paintOrderDirty = true;
         retireOldest();
         try { audio().spark(); } catch { /* noop */ }
         note(midiOf(p.morph) + 12, 140);
@@ -1458,7 +1459,7 @@ export default function CellsPlasm() {
       // cells: growth, drift, decay of pushes and charges, retirement
       for (let i = cells.length - 1; i >= 0; i--) {
         const c = cells[i];
-        if (c.retiringAt && now - c.retiringAt > RETIRE_MS) { cells.splice(i, 1); dirty = true; continue; }
+        if (c.retiringAt && now - c.retiringAt > RETIRE_MS) { cells.splice(i, 1); dirty = true; paintOrderDirty = true; continue; }
         if (!c.closed && !c.retiringAt) growCell(c, dt * 0.5); // a seeded cell finishes closing on its own
         c.streamBoost *= Math.exp(-dt * 1.4);
         if (!hold.cellId || hold.cellId !== c.id) {
@@ -1773,9 +1774,13 @@ export default function CellsPlasm() {
         ctx.stroke();
       }
 
-      // cells, painter's order by size (small behind, large in front)
-      const sorted = [...cells].sort((a, b) => a.morph.radius - b.morph.radius);
-      for (const c of sorted) drawCell(c, localT, breath);
+      // cells, painter's order by size (small behind, large in front) — the
+      // sort is redone only when the population changed, not every frame
+      if (paintOrderDirty) {
+        paintOrder = cells.slice().sort((a, b) => a.morph.radius - b.morph.radius);
+        paintOrderDirty = false;
+      }
+      for (const c of paintOrder) drawCell(c, localT, breath);
 
       // the spindle: two poles on the division axis, fibres strung between
       // them and reaching the chromosomes as the daughters pull apart
