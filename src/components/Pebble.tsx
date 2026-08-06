@@ -514,6 +514,18 @@ export default function Pebble() {
     void kbCharge;
     void holdElapsedMs;
 
+    // Reused across frames — clocksFrom() only reads these synchronously and
+    // doesn't retain the reference, so a fresh literal per frame would be
+    // pure garbage. Same for the stone-seed hash: seedKey only changes on
+    // clear()/reload, so re-hash it once and cache the result.
+    const clockInput: { time: number; turbulence: number; reducedMotion: boolean } = {
+      time: 0,
+      turbulence: 0,
+      reducedMotion: reduced,
+    };
+    let cachedSeedKey: number | null = null;
+    let cachedStoneSeed = 0;
+
     // ——— uniform arrays, allocated once ———
     const ringU = new Float32Array(24 * 4);
     const MINERAL_INDEX: Record<MineralId, number> = {
@@ -951,10 +963,10 @@ export default function Pebble() {
 
       if (stage && prog && quad && !stage.contextLost() && !asleep) {
         prog.use();
-        stage.beginFrame(
-          clocksFrom({ time: reduced ? 12 : t, turbulence: agitation, reducedMotion: reduced }),
-          prog,
-        );
+        clockInput.time = reduced ? 12 : t;
+        clockInput.turbulence = agitation;
+        clockInput.reducedMotion = reduced;
+        stage.beginFrame(clocksFrom(clockInput), prog);
         // Ring uniform: xyzw = radius, mineralHue, thickness, seed
         let rN = 0;
         for (const r of state.growthRings) {
@@ -974,8 +986,14 @@ export default function Pebble() {
         prog.setFloat("uSectionScale", 0.34);
         prog.setFloat("uPolishMax", POLISH_MAX);
         // The wear marks' phase — a pure function of the stone's own seed,
-        // so the same stone always shows the same scratches.
-        prog.setFloat("uStoneSeed", (hashSeed(state.seedKey, 0x5ea1) % 100000) / 100000);
+        // so the same stone always shows the same scratches. seedKey only
+        // changes on clear()/reload, so re-hash once and cache it rather
+        // than re-hashing on every frame.
+        if (cachedSeedKey !== state.seedKey) {
+          cachedSeedKey = state.seedKey;
+          cachedStoneSeed = (hashSeed(state.seedKey, 0x5ea1) % 100000) / 100000;
+        }
+        prog.setFloat("uStoneSeed", cachedStoneSeed);
         prog.setVec4(
           "uCleavage",
           cleavagePlane[0],
@@ -1002,20 +1020,23 @@ export default function Pebble() {
       // The twist lens — a small 2D overlay with the polish depth,
       // the mineral name and the ca_hz readout.
       const octx = stage?.overlay2d ?? null;
-      if (octx && lens > 0.02) {
+      if (octx) {
+        // One rect read, reused for both branches — was up to two separate
+        // getBoundingClientRect() layout queries per frame.
         const r = surface.getBoundingClientRect();
-        const w = r.width;
-        octx.clearRect(0, 0, w, r.height);
-        octx.globalAlpha = lens;
-        octx.fillStyle = "rgba(242, 236, 217, 0.92)";
-        octx.font = "13px ui-monospace, monospace";
-        const mineral = state.growthRings[0]?.mineral ?? "quartz";
-        const polishMm = (state.polishDepth * 1000).toFixed(1);
-        const hz = ringHzFor(state).toFixed(1);
-        octx.fillText(`${mineral} · polish ${polishMm}mm · ${hz}Hz`, 24, r.height - 24);
-        octx.globalAlpha = 1;
-      } else if (octx) {
-        octx.clearRect(0, 0, surface.getBoundingClientRect().width, surface.getBoundingClientRect().height);
+        if (lens > 0.02) {
+          octx.clearRect(0, 0, r.width, r.height);
+          octx.globalAlpha = lens;
+          octx.fillStyle = "rgba(242, 236, 217, 0.92)";
+          octx.font = "13px ui-monospace, monospace";
+          const mineral = state.growthRings[0]?.mineral ?? "quartz";
+          const polishMm = (state.polishDepth * 1000).toFixed(1);
+          const hz = ringHzFor(state).toFixed(1);
+          octx.fillText(`${mineral} · polish ${polishMm}mm · ${hz}Hz`, 24, r.height - 24);
+          octx.globalAlpha = 1;
+        } else {
+          octx.clearRect(0, 0, r.width, r.height);
+        }
       }
 
       raf = requestAnimationFrame(draw);

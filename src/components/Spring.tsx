@@ -696,6 +696,31 @@ export default function Spring() {
     const rippleU = new Float32Array(MAX_RIPPLES * 4);
     const ripples: { x: number; y: number; t0: number; intensity: number }[] = [];
 
+    // ——— per-frame context records for clocksFrom / population step+emit —
+    // allocated once here, fields overwritten in place every frame in draw()
+    // below, so the hot loop allocates no object literals per frame.
+    const clocksInput = { time: 0, turbulence: 0, reducedMotion: false };
+    const stepCtx = {
+      dt: 0,
+      tMs: 0,
+      breath: 0.5,
+      detail: 1,
+      wind: 0,
+      gravity: 0,
+      agitation: 0,
+      season: 0,
+      timeScale: 1,
+      reducedMotion: false,
+    };
+    const emitCtx = {
+      width: 0,
+      height: 0,
+      tMs: 0,
+      breath: 0.5,
+      detail: 1,
+      reducedMotion: false,
+    };
+
     // ——— the live axes the shader lens over, all continuous ———
     let lens = 0;
     let lensTarget = 0;
@@ -1241,10 +1266,10 @@ export default function Spring() {
 
       if (stage && prog && quad && !stage.contextLost() && !asleep) {
         prog.use();
-        stage.beginFrame(
-          clocksFrom({ time: reduced ? 12 : t, turbulence: agitation, reducedMotion: reduced }),
-          prog,
-        );
+        clocksInput.time = reduced ? 12 : t;
+        clocksInput.turbulence = agitation;
+        clocksInput.reducedMotion = reduced;
+        stage.beginFrame(clocksFrom(clocksInput), prog);
         // seep uniform: xy pos, flux, phase
         let sN = 0;
         for (const s of state.seeps) {
@@ -1291,28 +1316,18 @@ export default function Spring() {
         // the shared instance buffer.
         waterlineU = clamp01(0.40 + (0.55 - clamp01(state.L)) * 0.06);
         syncPopulationFromLedger(now);
-        const stepCtx = {
-          dt: Math.min(0.05, dtRaw),
-          tMs: now,
-          breath: 0.5,
-          detail: 1,
-          wind: 0,
-          gravity: 0,
-          agitation,
-          season: 0,
-          timeScale,
-          reducedMotion: reduced,
-        };
+        stepCtx.dt = Math.min(0.05, dtRaw);
+        stepCtx.tMs = now;
+        stepCtx.agitation = agitation;
+        stepCtx.timeScale = timeScale;
+        stepCtx.reducedMotion = reduced;
         population.step(stepCtx);
         bubblePopulation.step(stepCtx);
-        const emitCtx = {
-          width: stage.size.width,
-          height: stage.size.height,
-          tMs: now,
-          breath: reduced ? 0.5 : 0.5 + 0.5 * Math.sin(t * Math.PI * 2 / 7),
-          detail: 1,
-          reducedMotion: reduced,
-        };
+        emitCtx.width = stage.size.width;
+        emitCtx.height = stage.size.height;
+        emitCtx.tMs = now;
+        emitCtx.breath = reduced ? 0.5 : 0.5 + 0.5 * Math.sin(t * Math.PI * 2 / 7);
+        emitCtx.reducedMotion = reduced;
         // both populations write into the SAME buffer — one instanced draw
         // for the whole room's countable material, seeps and bubbles alike.
         instanceBuffer.reset();

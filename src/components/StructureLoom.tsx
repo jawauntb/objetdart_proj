@@ -311,8 +311,7 @@ export default function StructureLoom() {
       audio.releaseConcernTone("risk");
       audio.releaseConcernTone("future");
     };
-    const driveSound = () => {
-      const spec = compileSound(s, params);
+    const driveSound = (spec: ReturnType<typeof compileSound>) => {
       if (spec.phase === "latent" || spec.phase === "rest") {
         stopTones();
         return;
@@ -621,6 +620,9 @@ export default function StructureLoom() {
       s = step(s, { attention, renew: attention }, dt, params);
       pour *= reduced ? 0.9 : 0.92;
       pouredThisRun += attention * dt;
+      // computed once per frame — s doesn't change again until next frame,
+      // so this single compile is reused everywhere a fresh spec is needed.
+      const soundSpec = compileSound(s, params);
 
       // phase-change events fire across all substrates in the same frame.
       if (s.phase !== lastPhase) {
@@ -628,7 +630,7 @@ export default function StructureLoom() {
           lastCross = now;
           qBeforeCross = conservedQuantity(prev);
           // resolved chord + bell — the sound's phase transition.
-          const spec = compileSound(s, params);
+          const spec = soundSpec;
           audio.bell();
           audio.playTone(spec.rootHz, 1.4);
           audio.playTone(spec.rootHz * 1.5, 1.2);
@@ -653,7 +655,7 @@ export default function StructureLoom() {
         lastPhase = s.phase;
       }
 
-      driveSound();
+      driveSound(soundSpec);
 
       // rolling buffer for the live invariant table — its window scales
       // with the governed detail tier, so lower tiers walk less history
@@ -668,7 +670,7 @@ export default function StructureLoom() {
       ctx.fillRect(0, 0, width, height);
 
       if (lens > 0.02) drawLens(now);
-      if (lens < 0.98) drawEmbodiments(now, breath);
+      if (lens < 0.98) drawEmbodiments(now, breath, soundSpec);
 
       // night (vessel: flip face-down) — the loom hushes under a veil
       if (nightAmt > 0.01) {
@@ -691,7 +693,7 @@ export default function StructureLoom() {
     };
 
     // ——— the five embodiments, side by side, from the one S ———
-    function drawEmbodiments(now: number, breath: number) {
+    function drawEmbodiments(now: number, breath: number, sound: ReturnType<typeof compileSound>) {
       const alpha = 1 - lens;
       const pad = 16;
       const labelW = width < 460 ? 54 : 78;
@@ -700,28 +702,22 @@ export default function StructureLoom() {
       const laneX = pad + labelW;
       const laneW = width - pad - laneX;
 
-      const sound = compileSound(s, params);
       const visual = compileVisual(s, params);
       const text = compileText(s);
       const nav = compileNav(s);
       const tactile = compileTactile(s);
       const crossFlash = Math.max(0, 1 - (now - lastCross) / 0.9);
 
-      const label = (row: number, name: string) => {
-        ctx.fillStyle = `rgba(233,237,246,${0.34 * alpha})`;
-        ctx.font = "300 10px ui-monospace, 'SF Mono', Menlo, monospace";
-        ctx.textAlign = "left";
-        ctx.fillText(name, pad, pad + laneH * row + laneH / 2 + 3);
-      };
-      const laneTop = (row: number) => pad + laneH * row;
-      const cy = (row: number) => laneTop(row) + laneH / 2;
+      // label/laneTop/cy are hoisted to module scope (laneLabel/laneTopY/
+      // laneCenterY below) so no closure is allocated on every frame this
+      // runs (SPEC perf contract) — called directly at each use site.
 
       // 1 — sound: voices spread by reach, beating by dissonance
       {
         const row = 0;
-        label(row, "sound");
+        laneLabel(ctx, pad, laneH, alpha, row, "sound");
         const voices = params.voices;
-        const base = laneTop(row) + laneH * 0.72;
+        const base = laneTopY(pad, laneH, row) + laneH * 0.72;
         for (let i = 0; i < voices; i++) {
           const u = voices === 1 ? 0 : i / (voices - 1);
           const y = base - u * laneH * 0.5 * (0.3 + sound.spread);
@@ -745,8 +741,8 @@ export default function StructureLoom() {
       // 2 — visual: a sigil polygon that gathers then snaps symmetry
       {
         const row = 1;
-        label(row, "shape");
-        const c = { x: laneX + laneW * 0.5, y: cy(row) };
+        laneLabel(ctx, pad, laneH, alpha, row, "shape");
+        const c = { x: laneX + laneW * 0.5, y: laneCenterY(pad, laneH, row) };
         const rad = Math.min(laneH, laneW) * 0.42 * visual.radius;
         const sym = visual.symmetry;
         ctx.beginPath();
@@ -773,21 +769,21 @@ export default function StructureLoom() {
       // 3 — text: the tiered line
       {
         const row = 2;
-        label(row, "text");
+        laneLabel(ctx, pad, laneH, alpha, row, "text");
         ctx.fillStyle = `rgba(233,237,246,${0.72 * alpha})`;
         ctx.font = `300 ${width < 460 ? 12 : 14}px ui-serif, Georgia, 'Times New Roman', serif`;
         ctx.textAlign = "left";
-        wrapText(ctx, text.line, laneX, cy(row) - 6, laneW, 17);
+        wrapText(ctx, text.line, laneX, laneCenterY(pad, laneH, row) - 6, laneW, 17);
       }
 
       // 4 — nav: a corridor, penned then open (reach = traversable fraction)
       {
         const row = 3;
-        label(row, "space");
+        laneLabel(ctx, pad, laneH, alpha, row, "space");
         const cells = 24;
         const open = Math.round((nav.openCells / NAV_GRID) * cells);
         const cw = laneW / cells;
-        const y = cy(row);
+        const y = laneCenterY(pad, laneH, row);
         for (let i = 0; i < cells; i++) {
           const lit = i < open;
           ctx.fillStyle = lit
@@ -806,8 +802,8 @@ export default function StructureLoom() {
       // 5 — tactile: ticks, a bloom, a sustained presence bar
       {
         const row = 4;
-        label(row, "touch");
-        const y = cy(row);
+        laneLabel(ctx, pad, laneH, alpha, row, "touch");
+        const y = laneCenterY(pad, laneH, row);
         const period = 1 / tactile.tickHz;
         const phaseFrac = ((now % period) / period);
         const nticks = 7;
@@ -867,36 +863,36 @@ export default function StructureLoom() {
       ctx.fillText("reach →", 0, 0);
       ctx.restore();
 
-      // the two thresholds (hysteresis loop): first high, second low
-      const px = (t: number) => cx - R + t * 2 * R;
-      const py = (r: number) => cy + R - r * 2 * R;
+      // the two thresholds (hysteresis loop): first high, second low.
+      // (lensX/lensY hoisted to module scope — see below — so this per-frame
+      // function has no closures of its own to allocate.)
       for (const [t, lab] of [
         [0.82, "θ₁"],
         [0.52, "θ₂ (visited)"],
       ] as [number, string][]) {
         ctx.strokeStyle = `rgba(244,211,122,${0.3 * a})`;
         ctx.beginPath();
-        ctx.moveTo(px(t), cy - R);
-        ctx.lineTo(px(t), cy + R);
+        ctx.moveTo(lensX(cx, R, t), cy - R);
+        ctx.lineTo(lensX(cx, R, t), cy + R);
         ctx.stroke();
         ctx.fillStyle = `rgba(244,211,122,${0.6 * a})`;
-        ctx.fillText(lab, px(t) + 3, cy - R + 12);
+        ctx.fillText(lab, lensX(cx, R, t) + 3, cy - R + 12);
       }
 
       // the hysteresis trajectory sketch: accumulate right along low reach,
       // jump up at θ, decay left-down back to rest, re-enter at θ₂.
       ctx.strokeStyle = `rgba(233,237,246,${0.28 * a})`;
       ctx.beginPath();
-      ctx.moveTo(px(0), py(0.12));
-      ctx.lineTo(px(0.82), py(0.12));
-      ctx.lineTo(px(0.18), py(0.5)); // the jump + slump
-      ctx.lineTo(px(0), py(0.12));
+      ctx.moveTo(lensX(cx, R, 0), lensY(cy, R, 0.12));
+      ctx.lineTo(lensX(cx, R, 0.82), lensY(cy, R, 0.12));
+      ctx.lineTo(lensX(cx, R, 0.18), lensY(cy, R, 0.5)); // the jump + slump
+      ctx.lineTo(lensX(cx, R, 0), lensY(cy, R, 0.12));
       ctx.stroke();
 
       // the live point
       ctx.beginPath();
       ctx.fillStyle = `rgba(244,211,122,${0.95 * a})`;
-      ctx.arc(px(s.tension), py(s.reach), 4.5, 0, Math.PI * 2);
+      ctx.arc(lensX(cx, R, s.tension), lensY(cy, R, s.reach), 4.5, 0, Math.PI * 2);
       ctx.fill();
 
       // conserved quantity bar
@@ -1076,4 +1072,36 @@ function wrapText(
     }
   }
   if (line) ctx.fillText(line, x, yy);
+}
+
+// ——— lane geometry + label, hoisted to module scope so drawEmbodiments
+// (called once per rAF frame) never allocates a closure to compute these —
+// plain functions taking the frame's values as arguments instead. ———
+function laneTopY(pad: number, laneH: number, row: number): number {
+  return pad + laneH * row;
+}
+function laneCenterY(pad: number, laneH: number, row: number): number {
+  return laneTopY(pad, laneH, row) + laneH / 2;
+}
+function laneLabel(
+  ctx: CanvasRenderingContext2D,
+  pad: number,
+  laneH: number,
+  alpha: number,
+  row: number,
+  name: string,
+) {
+  ctx.fillStyle = `rgba(233,237,246,${0.34 * alpha})`;
+  ctx.font = "300 10px ui-monospace, 'SF Mono', Menlo, monospace";
+  ctx.textAlign = "left";
+  ctx.fillText(name, pad, pad + laneH * row + laneH / 2 + 3);
+}
+
+// ——— lens-space axis mapping (tension → x, reach → y), hoisted the same
+// way — drawLens is also called once per rAF frame. ———
+function lensX(cx: number, R: number, t: number): number {
+  return cx - R + t * 2 * R;
+}
+function lensY(cy: number, R: number, r: number): number {
+  return cy + R - r * 2 * R;
 }

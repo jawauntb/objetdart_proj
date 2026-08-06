@@ -1456,13 +1456,14 @@ export default function Aphros() {
                 // a struck dolphin plays harder; squalls lift them all
                 if (now < dolphinBoostUntil[i]) liftAmt *= 1.35;
                 liftAmt *= 1 + agitation * 0.35;
-                const posAt = (pp: number) => {
-                  const px = d.x0 + (d.x1 - d.x0) * pp;
-                  const py = d.yBase + d.slope * px - liftAmt * 4 * pp * (1 - pp) + 0.02;
-                  return [px, py];
-                };
-                const [x, y] = posAt(p);
-                const [x2, y2] = posAt(Math.min(1, p + 0.012));
+                // (was a per-frame closure `posAt` returning a fresh [x, y]
+                // array on each of its two calls — inlined here, no
+                // allocation, identical arithmetic)
+                const p2 = Math.min(1, p + 0.012);
+                const x = d.x0 + (d.x1 - d.x0) * p;
+                const y = d.yBase + d.slope * x - liftAmt * 4 * p * (1 - p) + 0.02;
+                const x2 = d.x0 + (d.x1 - d.x0) * p2;
+                const y2 = d.yBase + d.slope * x2 - liftAmt * 4 * p2 * (1 - p2) + 0.02;
                 const angle = Math.atan2(y2 - y, (x2 - x) * 0.6);
                 // present only mid-arc; slips away at the edges of its run
                 const presence = Math.max(0, Math.min(0.75, Math.sin(p * Math.PI) * 1.4 - 0.25));
@@ -1474,7 +1475,10 @@ export default function Aphros() {
                   pushWake(x, Math.min(SHORE - 0.03, y + 0.05), 0.8);
                 }
                 prevPresence[i] = presence;
-                live.dolphins[i] = [x, y];
+                // mutate the pre-allocated [x, y] pair in place rather than
+                // allocating a new array every frame
+                live.dolphins[i][0] = x;
+                live.dolphins[i][1] = y;
                 dolphinData[i * 4 + 0] = x;
                 dolphinData[i * 4 + 1] = y;
                 dolphinData[i * 4 + 2] = angle;

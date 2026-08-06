@@ -801,10 +801,25 @@ export default function Marsh() {
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
         if (item.presence < 1) continue;
-        if (!ledger.some((r) => r.id === item.id)) item.presence = 0.999;
+        let stillPresent = false;
+        for (let j = 0; j < ledger.length; j++) {
+          if (ledger[j].id === item.id) {
+            stillPresent = true;
+            break;
+          }
+        }
+        if (!stillPresent) item.presence = 0.999;
       }
-      for (const r of ledger) {
-        let item = items.find((it) => it.id === r.id && it.presence >= 1);
+      for (let ri = 0; ri < ledger.length; ri++) {
+        const r = ledger[ri];
+        let item: ReedView | undefined;
+        for (let ii = 0; ii < items.length; ii++) {
+          const it = items[ii];
+          if (it.id === r.id && it.presence >= 1) {
+            item = it;
+            break;
+          }
+        }
         if (!item) {
           item = {
             id: r.id,
@@ -838,10 +853,25 @@ export default function Marsh() {
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
         if (item.presence < 1) continue;
-        if (!ledger.some((m) => m.id === item.id)) item.presence = 0.999;
+        let stillPresent = false;
+        for (let j = 0; j < ledger.length; j++) {
+          if (ledger[j].id === item.id) {
+            stillPresent = true;
+            break;
+          }
+        }
+        if (!stillPresent) item.presence = 0.999;
       }
-      for (const m of ledger) {
-        let item = items.find((it) => it.id === m.id && it.presence >= 1);
+      for (let mi = 0; mi < ledger.length; mi++) {
+        const m = ledger[mi];
+        let item: MatView | undefined;
+        for (let ii = 0; ii < items.length; ii++) {
+          const it = items[ii];
+          if (it.id === m.id && it.presence >= 1) {
+            item = it;
+            break;
+          }
+        }
         if (!item) {
           item = {
             id: m.id,
@@ -1274,6 +1304,45 @@ export default function Marsh() {
     };
     apiRef.current = engine;
 
+    // Pre-allocated per-frame context objects. Population#step and
+    // Population#emit (and clocksFrom) read these synchronously and never
+    // retain the reference, so they're mutated in place every frame instead
+    // of being allocated fresh — the object literals they used to receive
+    // were per-frame garbage for no behavioral reason.
+    const clockInput = { time: 0, turbulence: 0, reducedMotion: reduced };
+    const reedStepCtx = {
+      dt: 0,
+      tMs: 0,
+      breath: 0,
+      detail: 1,
+      wind: 0,
+      gravity: 0,
+      agitation: 0,
+      season: 0,
+      timeScale: 1,
+      reducedMotion: reduced,
+    };
+    const matStepCtx = {
+      dt: 0,
+      tMs: 0,
+      breath: 0,
+      detail: 1,
+      wind: 0,
+      gravity: 0,
+      agitation: 0,
+      season: 0,
+      timeScale: 1,
+      reducedMotion: reduced,
+    };
+    const emitCtx = {
+      width: 0,
+      height: 0,
+      tMs: 0,
+      breath: 0,
+      detail: 1,
+      reducedMotion: reduced,
+    };
+
     const draw = (now: number) => {
       if (!running) return;
       const dtRaw = Math.min(0.05, (now - last) / 1000);
@@ -1305,10 +1374,10 @@ export default function Marsh() {
 
       if (stage && prog && quad && !stage.contextLost() && !asleep) {
         prog.use();
-        stage.beginFrame(
-          clocksFrom({ time: reduced ? 12 : t, turbulence: agitation, reducedMotion: reduced }),
-          prog,
-        );
+        clockInput.time = reduced ? 12 : t;
+        clockInput.turbulence = agitation;
+        clockInput.reducedMotion = reduced;
+        stage.beginFrame(clocksFrom(clockInput), prog);
         // Reed uniforms
         let rN = 0;
         for (const r of state.reeds) {
@@ -1368,39 +1437,28 @@ export default function Marsh() {
         syncReedsFromLedger(now);
         syncMatsFromLedger(now);
         const breathNow = reduced ? 0.5 : 0.5 + 0.5 * Math.sin((t * Math.PI * 2) / 7);
-        reeds.step({
-          dt: Math.min(0.05, dtRaw),
-          tMs: now,
-          breath: breathNow,
-          detail: 1,
-          wind: windX,
-          gravity: 0,
-          agitation,
-          season: 0,
-          timeScale,
-          reducedMotion: reduced,
-        });
-        mats.step({
-          dt: Math.min(0.05, dtRaw),
-          tMs: now,
-          breath: breathNow,
-          detail: 1,
-          wind: 0,
-          gravity: 0,
-          agitation,
-          season: 0,
-          timeScale,
-          reducedMotion: reduced,
-        });
+        const dt = Math.min(0.05, dtRaw);
+        reedStepCtx.dt = dt;
+        reedStepCtx.tMs = now;
+        reedStepCtx.breath = breathNow;
+        reedStepCtx.wind = windX;
+        reedStepCtx.agitation = agitation;
+        reedStepCtx.timeScale = timeScale;
+        reedStepCtx.reducedMotion = reduced;
+        reeds.step(reedStepCtx);
+        matStepCtx.dt = dt;
+        matStepCtx.tMs = now;
+        matStepCtx.breath = breathNow;
+        matStepCtx.agitation = agitation;
+        matStepCtx.timeScale = timeScale;
+        matStepCtx.reducedMotion = reduced;
+        mats.step(matStepCtx);
         instanceBuffer.reset();
-        const emitCtx = {
-          width: stage.size.width,
-          height: stage.size.height,
-          tMs: now,
-          breath: breathNow,
-          detail: 1,
-          reducedMotion: reduced,
-        };
+        emitCtx.width = stage.size.width;
+        emitCtx.height = stage.size.height;
+        emitCtx.tMs = now;
+        emitCtx.breath = breathNow;
+        emitCtx.reducedMotion = reduced;
         reeds.emit(emitCtx, instanceBuffer);
         mats.emit(emitCtx, instanceBuffer);
         populationLayer?.draw(instanceBuffer);

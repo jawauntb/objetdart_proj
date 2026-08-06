@@ -782,6 +782,36 @@ export default function Geyser() {
     const rippleU = new Float32Array(MAX_RIPPLES * 4);
     const ripples: { x: number; y: number; t0: number; intensity: number }[] = [];
 
+    // ——— per-frame context objects, allocated once and mutated in place ———
+    // clocksFrom/step/emit all read these synchronously and never retain the
+    // reference, so reusing one object per frame (instead of a fresh literal)
+    // avoids per-frame garbage without changing anything either call sees.
+    const clockInput: { time: number; turbulence: number; reducedMotion: boolean } = {
+      time: 0,
+      turbulence: 0,
+      reducedMotion: false,
+    };
+    const stepCtx = {
+      dt: 0,
+      tMs: 0,
+      breath: 0.5,
+      detail: 1,
+      wind: 0,
+      gravity: 0,
+      agitation: 0,
+      season: 0,
+      timeScale: 1,
+      reducedMotion: false,
+    };
+    const emitCtx = {
+      width: 0,
+      height: 0,
+      tMs: 0,
+      breath: 0.5,
+      detail: 1,
+      reducedMotion: false,
+    };
+
     // ——— live axes glided per frame ———
     let lens = 0;
     let lensTarget = 0;
@@ -1303,10 +1333,10 @@ export default function Geyser() {
 
       if (stage && prog && quad && !stage.contextLost() && !asleep) {
         prog.use();
-        stage.beginFrame(
-          clocksFrom({ time: reduced ? 12 : t, turbulence: agitation, reducedMotion: reduced }),
-          prog,
-        );
+        clockInput.time = reduced ? 12 : t;
+        clockInput.turbulence = agitation;
+        clockInput.reducedMotion = reduced;
+        stage.beginFrame(clocksFrom(clockInput), prog);
 
         // heat-mark uniform: xy pos, heat, phase
         let hN = 0;
@@ -1375,30 +1405,19 @@ export default function Geyser() {
         // Sync the population from the ledger, step it, emit every mark
         // into the shared instance buffer, and hand it off to the layer.
         syncPopulationFromLedger(now);
-        population.step({
-          dt: Math.min(0.05, dtRaw),
-          tMs: now,
-          breath: 0.5,
-          detail: 1,
-          wind: 0,
-          gravity: 0,
-          agitation,
-          season: 0,
-          timeScale,
-          reducedMotion: reduced,
-        });
+        stepCtx.dt = Math.min(0.05, dtRaw);
+        stepCtx.tMs = now;
+        stepCtx.agitation = agitation;
+        stepCtx.timeScale = timeScale;
+        stepCtx.reducedMotion = reduced;
+        population.step(stepCtx);
         instanceBuffer.reset();
-        population.emit(
-          {
-            width: stage.size.width,
-            height: stage.size.height,
-            tMs: now,
-            breath: reduced ? 0.5 : 0.5 + 0.5 * Math.sin(t * Math.PI * 2 / 7),
-            detail: 1,
-            reducedMotion: reduced,
-          },
-          instanceBuffer,
-        );
+        emitCtx.width = stage.size.width;
+        emitCtx.height = stage.size.height;
+        emitCtx.tMs = now;
+        emitCtx.breath = reduced ? 0.5 : 0.5 + 0.5 * Math.sin(t * Math.PI * 2 / 7);
+        emitCtx.reducedMotion = reduced;
+        population.emit(emitCtx, instanceBuffer);
         populationLayer?.draw(instanceBuffer);
 
         // ——— the plume's own droplets ———
@@ -1415,30 +1434,12 @@ export default function Geyser() {
             plumePopulation.spawn(VENT_NX, VENT_NY, now);
           }
         }
-        plumePopulation.step({
-          dt: Math.min(0.05, dtRaw),
-          tMs: now,
-          breath: 0.5,
-          detail: 1,
-          wind: 0,
-          gravity: 0,
-          agitation,
-          season: 0,
-          timeScale,
-          reducedMotion: reduced,
-        });
+        // stepCtx/emitCtx already carry this frame's values (set above for
+        // `population`) — identical fields, so the plume population reuses
+        // them rather than rebuilding the same object again.
+        plumePopulation.step(stepCtx);
         plumeInstanceBuffer.reset();
-        plumePopulation.emit(
-          {
-            width: stage.size.width,
-            height: stage.size.height,
-            tMs: now,
-            breath: reduced ? 0.5 : 0.5 + 0.5 * Math.sin(t * Math.PI * 2 / 7),
-            detail: 1,
-            reducedMotion: reduced,
-          },
-          plumeInstanceBuffer,
-        );
+        plumePopulation.emit(emitCtx, plumeInstanceBuffer);
         populationLayer?.draw(plumeInstanceBuffer);
       }
 

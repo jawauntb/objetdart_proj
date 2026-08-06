@@ -74,11 +74,7 @@ export default function Tape() {
       const lfo = Math.sin(t * 0.14 * Math.PI * 2); // -1..1
       const breathe = reduce ? 0 : lfo * 1.5;       // ±1.5px vertical breathing
       const spatialAmp = reduce ? 0 : 3;            // ~3px spatial undulation
-      const spatialK = (Math.PI * 2 * 0.06) / 100;  // 0.06 cycles per 100px
       const drift = t * 30;                         // 30px/sec horizontal drift
-
-      const baselineY = (x: number): number =>
-        baseY + breathe + Math.sin((x + drift) * spatialK) * spatialAmp;
 
       ctx.strokeStyle = palette.line;
       ctx.lineWidth = 1;
@@ -88,7 +84,7 @@ export default function Tape() {
       const x1 = w - RIGHT_PAD;
       for (let i = 0; i <= SEGMENTS; i++) {
         const px = x0 + (i / SEGMENTS) * (x1 - x0);
-        const py = baselineY(px);
+        const py = computeBaselineY(px, baseY, breathe, drift, spatialAmp, SPATIAL_K);
         if (i === 0) ctx.moveTo(px, py);
         else ctx.lineTo(px, py);
       }
@@ -101,7 +97,7 @@ export default function Tape() {
       ctx.lineWidth = 1;
       for (let m = 0; m <= 3; m++) {
         const tx = positionX(now - m * 60_000, now, w);
-        const ty = baselineY(tx);
+        const ty = computeBaselineY(tx, baseY, breathe, drift, spatialAmp, SPATIAL_K);
         ctx.beginPath();
         ctx.moveTo(tx, ty + 4);
         ctx.lineTo(tx, ty + 8);
@@ -114,10 +110,11 @@ export default function Tape() {
       ctx.textAlign = "left";
       ctx.fillText("3m", LEFT_PAD, h - 4);
 
-      // events
-      tape.forEach((ev) => {
+      // events — plain for-of (not .forEach) so no per-frame callback
+      // closure is allocated; body is identical to before.
+      for (const ev of tape) {
         const x = positionX(ev.t, now, w);
-        if (x < LEFT_PAD - 24 || x > w - RIGHT_PAD + 24) return;
+        if (x < LEFT_PAD - 24 || x > w - RIGHT_PAD + 24) continue;
         const age = now - ev.t;
         // draw progress: 0..1 over first 700ms
         const drawP = reduce ? 1 : Math.min(1, age / 700);
@@ -126,12 +123,13 @@ export default function Tape() {
         const ink = withAlpha(palette.glyph, fade);
         const accent = withAlpha(palette.accent, fade);
         // anchor each pulse to the wavy baseline at its x
-        drawPulse(ctx, x, baselineY(x), ev, drawP, ink, accent);
-      });
+        const py = computeBaselineY(x, baseY, breathe, drift, spatialAmp, SPATIAL_K);
+        drawPulse(ctx, x, py, ev, drawP, ink, accent);
+      }
 
       // current-time cursor — sits on the wave too
       const cursorX = w - RIGHT_PAD;
-      const cursorBaseY = baselineY(cursorX);
+      const cursorBaseY = computeBaselineY(cursorX, baseY, breathe, drift, spatialAmp, SPATIAL_K);
       ctx.strokeStyle = palette.cursor;
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -172,13 +170,14 @@ export default function Tape() {
     if (y < 4 || y > TAPE_H - 4) { setHovered(null); return; }
     const now = Date.now();
     const w = rect.width;
-    let best: { ev: TapeEvent; dx: number } | null = null;
+    let bestEv: TapeEvent | null = null;
+    let bestDx = Infinity;
     for (const ev of tape) {
       const ex = positionX(ev.t, now, w);
       const dx = Math.abs(ex - x);
-      if (dx < 14 && (!best || dx < best.dx)) best = { ev, dx };
+      if (dx < 14 && dx < bestDx) { bestEv = ev; bestDx = dx; }
     }
-    setHovered(best?.ev ?? null);
+    setHovered(bestEv);
   };
   const onLeave = () => setHovered(null);
 
@@ -248,6 +247,9 @@ const TAPE_H = 40;
 const LEFT_PAD = 16;
 const RIGHT_PAD = 60;
 const WINDOW_MS = 3 * 60_000;
+// spatial wave constant for the baseline — 0.06 cycles per 100px. Hoisted
+// out of the per-frame draw() since it never varies frame to frame.
+const SPATIAL_K = (Math.PI * 2 * 0.06) / 100;
 
 function positionX(t: number, now: number, w: number): number {
   const usable = w - LEFT_PAD - RIGHT_PAD;
@@ -257,13 +259,48 @@ function positionX(t: number, now: number, w: number): number {
   return x;
 }
 
+/**
+ * The baseline's wavy y position at a given x. Plain function taking every
+ * input explicitly (no closure over frame-local variables) so calling it
+ * doesn't allocate — same formula that used to live inline in draw().
+ */
+function computeBaselineY(
+  x: number,
+  baseY: number,
+  breathe: number,
+  drift: number,
+  spatialAmp: number,
+  spatialK: number,
+): number {
+  return baseY + breathe + Math.sin((x + drift) * spatialK) * spatialAmp;
+}
+
+// withAlpha is called twice per visible event, every frame. The rgba
+// strings it receives are always one of the handful of literals in LIGHT /
+// DARK below, so the parsed channel components are cached by source string
+// instead of being re-parsed (regex match + split + map) on every call.
+const rgbaPartsCache = new Map<string, { r: string; g: string; b: string; a: number } | null>();
+
+function parseRgbaParts(rgba: string): { r: string; g: string; b: string; a: number } | null {
+  let parts = rgbaPartsCache.get(rgba);
+  if (parts !== undefined) return parts;
+  const m = rgba.match(/rgba\(([^)]+)\)/);
+  if (!m) {
+    parts = null;
+  } else {
+    const chunks = m[1].split(",").map((s) => s.trim());
+    parts = { r: chunks[0], g: chunks[1], b: chunks[2], a: parseFloat(chunks[3] ?? "1") };
+  }
+  rgbaPartsCache.set(rgba, parts);
+  return parts;
+}
+
 function withAlpha(rgba: string, mult: number): string {
   // rgba string like "rgba(r,g,b,a)" — multiply the alpha
-  const m = rgba.match(/rgba\(([^)]+)\)/);
-  if (!m) return rgba;
-  const parts = m[1].split(",").map((s) => s.trim());
-  const a = parseFloat(parts[3] ?? "1") * mult;
-  return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, ${a})`;
+  const parts = parseRgbaParts(rgba);
+  if (!parts) return rgba;
+  const a = parts.a * mult;
+  return `rgba(${parts.r}, ${parts.g}, ${parts.b}, ${a})`;
 }
 
 function pad2(n: number): string {

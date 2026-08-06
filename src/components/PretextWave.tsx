@@ -46,6 +46,13 @@ const DENSITY_MAX = 3;
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
+// Static — has no prop/state dependency, so it is built once at module load
+// instead of being rebuilt on every render (including every animation-frame
+// re-render driven by the phase clock).
+const MODE_OPTIONS = MODES.map((item) => (
+  <option key={item.key} value={item.key}>{item.label}</option>
+));
+
 const STARTER_TEXT =
   "type a sentence and the room will make a coast of it. the words keep their measure, then loosen into wave, quake, shake, and sine. drag across the words to play them, or press play and the line becomes a small instrument.";
 
@@ -304,6 +311,40 @@ export default function PretextWave() {
     () => layoutText(prepared, Math.max(0, width - 2), lineHeight),
     [prepared, width, lineHeight],
   );
+
+  // The phase clock drives a React re-render every animation frame (via
+  // setPhase in the rAF loop above), but the line/word markup itself only
+  // depends on `layout` — per-frame motion reads the --pretext-phase CSS
+  // custom property already set on the stage element, via calc()/sin()/cos()
+  // in the stylesheet. Without this memo, every frame would rebuild the full
+  // line/word element tree (map + nested map) from scratch for nothing.
+  const lineElements = useMemo(() => {
+    if (!layout) return null;
+    return layout.lines.map((line, lineIndex) => (
+      <p
+        key={`${line.text}-${lineIndex}`}
+        className="pretext-line"
+        style={{
+          top: line.top,
+          width: line.width,
+          "--line-phase": `${line.phase}`,
+        } as React.CSSProperties}
+      >
+        {splitTokens(line.text).map((token, tokenIndex) => {
+          if (/^\s+$/.test(token)) return <span key={tokenIndex}>{token}</span>;
+          return (
+            <span
+              key={tokenIndex}
+              className="pretext-word"
+              style={{ "--word-index": `${tokenIndex}` } as React.CSSProperties}
+            >
+              {token}
+            </span>
+          );
+        })}
+      </p>
+    ));
+  }, [layout]);
 
   const generate = async () => {
     const question = prompt.trim();
@@ -727,34 +768,7 @@ export default function PretextWave() {
       >
         <span ref={probeRef} className="pretext-probe">measure me</span>
         <div className="pretext-field" style={{ height: layout ? layout.height : undefined }} aria-live="polite">
-          {!layout ? (
-            <p className="pretext-fallback">{text}</p>
-          ) : (
-            layout.lines.map((line, lineIndex) => (
-              <p
-                key={`${line.text}-${lineIndex}`}
-                className="pretext-line"
-                style={{
-                  top: line.top,
-                  width: line.width,
-                  "--line-phase": `${line.phase}`,
-                } as React.CSSProperties}
-              >
-                {splitTokens(line.text).map((token, tokenIndex) => {
-                  if (/^\s+$/.test(token)) return <span key={tokenIndex}>{token}</span>;
-                  return (
-                    <span
-                      key={tokenIndex}
-                      className="pretext-word"
-                      style={{ "--word-index": `${tokenIndex}` } as React.CSSProperties}
-                    >
-                      {token}
-                    </span>
-                  );
-                })}
-              </p>
-            ))
-          )}
+          {!layout ? <p className="pretext-fallback">{text}</p> : lineElements}
         </div>
         <div className="pretext-night-veil" aria-hidden="true" />
         {chargeMode && chargePct > 0 && (
@@ -832,7 +846,7 @@ export default function PretextWave() {
           aria-label="motion mode"
           onChange={(event) => impulse(event.target.value as MotionMode)}
         >
-          {MODES.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
+          {MODE_OPTIONS}
         </select>
       </label>
 

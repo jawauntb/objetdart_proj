@@ -50,6 +50,13 @@ type HeatStroke = {
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
+// Hoisted out of the render loop's idle-glimmer branch so it isn't
+// re-allocated as a fresh closure every frame the glimmer is visible.
+const glimmerSeed = (slot: number, n: number) => {
+  const v = Math.sin((slot + n) * 127.1) * 43758.5453;
+  return v - Math.floor(v);
+};
+
 /**
  * /fire — a tactile combustion field.
  *
@@ -105,6 +112,16 @@ export default function Fire() {
           "experimental-webgl" as "webgl",
           { antialias: false, premultipliedAlpha: false } as WebGLContextAttributes,
         )) as WebGLRenderingContext | null;
+
+    // The 2D fallback path (no WebGL) reuses this instead of calling
+    // getContext("2d") every frame. A canvas's context type is fixed for
+    // its lifetime, so this is identical to the old per-frame lookup: when
+    // `gl` exists, the canvas already has a webgl context and a "2d"
+    // request would return null anyway (matching the old behaviour on the
+    // rare transient frames where gl is up but the program hasn't linked).
+    const fallback2dCtx: CanvasRenderingContext2D | null = gl ? null : heatCanvas.getContext("2d");
+    let cachedBgGradient: CanvasGradient | null = null;
+    let cachedBgGradientH = -1;
 
     let program: WebGLProgram | null = null;
     let vbo: WebGLBuffer | null = null;
@@ -312,6 +329,10 @@ export default function Fire() {
     heatCanvas.addEventListener("webglcontextrestored", onContextRestored, false);
 
     const embedded = isEmbeddedFrame();
+    // Stable across the component's lifetime — hoisted so resolveDpr()
+    // calls (including the per-frame fallback path) don't allocate a
+    // fresh options object every time.
+    const dprOpts = { embedded, reducedMotion: reduce };
     const gov = createFrameGovernor(embedded ? "medium" : "high");
     let hidden = document.hidden;
     let galleryPaused = false;
@@ -330,7 +351,7 @@ export default function Fire() {
     });
 
     const resize = () => {
-      const dpr = resolveDpr(gov.tier(), { embedded, reducedMotion: reduce });
+      const dpr = resolveDpr(gov.tier(), dprOpts);
       const w = wrap.clientWidth;
       const h = wrap.clientHeight;
       heatCanvas.width = Math.floor(w * dpr);
@@ -1081,14 +1102,20 @@ export default function Fire() {
         if (uPanLoc) gl.uniform2f(uPanLoc, panX, panY);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       } else {
-        const ctx = heatCanvas.getContext("2d");
+        const ctx = fallback2dCtx;
         if (ctx) {
-          const dpr = resolveDpr(tier, { embedded, reducedMotion: reduce });
+          const dpr = resolveDpr(tier, dprOpts);
           ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-          const g = ctx.createLinearGradient(0, 0, 0, h);
-          g.addColorStop(0, "#050304");
-          g.addColorStop(1, "#250b05");
-          ctx.fillStyle = g;
+          // Same two stops every time — only the height they span can
+          // change (on resize), so rebuild the gradient just then instead
+          // of once per frame.
+          if (!cachedBgGradient || cachedBgGradientH !== h) {
+            cachedBgGradientH = h;
+            cachedBgGradient = ctx.createLinearGradient(0, 0, 0, h);
+            cachedBgGradient.addColorStop(0, "#050304");
+            cachedBgGradient.addColorStop(1, "#250b05");
+          }
+          ctx.fillStyle = cachedBgGradient;
           ctx.fillRect(0, 0, w, h);
         }
       }
@@ -1210,9 +1237,8 @@ export default function Fire() {
       // a physical hint, never text.
       if (performance.now() - lastGestureAt > 20000) {
         const slot = Math.floor(now / 9000);
-        const gseed = (n: number) => { const v = Math.sin((slot + n) * 127.1) * 43758.5453; return v - Math.floor(v); };
-        const gx = (0.22 + gseed(0) * 0.56) * w;
-        const gy = h * (0.55 + gseed(7) * 0.25);
+        const gx = (0.22 + glimmerSeed(slot, 0) * 0.56) * w;
+        const gy = h * (0.55 + glimmerSeed(slot, 7) * 0.25);
         const pulse = reduce ? 0.5 : 0.5 + Math.sin(now / 480) * 0.5;
         fx.save();
         fx.strokeStyle = `rgba(245, 177, 90, ${(0.05 + pulse * 0.08).toFixed(3)})`;

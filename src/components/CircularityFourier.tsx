@@ -94,6 +94,45 @@ function epicycle(preset: Preset, terms: number, theta: number, breath: number) 
   return chain;
 }
 
+// Trace-only fast path: the unrolled wave only ever reads the *y* of the
+// epicycle tip (see the `trace` useMemo below), and each harmonic's angle
+// depends solely on theta/n/sign/drift — never on the running x/y sum. So
+// unlike `epicycle()` above (which the visible circle chain needs in full,
+// with per-term x/y/hue), this skips building any per-term object or array
+// and skips the unused x accumulation entirely — same math, zero garbage
+// per sample, called up to a few hundred times per trace rebuild.
+function epicycleTipY(preset: Preset, terms: number, theta: number, breath: number): number {
+  let y = 0;
+  const duty = preset === "pulse" ? 0.34 + Math.sin(breath * TAU) * 0.08 : 0;
+  for (let i = 0; i < terms; i += 1) {
+    let n: number;
+    let r: number;
+    let sign: number;
+    if (preset === "saw") {
+      n = i + 1;
+      r = 88 / n;
+      sign = i % 2 ? -1 : 1;
+    } else if (preset === "triangle") {
+      n = i * 2 + 1;
+      r = 112 / (n * n);
+      sign = i % 2 ? -1 : 1;
+    } else if (preset === "pulse") {
+      n = i + 1;
+      const signed = 108 * (Math.sin(Math.PI * n * duty) / (Math.PI * n));
+      r = Math.abs(signed);
+      sign = signed < 0 ? -1 : 1;
+    } else {
+      n = i * 2 + 1;
+      r = 80 / n;
+      sign = 1;
+    }
+    const drift = Math.sin(breath * TAU + i * 0.7) * 0.035;
+    const angle = theta * n * sign + drift;
+    y += Math.sin(angle) * r;
+  }
+  return y;
+}
+
 function useLiveRef<T>(value: T) {
   const ref = useRef(value);
   useEffect(() => {
@@ -333,10 +372,10 @@ export default function CircularityFourier() {
     const step = traceStep * (330 / n);
     return Array.from({ length: n }, (_, i) => {
       const t = theta - (i / (n - 1)) * TAU * 1.18;
-      const end = epicycle(preset, terms, t, energy).at(-1) ?? chain[0];
-      return [waveX + i * step, waveY + end.y * waveScale] as const;
+      const y = epicycleTipY(preset, terms, t, energy);
+      return [waveX + i * step, waveY + y * waveScale] as const;
     });
-  }, [chain, energy, preset, terms, theta, traceDetail, traceStep, waveScale, waveX, waveY]);
+  }, [energy, preset, terms, theta, traceDetail, traceStep, waveScale, waveX, waveY]);
 
   const harmonicBars = useMemo(
     () => Array.from({ length: 12 }, (_, index) => harmonicRadius(preset, index, energy)),
@@ -344,7 +383,7 @@ export default function CircularityFourier() {
   );
 
   const activePreset = PRESETS.find((item) => item.id === preset) ?? PRESETS[0];
-  const wavePath = pathFromPoints(trace);
+  const wavePath = useMemo(() => pathFromPoints(trace), [trace]);
   const tipX = centerX + sway.x + tip.x * orbitScale * (1 - lens * 0.22);
   const tipY = centerY + sway.y + tip.y * orbitScale * (1 - lens * 0.22);
   const waveTipY = waveY + tip.y * waveScale;

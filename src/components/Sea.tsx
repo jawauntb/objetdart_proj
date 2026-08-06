@@ -596,6 +596,13 @@ export default function Sea({
         line: "rgba( 68, 130, 180, 0.85)", foam: "rgba(248, 248, 250, 0.90)" },
     ];
 
+    // Packed (uvX, uvY, ageSec, strength) per active ripple, uploaded to the
+    // uRipples uniform every frame. Allocated once and refilled in place —
+    // ripples beyond `count` are never read by the shader (it loops only to
+    // uRippleCount), so stale trailing values are harmless.
+    const MAX_RIPPLE_UNIFORMS = 12;
+    const rippleUniformData = new Float32Array(MAX_RIPPLE_UNIFORMS * 4);
+
     const draw = (now: number) => {
       const tier = gov.beginFrame(now);
       if (sleeping) { raf = requestAnimationFrame(draw); return; } // no draw while hidden
@@ -716,10 +723,10 @@ export default function Sea({
 
         // pack active ripples into a vec4[12] uniform: (uvX, uvY, ageSec, strength)
         if (uRipplesLoc && uRippleCountLoc) {
-          const MAX = 12;
-          const data = new Float32Array(MAX * 4);
-          const cw = lines.clientWidth || 1;
-          const ch = lines.clientHeight || 1;
+          const MAX = MAX_RIPPLE_UNIFORMS;
+          const data = rippleUniformData;
+          const cw = w || 1;
+          const ch = h || 1;
           let count = 0;
           for (let i = ripples.current.length - 1; i >= 0 && count < MAX; i--) {
             const r = ripples.current[i];

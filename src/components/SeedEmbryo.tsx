@@ -188,6 +188,16 @@ export default function SeedEmbryo() {
     let width = 0;
     let height = 0;
     let tier: QualityTier = gov.tier();
+    // the backdrop gradient only depends on the canvas height, which only
+    // changes on resize — building it fresh every frame would just churn
+    // the GC for an identical result, so it's rebuilt here and reused.
+    let bgGradient: CanvasGradient | null = null;
+    const rebuildBgGradient = () => {
+      bgGradient = ctx.createLinearGradient(0, 0, 0, height);
+      bgGradient.addColorStop(0, "#1a140f");
+      bgGradient.addColorStop(0.55, "#0f1612");
+      bgGradient.addColorStop(1, "#0a0e0c");
+    };
     const resize = () => {
       const rect = wrap.getBoundingClientRect();
       width = rect.width;
@@ -196,6 +206,7 @@ export default function SeedEmbryo() {
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      rebuildBgGradient();
     };
     resize();
     const ro = new ResizeObserver(resize);
@@ -574,11 +585,8 @@ export default function SeedEmbryo() {
       const breath = reduced ? 0.5 : Math.sin(t * Math.PI * 2 * breathHz) * 0.5 + 0.5;
 
       ctx.clearRect(0, 0, width, height);
-      const g = ctx.createLinearGradient(0, 0, 0, height);
-      g.addColorStop(0, "#1a140f");
-      g.addColorStop(0.55, "#0f1612");
-      g.addColorStop(1, "#0a0e0c");
-      ctx.fillStyle = g;
+      if (!bgGradient) rebuildBgGradient();
+      ctx.fillStyle = bgGradient as CanvasGradient;
       ctx.fillRect(0, 0, width, height);
 
       // two-finger pan shifts the whole frame; the seed's own physics

@@ -47,6 +47,7 @@ import {
   separate,
   stepDisc,
   type Disc,
+  type DiscWorld,
 } from "@/lib/orbfield";
 
 const STORAGE_KEY = "objetdart:orb:v1";
@@ -640,6 +641,13 @@ export default function PlasmaOrb() {
     // one buffer per uniform array, allocated once — never inside the loop
     const discBuf = new Float32Array(DISC_CAP * 4);
     const metaBuf = new Float32Array(DISC_CAP * 4);
+    // the per-disc step's world snapshot, allocated once and mutated in place
+    // each frame — stepDisc only reads it synchronously, never retains it, so
+    // reusing the object avoids one allocation per disc per frame
+    const discWorld: DiscWorld = { wind: 0, gravity: 0, agitation: 0, aspect: 1, reducedMotion: reduced };
+    // same reuse for the per-frame clock input — clocksFrom reads it
+    // synchronously and returns a fresh RoomClocks, never retaining this object
+    const clockInput = { time: 0, turbulence: 0, reducedMotion: reduced };
 
     const gov = createFrameGovernor();
     let hidden = false;
@@ -672,10 +680,15 @@ export default function PlasmaOrb() {
 
       // the population acts on itself, then on the world
       separate(discs, dt);
+      discWorld.wind = wind;
+      discWorld.gravity = gravity;
+      discWorld.agitation = agitation;
+      discWorld.aspect = a;
+      discWorld.reducedMotion = reduced;
       let alive = 0;
       for (let i = discs.length - 1; i >= 0; i--) {
         const d = discs[i];
-        stepDisc(d, dt, { wind, gravity, agitation, aspect: a, reducedMotion: reduced });
+        stepDisc(d, dt, discWorld);
         d.flare *= Math.exp(-dt * 2.6);
         if (d.retire > 0) {
           d.retire = Math.min(1, d.retire + dt * 1.5);
@@ -694,10 +707,10 @@ export default function PlasmaOrb() {
       }
 
       if (stage && prog && quad) {
-        const size = stage.beginFrame(
-          clocksFrom({ time: tSec, turbulence: agitation, reducedMotion: reduced }),
-          prog,
-        );
+        clockInput.time = tSec;
+        clockInput.turbulence = agitation;
+        clockInput.reducedMotion = reduced;
+        const size = stage.beginFrame(clocksFrom(clockInput), prog);
         void size;
         const pal = seasonPalette(season);
         // the tier scales how many discs the GPU is asked for, never which
