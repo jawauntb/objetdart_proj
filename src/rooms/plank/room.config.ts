@@ -18,7 +18,7 @@ const plank = {
   dark: true,
   place: { kind: "band", band: "plank" },
   icon: {
-    title: "Plank",
+    title: "Planck",
     description: "the floor of the world — quantum foam, and the weave that calms it",
     path: "/plank",
     shortName: "plank",
@@ -32,7 +32,7 @@ const plank = {
   },
   guide: {
     title: "the floor of the world · where space is woven",
-    scale: "the plank length — 10⁻³⁵ m, the last floorboard; below it, only the whole",
+    scale: "the Planck length — 10⁻³⁵ m, the last floorboard; below it, only the whole",
     essence:
       "quantum foam, mother-of-pearl and restless, with nothing under it. rest a finger " +
       "and threads gather into a stitch of space — a loop of geometry that joins the " +
