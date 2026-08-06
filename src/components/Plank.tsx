@@ -661,7 +661,7 @@ export default function Plank() {
         markLens();
       },
       season(velocity) {
-        // the epoch dial: cold calm vacuum around to planck-era fury
+        // the epoch dial: cold calm vacuum around to Planck-era fury
         const before = world.epoch;
         world.epoch = ((world.epoch + velocity * 0.014) % 1 + 1) % 1;
         if (Math.floor(before * 4) !== Math.floor(world.epoch * 4)) {
