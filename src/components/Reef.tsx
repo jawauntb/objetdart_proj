@@ -863,6 +863,12 @@ export default function Reef() {
     // Two populations × up to MAX_POLYPS each — one instance per polyp.
     const instanceBuffer = createInstanceBuffer(MAX_POLYPS * 2);
 
+    // Reused per-kind ledger buckets — filled fresh each frame by a single
+    // pass over state.polyps instead of two separate `.filter()` calls
+    // (which would allocate two throwaway arrays every rAF tick).
+    const sealedLedgerBuf: Polyp[] = [];
+    const unsealedLedgerBuf: Polyp[] = [];
+
     // ——— what the shader reads: one Float32Array each, allocated once ———
     const polypU = new Float32Array(MAX_POLYPS * 4);
     const rippleU = new Float32Array(MAX_RIPPLES * 4);
@@ -1363,9 +1369,14 @@ export default function Reef() {
     const syncPopulationsFromLedger = (now: number) => {
       const cornerstoneItems = cornerstones.items;
       const recruitItems = recruits.items;
-      const ledger: Polyp[] = state.polyps;
-      const sealedLedger = ledger.filter((p) => p.sealed);
-      const unsealedLedger = ledger.filter((p) => !p.sealed);
+      sealedLedgerBuf.length = 0;
+      unsealedLedgerBuf.length = 0;
+      for (const p of state.polyps) {
+        if (p.sealed) sealedLedgerBuf.push(p);
+        else unsealedLedgerBuf.push(p);
+      }
+      const sealedLedger = sealedLedgerBuf;
+      const unsealedLedger = unsealedLedgerBuf;
       // ——— cornerstones ———
       for (const item of cornerstoneItems) {
         if (item.presence < 1) continue;

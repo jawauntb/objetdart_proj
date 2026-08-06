@@ -191,12 +191,9 @@ function drawBackground(
   time: number,
   tone: string,
   energy: number,
+  groundGrad: CanvasGradient,
 ) {
-  const ground = ctx.createLinearGradient(0, 0, width, height);
-  ground.addColorStop(0, "#070a12");
-  ground.addColorStop(0.48, "#10201d");
-  ground.addColorStop(1, "#190d16");
-  ctx.fillStyle = ground;
+  ctx.fillStyle = groundGrad;
   ctx.fillRect(0, 0, width, height);
 
   const glow = ctx.createRadialGradient(width * 0.5, height * 0.46, 0, width * 0.5, height * 0.52, Math.max(width, height) * 0.58);
@@ -371,6 +368,43 @@ export default function SineWaveExplorer() {
       return g;
     };
 
+    // the ground gradient is a pure function of canvas size — cache it and
+    // only rebuild on resize instead of allocating a CanvasGradient every
+    // frame (perf contract: no per-frame allocation in the render loop)
+    let groundGrad: CanvasGradient | null = null;
+    let groundGradW = -1;
+    let groundGradH = -1;
+    const groundGradFor = (w: number, h: number) => {
+      if (!groundGrad || groundGradW !== w || groundGradH !== h) {
+        groundGrad = ctx.createLinearGradient(0, 0, w, h);
+        groundGrad.addColorStop(0, "#070a12");
+        groundGrad.addColorStop(0.48, "#10201d");
+        groundGrad.addColorStop(1, "#190d16");
+        groundGradW = w;
+        groundGradH = h;
+      }
+      return groundGrad;
+    };
+
+    // scratch buffers reused every frame — no per-frame array/closure churn.
+    // voicesScratch mirrors voicesRef.current.values() without allocating a
+    // fresh array each frame; bendPool holds the per-voice bend points the
+    // ribbon reads, grown once and reused; bendFn is a single persistent
+    // closure (never redefined per frame) that reads bendPool/bendActiveCount.
+    const voicesScratch: VoiceTouch[] = [];
+    type BendPoint = { u: number; d: number };
+    const bendPool: BendPoint[] = [];
+    let bendActiveCount = 0;
+    const bendFn = (u: number) => {
+      let off = 0;
+      for (let i = 0; i < bendActiveCount; i += 1) {
+        const b = bendPool[i];
+        const du = u - b.u;
+        off += b.d * Math.exp(-(du * du) / 0.0028);
+      }
+      return off;
+    };
+
     const resize = () => {
       const rect = root.getBoundingClientRect();
       const dpr = resolveDpr(currentTier, { embedded, reducedMotion: reduceMotionRef.current, maxDpr: 1.5 });
@@ -401,11 +435,14 @@ export default function SineWaveExplorer() {
       // Three voices held still dilate the room's clock; three voices held
       // through the ceremony tier keep the wave as a golden ghost. All
       // tiers come from gesture/core — no private thresholds.
-      const voices = Array.from(voicesRef.current.values());
+      voicesScratch.length = 0;
+      for (const v of voicesRef.current.values()) voicesScratch.push(v);
+      const voices = voicesScratch;
       const chord = chordRef.current;
       if (voices.length >= 3) {
         const still = voices.every((v) => v.moved < THRESHOLDS.moveTolPx);
-        const newest = Math.max(...voices.map((v) => v.t0));
+        let newest = -Infinity;
+        for (const v of voices) if (v.t0 > newest) newest = v.t0;
         const tier = holdTier(now - newest);
         if (still && tier >= 1) {
           if (!chord.dilating) {
@@ -496,7 +533,7 @@ export default function SineWaveExplorer() {
       ctx.save();
       ctx.translate(pan.x, pan.y);
 
-      drawBackground(ctx, width, height, time, cfg.tone, energy);
+      drawBackground(ctx, width, height, time, cfg.tone, energy, groundGradFor(width, height));
       const center = height * 0.49;
       const ampNow = ampRef.current;
       const freqNow = freqRef.current;
@@ -524,7 +561,9 @@ export default function SineWaveExplorer() {
       if (voices.length > 0) {
         const left = width * 0.07;
         const usable = width * 0.86;
-        const bends = voices.map((v) => {
+        while (bendPool.length < voices.length) bendPool.push({ u: 0, d: 0 });
+        for (let i = 0; i < voices.length; i += 1) {
+          const v = voices[i];
           const u = clamp(((v.x * width) - left) / usable, 0, 1);
           const waveY = center - waveSample(u, phaseNow, ampNow, freqNow, dampingNow, harmonicNow, modeNow) * height * 0.0026;
           // an arpeggiated entrance rolls in: its bend eases from nothing to
@@ -535,16 +574,14 @@ export default function SineWaveExplorer() {
             const p = clamp((now - (v.rollT0 ?? 0)) / v.rollMs, 0, 1);
             ease = p * p * (3 - 2 * p);
           }
-          return { u, d: (v.y * height - waveY) * ease };
-        });
-        bend = (u: number) => {
-          let off = 0;
-          for (const b of bends) {
-            const du = u - b.u;
-            off += b.d * Math.exp(-(du * du) / 0.0028);
-          }
-          return off;
-        };
+          const bp = bendPool[i];
+          bp.u = u;
+          bp.d = (v.y * height - waveY) * ease;
+        }
+        bendActiveCount = voices.length;
+        bend = bendFn;
+      } else {
+        bendActiveCount = 0;
       }
       drawRibbon(ctx, width, height, phaseNow, ampNow, freqNow, dampingNow, harmonicNow, modeNow, cfg.tone, center, Math.max(0.22, 0.94 * feltMul), 4.2, bend, rSteps);
 
@@ -629,7 +666,20 @@ export default function SineWaveExplorer() {
       ctx.stroke();
       ctx.restore();
 
-      impulsesRef.current = impulsesRef.current.filter((impulse) => now - impulse.born < impulse.life);
+      // compact expired impulses in place — same predicate/order as the
+      // previous .filter(), without allocating a new array every frame
+      {
+        const arr = impulsesRef.current;
+        let writeIdx = 0;
+        for (let readIdx = 0; readIdx < arr.length; readIdx += 1) {
+          const impulse = arr[readIdx];
+          if (now - impulse.born < impulse.life) {
+            if (writeIdx !== readIdx) arr[writeIdx] = impulse;
+            writeIdx += 1;
+          }
+        }
+        arr.length = writeIdx;
+      }
       drawImpulses(ctx, impulsesRef.current, now, cfg.tone, coreGradFor(cfg.tone));
 
       // glimmer (grammar §6): after ~20s of quiet, a faint touch-ring floats

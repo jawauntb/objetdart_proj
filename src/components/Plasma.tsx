@@ -408,6 +408,13 @@ export default function Plasma() {
       glow:     [...ORB_PALETTES.candle.glow]     as [number, number, number],
       electric: [...ORB_PALETTES.candle.electric] as [number, number, number],
     };
+    // palette ease rate, hoisted out so lerp3 below isn't re-closed every frame
+    const PAL_LERP_K = 0.06;
+    const lerp3 = (a: [number, number, number], b: [number, number, number]) => {
+      a[0] += (b[0] - a[0]) * PAL_LERP_K;
+      a[1] += (b[1] - a[1]) * PAL_LERP_K;
+      a[2] += (b[2] - a[2]) * PAL_LERP_K;
+    };
 
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
     let reduced = mq.matches ? 1 : 0;
@@ -599,6 +606,24 @@ export default function Plasma() {
     // ── filament renderer ───────────────────────────────────────────
     // Draws a jagged, additively-glowing lightning path from the core to a
     // target, with a couple of forks and a bright contact node.
+    // The path's points used to be a fresh `{x,y}` object per segment, per
+    // filament, per frame (up to ~16 objects × ~30 filaments × 60fps of
+    // garbage). Segment count is capped at MAX_SEGS, so two flat scratch
+    // arrays sized to that cap are allocated once and reused every call —
+    // same math, same output, no per-frame churn. The per-call `stroke`
+    // closure is likewise hoisted to a stable helper over those buffers.
+    const FIL_MAX_SEGS = 16;
+    const filPtsX = new Float32Array(FIL_MAX_SEGS + 1);
+    const filPtsY = new Float32Array(FIL_MAX_SEGS + 1);
+    const strokeFilamentPath = (segs: number, w: number, style: string) => {
+      arcsCtx.beginPath();
+      arcsCtx.moveTo(filPtsX[0], filPtsY[0]);
+      for (let i = 1; i <= segs; i++) arcsCtx.lineTo(filPtsX[i], filPtsY[i]);
+      arcsCtx.lineWidth = w;
+      arcsCtx.strokeStyle = style;
+      arcsCtx.stroke();
+    };
+
     const drawFilament = (
       sx: number, sy: number, ex: number, ey: number,
       seed: number, time: number, bright: number, motion: number, contact: boolean,
@@ -606,10 +631,9 @@ export default function Plasma() {
       const dx = ex - sx, dy = ey - sy;
       const len = Math.hypot(dx, dy) || 1;
       const nx = -dy / len, ny = dx / len; // unit perpendicular
-      const segs = Math.max(3, Math.min(16, Math.round((len / 26) * detailScale)));
+      const segs = Math.max(3, Math.min(FIL_MAX_SEGS, Math.round((len / 26) * detailScale)));
       const amp = clamp(len * 0.13, 6, 46) * motion;
 
-      const pts: Array<{ x: number; y: number }> = [];
       for (let i = 0; i <= segs; i++) {
         const f = i / segs;
         // taper the wander so both ends stay anchored
@@ -619,10 +643,8 @@ export default function Plasma() {
           Math.sin(time * 15.0 - f * 7.0 + seed * 80.0) * 0.4;
         const off = j * amp * taper;
         // the law-wind (three-finger drag) bows every arc the same way
-        pts.push({
-          x: sx + dx * f + nx * off + bendX * taper * 42,
-          y: sy + dy * f + ny * off + bendY * taper * 42,
-        });
+        filPtsX[i] = sx + dx * f + nx * off + bendX * taper * 42;
+        filPtsY[i] = sy + dy * f + ny * off + bendY * taper * 42;
       }
 
       const glowCol = rgb(pal.electric, 0.30 * bright);
@@ -633,31 +655,24 @@ export default function Plasma() {
       arcsCtx.lineJoin = "round";
       arcsCtx.lineCap = "round";
 
-      const stroke = (w: number, style: string) => {
-        arcsCtx.beginPath();
-        arcsCtx.moveTo(pts[0].x, pts[0].y);
-        for (let i = 1; i < pts.length; i++) arcsCtx.lineTo(pts[i].x, pts[i].y);
-        arcsCtx.lineWidth = w;
-        arcsCtx.strokeStyle = style;
-        arcsCtx.stroke();
-      };
       // wide soft glow, then a thin bright core
-      stroke(7 + bright * 5, glowCol);
-      stroke(2.4 + bright * 1.4, coreCol);
+      strokeFilamentPath(segs, 7 + bright * 5, glowCol);
+      strokeFilamentPath(segs, 2.4 + bright * 1.4, coreCol);
 
       // a fork or two off the mid third
       const forks = reduced ? 0 : Math.round((1 + (seed > 0.5 ? 1 : 0)) * detailScale);
       for (let k = 0; k < forks; k++) {
-        const bi = Math.floor(segs * (0.4 + 0.18 * k + 0.1 * seed));
-        const base = pts[Math.min(segs - 1, Math.max(1, bi))];
+        const bi = Math.min(segs - 1, Math.max(1, Math.floor(segs * (0.4 + 0.18 * k + 0.1 * seed))));
+        const baseX = filPtsX[bi];
+        const baseY = filPtsY[bi];
         const fl = len * (0.14 + 0.1 * seed);
         const ang = Math.atan2(dy, dx) + (k % 2 ? 1 : -1) * (0.5 + 0.5 * seed);
-        const fx = base.x + Math.cos(ang) * fl + nx * amp * 0.4 * Math.sin(time * 12 + k);
-        const fy = base.y + Math.sin(ang) * fl + ny * amp * 0.4 * Math.sin(time * 12 + k);
+        const fx = baseX + Math.cos(ang) * fl + nx * amp * 0.4 * Math.sin(time * 12 + k);
+        const fy = baseY + Math.sin(ang) * fl + ny * amp * 0.4 * Math.sin(time * 12 + k);
         arcsCtx.beginPath();
-        arcsCtx.moveTo(base.x, base.y);
-        const mxo = (base.x + fx) / 2 + nx * amp * 0.5 * Math.sin(time * 10 + seed * 20 + k);
-        const myo = (base.y + fy) / 2 + ny * amp * 0.5 * Math.sin(time * 10 + seed * 20 + k);
+        arcsCtx.moveTo(baseX, baseY);
+        const mxo = (baseX + fx) / 2 + nx * amp * 0.5 * Math.sin(time * 10 + seed * 20 + k);
+        const myo = (baseY + fy) / 2 + ny * amp * 0.5 * Math.sin(time * 10 + seed * 20 + k);
         arcsCtx.quadraticCurveTo(mxo, myo, fx, fy);
         arcsCtx.lineWidth = 1.4 + bright;
         arcsCtx.strokeStyle = rgb(pal.electric, 0.24 * bright);
@@ -793,10 +808,6 @@ export default function Plasma() {
       // ── WebGL orb ──
       if (gl && prog && uni) {
         const target = ORB_PALETTES[orbPaletteRef.current];
-        const k = 0.06;
-        const lerp3 = (a: [number, number, number], b: [number, number, number]) => {
-          a[0] += (b[0] - a[0]) * k; a[1] += (b[1] - a[1]) * k; a[2] += (b[2] - a[2]) * k;
-        };
         lerp3(pal.candle, target.candle);
         lerp3(pal.flameHot, target.flameHot);
         lerp3(pal.paper, target.paper);

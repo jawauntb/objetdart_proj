@@ -948,7 +948,11 @@ export default function HomeCabinet() {
 
       const active = activeKeyRef.current;
       const cluster = clusterRef.current;
-      routeGems.forEach(({ route, mesh, material, baseScale, angle }) => {
+      // plain indexed loop (not routeGems.forEach) — an inline arrow-function
+      // callback would be re-allocated every tick(); this reuses the same
+      // loop body with no per-frame closure.
+      for (let gi = 0; gi < routeGems.length; gi += 1) {
+        const { route, mesh, material, baseScale, angle } = routeGems[gi];
         const isActive = route.key === active;
         const isCluster = route.cluster === cluster;
         const targetScale = baseScale * (isActive ? 1.68 : isCluster ? 1.16 : 0.88);
@@ -959,14 +963,17 @@ export default function HomeCabinet() {
         material.emissiveIntensity =
           ((isActive ? 0.84 : isCluster ? 0.34 : 0.08) + pointer.pulse * 0.12 + level * 0.18 + tutti * 0.4 + (isCluster ? ring * 0.5 : 0))
           * (1 - nightLevel * 0.6);
-      });
+      }
       // three-finger drag = wind: a gust speeds or reverses the dust
       // drift for as long as it's pushed, decaying back to the ambient
       // rate; shake agitates the same field in its own material.
       dust.rotation.z = (-t * 0.015 + gustRef.current * 0.02) * motion;
       gustRef.current *= 0.9;
+      // detailForTier() builds a fresh object; call it once per frame and
+      // reuse the result instead of twice (below, for emberMaterial.size).
+      const detail = detailForTier(tier);
       (dust.material as THREE.PointsMaterial).opacity =
-        (0.34 + level * 0.24 + pointer.pulse * 0.16 + agitation * 0.3) * detailForTier(tier).particles;
+        (0.34 + level * 0.24 + pointer.pulse * 0.16 + agitation * 0.3) * detail.particles;
       // the embers: written in place, one draw, drawRange sized to the living
       // population — O(visible), never O(history)
       const list = emberRef.current;
@@ -991,7 +998,7 @@ export default function HomeCabinet() {
       emberGeometry.setDrawRange(0, shown);
       emberGeometry.attributes.position.needsUpdate = true;
       emberGeometry.attributes.color.needsUpdate = true;
-      emberMaterial.size = 0.3 * detailForTier(tier).particles + 0.12;
+      emberMaterial.size = 0.3 * detail.particles + 0.12;
 
       // the season: the case's own slow cycle, warm to cold and back, turned
       // by the three-finger twist and read here as light temperature
