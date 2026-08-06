@@ -97,6 +97,23 @@ function buildDefaultCandle(i: number): SeaChartCandle {
   return { open, close, high, low, volume };
 }
 
+/** Price → canvas-y for the candle area. Pure and hoisted to module scope
+ *  (rather than a closure allocated fresh inside the RAF draw loop every
+ *  frame) since it's called many times per frame with values that already
+ *  change every frame anyway — passing them as args avoids the per-frame
+ *  closure allocation without changing the math. */
+function priceToY(price: number, yMin: number, yMax: number, candleAreaH: number): number {
+  const t = (price - yMin) / (yMax - yMin);
+  return candleAreaH - t * candleAreaH;
+}
+
+/** Slot index for a render position: the incoming (not-yet-committed)
+ *  candle always renders at the last slot. Hoisted for the same reason as
+ *  `priceToY` above — no closure allocation per draw() call. */
+function renderSlotIdx(i: number, candlesLen: number, candleCount: number): number {
+  return i < candlesLen ? i : candleCount;
+}
+
 /** Public: nudge the ocean (or any subscriber). Direction is +1 (boost
  *  amplitude) or -1 (damp). Subscribers receive a CustomEvent on `window`. */
 export function dispatchSeaNudge(direction: 1 | -1, source?: string): void {
@@ -538,11 +555,6 @@ export default function SeaChart(props: SeaChartProps = {}) {
       const slot = innerW / candleCountRef.current;
       const bodyW = Math.max(2, Math.min(14, slot * 0.6));
 
-      const yOfPrice = (p: number) => {
-        const t = (p - yMin) / (yMax - yMin);
-        return candleAreaH - t * candleAreaH;
-      };
-
       // baseline rule
       ctx.strokeStyle = rule;
       ctx.lineWidth = 1;
@@ -554,7 +566,8 @@ export default function SeaChart(props: SeaChartProps = {}) {
 
       const mode = modeRef.current;
       const xShift = -slideT * slot;
-      const renderIdxAt = (i: number) => (i < candles.length ? i : candleCountRef.current);
+      const candlesLen = candles.length;
+      const candleCount = candleCountRef.current;
 
       if (mode === "line") {
         // draw a polyline over the close prices
@@ -563,18 +576,18 @@ export default function SeaChart(props: SeaChartProps = {}) {
         ctx.lineJoin = "round";
         ctx.beginPath();
         for (let i = 0; i < renderCount; i++) {
-          const idx = renderIdxAt(i);
+          const idx = renderSlotIdx(i, candlesLen, candleCount);
           const c = nudgedView[i];
           const cx = padL + idx * slot + slot / 2 + xShift;
-          const cy = yOfPrice(c.close);
+          const cy = priceToY(c.close, yMin, yMax, candleAreaH);
           if (i === 0) ctx.moveTo(cx, cy);
           else ctx.lineTo(cx, cy);
         }
         ctx.stroke();
         // subtle filled area below
         if (renderCount > 0) {
-          const lastIdx = renderIdxAt(renderCount - 1);
-          const firstIdx = renderIdxAt(0);
+          const lastIdx = renderSlotIdx(renderCount - 1, candlesLen, candleCount);
+          const firstIdx = renderSlotIdx(0, candlesLen, candleCount);
           ctx.lineTo(padL + lastIdx * slot + slot / 2 + xShift, candleAreaH);
           ctx.lineTo(padL + firstIdx * slot + slot / 2 + xShift, candleAreaH);
           ctx.closePath();
@@ -584,7 +597,7 @@ export default function SeaChart(props: SeaChartProps = {}) {
       } else if (mode === "oscillator") {
         // Draw zero baseline at midpoint, plot close as deviation
         const midPrice = (yMax + yMin) / 2;
-        const midY = yOfPrice(midPrice);
+        const midY = priceToY(midPrice, yMin, yMax, candleAreaH);
         ctx.strokeStyle = rule;
         ctx.lineWidth = 1;
         ctx.beginPath();
@@ -592,10 +605,10 @@ export default function SeaChart(props: SeaChartProps = {}) {
         ctx.lineTo(w, Math.floor(midY) + 0.5);
         ctx.stroke();
         for (let i = 0; i < renderCount; i++) {
-          const idx = renderIdxAt(i);
+          const idx = renderSlotIdx(i, candlesLen, candleCount);
           const c = nudgedView[i];
           const cx = padL + idx * slot + slot / 2 + xShift;
-          const cy = yOfPrice(c.close);
+          const cy = priceToY(c.close, yMin, yMax, candleAreaH);
           const above = c.close >= midPrice;
           ctx.fillStyle = fillFromHex(above ? upHex : dnHex, 0.78);
           ctx.fillRect(cx - bodyW / 2, Math.min(cy, midY), bodyW, Math.abs(cy - midY));
@@ -603,16 +616,16 @@ export default function SeaChart(props: SeaChartProps = {}) {
       } else {
         // candles (default)
         for (let i = 0; i < renderCount; i++) {
-          const idx = renderIdxAt(i);
+          const idx = renderSlotIdx(i, candlesLen, candleCount);
           const c = nudgedView[i];
           const cx = padL + idx * slot + slot / 2 + xShift;
           if (cx < -bodyW || cx > w + bodyW) continue;
 
           const up = c.close >= c.open;
-          const yOpen = yOfPrice(c.open);
-          const yClose = yOfPrice(c.close);
-          const yHigh = yOfPrice(c.high);
-          const yLow = yOfPrice(c.low);
+          const yOpen = priceToY(c.open, yMin, yMax, candleAreaH);
+          const yClose = priceToY(c.close, yMin, yMax, candleAreaH);
+          const yHigh = priceToY(c.high, yMin, yMax, candleAreaH);
+          const yLow = priceToY(c.low, yMin, yMax, candleAreaH);
 
           // wick
           ctx.strokeStyle = "rgba(21, 23, 26, 0.45)";

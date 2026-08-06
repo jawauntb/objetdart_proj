@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useField } from "@/store/field";
 import { decodeReadingHash } from "@/lib/reading";
 import { getFieldAudio } from "@/lib/audio";
@@ -78,12 +78,20 @@ export default function KeptConstellation() {
 
   useEffect(() => { loadFromStorage(); }, [loadFromStorage]);
 
-  const visible = kept.slice(0, 24)
-    .map((r) => {
-      const decoded = decodeReadingHash(r.hash);
-      return decoded ? { hash: r.hash, headline: r.headline, concerns: decoded.concerns, pos: hashToPos(r.hash) } : null;
-    })
-    .filter((r): r is NonNullable<typeof r> => r !== null);
+  // Decoding + hashing depends only on `kept` (each hash is deterministic),
+  // not on the frequent gesture-driven state below (charging/sounding/
+  // streak/etc. all re-render this component), so memoize on `kept` to
+  // avoid re-decoding every kept reading on every one of those re-renders.
+  const visible = useMemo(
+    () =>
+      kept.slice(0, 24)
+        .map((r) => {
+          const decoded = decodeReadingHash(r.hash);
+          return decoded ? { hash: r.hash, headline: r.headline, concerns: decoded.concerns, pos: hashToPos(r.hash) } : null;
+        })
+        .filter((r): r is NonNullable<typeof r> => r !== null),
+    [kept],
+  );
   starsRef.current = visible.map((v) => ({ hash: v.hash, concerns: v.concerns }));
 
   // ── engine mount: hold = the star's phrase, flick = a streak ──────

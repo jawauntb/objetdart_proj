@@ -330,6 +330,15 @@ export default function PhaseChart({
     yMax += yPad;
     yRangeRef.current = { yMin, yMax };
 
+    // accent-derived fillStyle/strokeStyle strings used inside the
+    // per-candle draw loop. `accent` is stable for the life of this
+    // effect (it's a dependency — a change re-runs the whole effect),
+    // so parsing it through toRgba() on every candle on every frame is
+    // pure waste; compute the handful of alpha variants once here.
+    const accentAlpha60 = toRgba(accent, 0.6);
+    const accentAlpha85 = toRgba(accent, 0.85);
+    const accentAlpha100 = toRgba(accent, 1.0);
+
     /**
      * Recompute the per-candle hit-test layout. Called after every
      * resize so layoutRef matches the current CSS pixel coordinates.
@@ -384,11 +393,6 @@ export default function PhaseChart({
       const slot = innerW / CANDLE_COUNT;
       const bodyW = Math.max(2, Math.min(12, slot * 0.62));
 
-      const yOf = (p: number): number => {
-        const t = (p - yMin) / (yMax - yMin);
-        return h - t * h;
-      };
-
       if (chartModeRef.current === 1) {
         // the lens, rotated: the felt shape of the close series alone.
         ctx.beginPath();
@@ -397,20 +401,20 @@ export default function PhaseChart({
           const t = progress[i] ?? 1;
           if (t <= 0) continue;
           const cx = padL + i * slot + slot / 2;
-          const y = yOf(series[i].close);
+          const y = mapYToPx(series[i].close, yMin, yMax, h);
           if (!started) { ctx.moveTo(cx, y); started = true; } else { ctx.lineTo(cx, y); }
         }
-        ctx.strokeStyle = toRgba(accent, 0.85);
+        ctx.strokeStyle = accentAlpha85;
         ctx.lineWidth = 1.6;
         ctx.stroke();
         for (let i = 0; i < series.length; i++) {
           const t = progress[i] ?? 1;
           if (t <= 0) continue;
           const cx = padL + i * slot + slot / 2;
-          const y = yOf(series[i].close);
+          const y = mapYToPx(series[i].close, yMin, yMax, h);
           const isHovered = i === currentHover && !reduce;
           ctx.beginPath();
-          ctx.fillStyle = isHovered ? "rgba(255,255,255,0.95)" : toRgba(accent, 0.6);
+          ctx.fillStyle = isHovered ? "rgba(255,255,255,0.95)" : accentAlpha60;
           ctx.arc(cx, y, isHovered ? 3.4 : 1.8, 0, Math.PI * 2);
           ctx.fill();
         }
@@ -428,10 +432,10 @@ export default function PhaseChart({
         const scale = isHovered ? 1.15 : 1;
         const drawBodyW = bodyW * scale;
 
-        const yOpen = yOf(c.open);
-        const yClose = yOf(c.close);
-        const yHigh = yOf(c.high);
-        const yLow = yOf(c.low);
+        const yOpen = mapYToPx(c.open, yMin, yMax, h);
+        const yClose = mapYToPx(c.close, yMin, yMax, h);
+        const yHigh = mapYToPx(c.high, yMin, yMax, h);
+        const yLow = mapYToPx(c.low, yMin, yMax, h);
 
         // Lerp body + wick lengths from midline outward by t.
         const bodyTop = Math.min(yOpen, yClose);
@@ -456,10 +460,9 @@ export default function PhaseChart({
         ctx.stroke();
 
         // body — hover bumps alpha to 1.0
-        const bodyAlpha = isHovered ? 1.0 : 0.85;
         const downAlpha = isHovered ? 0.72 : 0.35;
         ctx.fillStyle = up
-          ? toRgba(accent, bodyAlpha)
+          ? (isHovered ? accentAlpha100 : accentAlpha85)
           : `rgba(255,255,255,${downAlpha})`;
         const bodyH = Math.max(1, bBot - bTop);
         ctx.fillRect(cx - drawBodyW / 2, bTop, drawBodyW, bodyH);
@@ -787,6 +790,18 @@ function fmt(n: number): string {
 
 function easeOut(t: number): number {
   return 1 - Math.pow(1 - t, 2.2);
+}
+
+/**
+ * Pure y-mapping used inside the per-frame draw loop. Hoisted to a
+ * top-level function (rather than a closure allocated fresh inside
+ * drawAt on every call) so the hot cascade/hover redraw path doesn't
+ * allocate a function per frame — yMin/yMax/h are passed in explicitly
+ * so behavior (including mid-cascade resizes) is unchanged.
+ */
+function mapYToPx(p: number, yMin: number, yMax: number, h: number): number {
+  const t = (p - yMin) / (yMax - yMin);
+  return h - t * h;
 }
 
 /**

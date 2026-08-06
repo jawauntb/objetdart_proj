@@ -29,6 +29,11 @@ import { isEmbeddedFrame, onVisibility, resolveDpr } from "@/lib/room-runtime";
 export type FieldMass = { x: number; y: number; r: number; strength: number };
 export type FieldMode = "shadow" | "glow";
 
+// Hoisted so `draw()` never allocates a fresh fallback array on frames where
+// the caller omits `opts.core` / `opts.ring` — same default values, read-only.
+const DEFAULT_FIELD_CORE: [number, number, number] = [0.85, 0.63, 0.3];
+const DEFAULT_FIELD_RING: [number, number, number] = [0.42, 0.71, 0.74];
+
 export type GravityFieldRenderer = {
   /** false when WebGL is unavailable or the context is currently lost. */
   readonly ok: boolean;
@@ -201,8 +206,8 @@ export function createGravityFieldRenderer(
     draw(now, masses, opts) {
       if (!gl || !ok || !prog) return;
       const alpha = opts?.alpha ?? 1;
-      const core = opts?.core ?? [0.85, 0.63, 0.3];
-      const ring = opts?.ring ?? [0.42, 0.71, 0.74];
+      const core = opts?.core ?? DEFAULT_FIELD_CORE;
+      const ring = opts?.ring ?? DEFAULT_FIELD_RING;
       massBuf.fill(0);
       const n = Math.min(maxMasses, masses.length);
       for (let i = 0; i < n; i++) {

@@ -423,7 +423,10 @@ export function useBandEdgeTravel(
           // No built door on offer: hold forever, promise nothing.
           toward = off ? off.door.label : null;
           if (!off && r.state) {
-            r.state = { ...r.state, intentMs: Math.min(r.state.intentMs, 200) };
+            // `r.state` is this frame's own fresh object from stepScale, held
+            // nowhere else — mutate the field in place rather than spreading
+            // a copy every frame the wall is held with no door on offer.
+            r.state.intentMs = Math.min(r.state.intentMs, 200);
           }
         }
         if (e.type === "crossing") {
@@ -590,7 +593,10 @@ export default function ScaleTravel({ route }: { route: string }) {
             offeredRouteRef.current = offeredRoute;
           }
           if (!off) {
-            stateRef.current = { ...state, intentMs: Math.min(state.intentMs, 200) };
+            // Same rationale as the adapter loop above: `state` is this
+            // frame's own fresh object, so clamp in place instead of
+            // allocating a spread copy on every frame the wall holds.
+            state.intentMs = Math.min(state.intentMs, 200);
           }
         }
         if (e.type === "crossing") {
