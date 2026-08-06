@@ -883,6 +883,14 @@ export default function RockShelf() {
       half: gl.getUniformLocation(stoneProg, "u_half"),
       dim: gl.getUniformLocation(stoneProg, "u_dim"),
     };
+    // vertex layout is fixed — bytes-per-vertex never changes frame to
+    // frame, so the binder is one function, not a closure rebuilt per draw
+    const STONE_VERT_BYTES = STRIDE * 4;
+    const setStoneAttr = (loc: number, size: number, off: number) => {
+      if (loc < 0) return;
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, STONE_VERT_BYTES, off * 4);
+    };
 
     let dpr = 1;
     const resize = () => {
@@ -1363,6 +1371,49 @@ export default function RockShelf() {
     const faceIdx: number[] = [];
     const drawOrder: number[] = [];
     const byDepth = (a: number, b: number) => faceDepth[b] - faceDepth[a];
+    // the stone vertex buffer's write head, and its writer — defined once,
+    // never a per-frame closure. `n` is reset to 0 at the top of pass 2.
+    let n = 0;
+    const push = (
+      x: number,
+      y: number,
+      nx3: number,
+      ny3: number,
+      nz3: number,
+      tr: number,
+      tg: number,
+      tb: number,
+      clarity: number,
+      glow: number,
+      sel: number,
+      b0: number,
+      b1: number,
+      b2: number,
+      m0: number,
+      m1: number,
+      m2: number,
+    ) => {
+      if (n >= MAX_VERTS) return;
+      const o = n * STRIDE;
+      verts[o] = x;
+      verts[o + 1] = y;
+      verts[o + 2] = nx3;
+      verts[o + 3] = ny3;
+      verts[o + 4] = nz3;
+      verts[o + 5] = tr;
+      verts[o + 6] = tg;
+      verts[o + 7] = tb;
+      verts[o + 8] = clarity;
+      verts[o + 9] = glow;
+      verts[o + 10] = sel;
+      verts[o + 11] = b0;
+      verts[o + 12] = b1;
+      verts[o + 13] = b2;
+      verts[o + 14] = m0;
+      verts[o + 15] = m1;
+      verts[o + 16] = m2;
+      n += 1;
+    };
 
     // ——— 11. the loop ————————————————————————————————
     const draw = (now: number) => {
@@ -1538,47 +1589,7 @@ export default function RockShelf() {
       const rimL = norm([0.66, 0.42, -0.28]);
       const halfV = norm([key[0], key[1] - 1, key[2]]);
 
-      let n = 0; // vertices written this frame
-      const push = (
-        x: number,
-        y: number,
-        nx3: number,
-        ny3: number,
-        nz3: number,
-        tr: number,
-        tg: number,
-        tb: number,
-        clarity: number,
-        glow: number,
-        sel: number,
-        b0: number,
-        b1: number,
-        b2: number,
-        m0: number,
-        m1: number,
-        m2: number,
-      ) => {
-        if (n >= MAX_VERTS) return;
-        const o = n * STRIDE;
-        verts[o] = x;
-        verts[o + 1] = y;
-        verts[o + 2] = nx3;
-        verts[o + 3] = ny3;
-        verts[o + 4] = nz3;
-        verts[o + 5] = tr;
-        verts[o + 6] = tg;
-        verts[o + 7] = tb;
-        verts[o + 8] = clarity;
-        verts[o + 9] = glow;
-        verts[o + 10] = sel;
-        verts[o + 11] = b0;
-        verts[o + 12] = b1;
-        verts[o + 13] = b2;
-        verts[o + 14] = m0;
-        verts[o + 15] = m1;
-        verts[o + 16] = m2;
-        n += 1;
-      };
+      n = 0; // vertices written this frame
       const SEAM = 99; // a fan seam is never an edge of the real facet
 
       for (const idx of drawOrder) {
@@ -1694,19 +1705,12 @@ export default function RockShelf() {
         gl.useProgram(stoneProg);
         gl.bindBuffer(gl.ARRAY_BUFFER, stoneBuf);
         gl.bufferSubData(gl.ARRAY_BUFFER, 0, verts.subarray(0, n * STRIDE));
-        const fs = 4;
-        const stride = STRIDE * fs;
-        const attr = (loc: number, size: number, off: number) => {
-          if (loc < 0) return;
-          gl.enableVertexAttribArray(loc);
-          gl.vertexAttribPointer(loc, size, gl.FLOAT, false, stride, off * fs);
-        };
-        attr(sU.pos, 2, 0);
-        attr(sU.norm, 3, 2);
-        attr(sU.tint, 3, 5);
-        attr(sU.props, 3, 8);
-        attr(sU.bary, 3, 11);
-        attr(sU.mask, 3, 14);
+        setStoneAttr(sU.pos, 2, 0);
+        setStoneAttr(sU.norm, 3, 2);
+        setStoneAttr(sU.tint, 3, 5);
+        setStoneAttr(sU.props, 3, 8);
+        setStoneAttr(sU.bary, 3, 11);
+        setStoneAttr(sU.mask, 3, 14);
         // a_pos is in CSS pixels — the stone program must be told the CSS
         // frame, not the backing store, or every stone lands at 1/dpr
         gl.uniform2f(sU.res, width, height);

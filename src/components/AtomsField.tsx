@@ -276,6 +276,9 @@ export default function AtomsField() {
     const blasts: Blast[] = [];
     const hints = new Map<string, Hint>(); // bond-hint arcs between compatible neighbors
     const fuseCooldown = new Map<string, number>();
+    // reused every frame instead of allocating fresh — same contents each time
+    const hintSeenScratch = new Set<string>();
+    const sortScratch: AtomEnt[] = [];
     let width = 0;
     let height = 0;
     let rectLeft = 0;
@@ -1819,8 +1822,7 @@ export default function AtomsField() {
       ctx.restore();
     };
 
-    const drawBonds = (t: number) => {
-      const byId = new Map(atoms.map((a) => [a.id, a]));
+    const drawBonds = (t: number, byId: Map<string, AtomEnt>) => {
       for (const b of bonds) {
         const pa = byId.get(b.aId);
         const pb = byId.get(b.bId);
@@ -1985,7 +1987,8 @@ export default function AtomsField() {
         }
       }
 
-      const audioT = (() => { try { return audio().getAudioTime(); } catch { return null; } })();
+      let audioT: number | null;
+      try { audioT = audio().getAudioTime(); } catch { audioT = null; }
       const bt = audioT != null ? audioT : now / 1000;
       const breath = bt * Math.PI * 2 * 0.14;
 
@@ -2178,7 +2181,8 @@ export default function AtomsField() {
 
       // the bond-hint: when two compatible atoms drift near, the room
       // proposes the pair-ceremony — a dashed arc after a beat, never text
-      const hintSeen = new Set<string>();
+      const hintSeen = hintSeenScratch;
+      hintSeen.clear();
       for (let i = 0; i < atoms.length; i++) {
         const a = atoms[i];
         if (a.retiringAt || !a.closed || a.sr <= 0) continue;
@@ -2264,7 +2268,7 @@ export default function AtomsField() {
       ctx.restore();
 
       // bonds beneath, then atoms by size (small behind, large in front)
-      drawBonds(localT);
+      drawBonds(localT, byId);
 
       // bond-hint glimmer — a faint dashed arc breathing between the pair
       for (const h of hints.values()) {
@@ -2294,8 +2298,10 @@ export default function AtomsField() {
         ctx.stroke();
         ctx.setLineDash([]);
       }
-      const sorted = [...atoms].sort((a, b) => a.morph.radius - b.morph.radius);
-      for (const a of sorted) drawAtom(a, localT, breath);
+      sortScratch.length = 0;
+      for (const a of atoms) sortScratch.push(a);
+      sortScratch.sort((a, b) => a.morph.radius - b.morph.radius);
+      for (const a of sortScratch) drawAtom(a, localT, breath);
 
       // loose electrons: a cold bright point and the track it is drawing.
       // Nothing else in this room is this small or this fast, which is the

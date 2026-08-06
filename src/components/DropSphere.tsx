@@ -199,6 +199,16 @@ function poke(d: Drop, angle: number, strength: number): void {
 // Sample the wobbling surface into boundary points at a given radius scale.
 // `lx`/`ly` are a (roughly unit) gravity direction and `lean` its strength, so
 // the bead sags into a teardrop toward gravity when the phone is tilted.
+//
+// Perf: this runs per drop, every drawn frame (metaball fill + fresnel rim),
+// so it writes into a shared scratch buffer instead of returning a fresh
+// Array<[number,number]> — no per-point tuple / per-call array allocation on
+// the hot path. Safe to share: every call is consumed synchronously by
+// smoothClosedPath before the next dropPoints call happens (never nested or
+// deferred), and the loop bodies below never need two live results at once.
+const DROP_PTS_MAX = 64; // ≥ any N used by call sites (drawBody ≤44, rim ≤48)
+const dropPtsX = new Float64Array(DROP_PTS_MAX);
+const dropPtsY = new Float64Array(DROP_PTS_MAX);
 function dropPoints(
   d: Drop,
   n: number,
@@ -207,35 +217,38 @@ function dropPoints(
   lx = 0,
   ly = 0,
   lean = 0,
-): Array<[number, number]> {
-  const pts: Array<[number, number]> = [];
-  for (let i = 0; i < n; i++) {
+): number {
+  const count = Math.min(n, DROP_PTS_MAX);
+  for (let i = 0; i < count; i++) {
     const th = (i / n) * TAU;
     let rr = d.r * radiusScale * (1 + modeSum(d, th) * modeGain);
     if (lean) rr *= 1 + lean * (Math.cos(th) * lx + Math.sin(th) * ly);
-    pts.push([d.x + Math.cos(th) * rr, d.y + Math.sin(th) * rr]);
+    dropPtsX[i] = d.x + Math.cos(th) * rr;
+    dropPtsY[i] = d.y + Math.sin(th) * rr;
   }
-  return pts;
+  return count;
 }
 
 // Trace a SMOOTH closed curve through the sample points — quadratic segments
 // anchored on each point and joined at segment midpoints. Keeps a split,
 // merging, wobbling, or flung bead perfectly round with no straight-line
 // polygon edges on the meniscus. Caller sets beginPath + fill/stroke style.
-function smoothClosedPath(ctx: CanvasRenderingContext2D, pts: Array<[number, number]>): void {
-  const n = pts.length;
+function smoothClosedPath(
+  ctx: CanvasRenderingContext2D,
+  xs: Float64Array,
+  ys: Float64Array,
+  n: number,
+): void {
   if (n < 3) return;
-  const mid = (a: [number, number], b: [number, number]): [number, number] => [
-    (a[0] + b[0]) / 2,
-    (a[1] + b[1]) / 2,
-  ];
-  const first = mid(pts[n - 1], pts[0]);
-  ctx.moveTo(first[0], first[1]);
+  const firstX = (xs[n - 1] + xs[0]) / 2;
+  const firstY = (ys[n - 1] + ys[0]) / 2;
+  ctx.moveTo(firstX, firstY);
   for (let i = 0; i < n; i++) {
-    const cur = pts[i];
-    const nxt = pts[(i + 1) % n];
-    const m = mid(cur, nxt);
-    ctx.quadraticCurveTo(cur[0], cur[1], m[0], m[1]);
+    const curX = xs[i], curY = ys[i];
+    const nxt = (i + 1) % n;
+    const mx = (curX + xs[nxt]) / 2;
+    const my = (curY + ys[nxt]) / 2;
+    ctx.quadraticCurveTo(curX, curY, mx, my);
   }
   ctx.closePath();
 }
@@ -1325,7 +1338,8 @@ export default function DropSphere() {
         rad.addColorStop(1, "rgba(255,255,255,0)");
         fctx.fillStyle = rad;
         fctx.beginPath();
-        smoothClosedPath(fctx, dropPoints(d, N, 1.75, 0.7, gv.x, gv.y, lean));
+        const bodyN = dropPoints(d, N, 1.75, 0.7, gv.x, gv.y, lean);
+        smoothClosedPath(fctx, dropPtsX, dropPtsY, bodyN);
         fctx.fill();
       }
       fctx.globalCompositeOperation = "source-over";
@@ -1469,7 +1483,8 @@ export default function DropSphere() {
         g.lineWidth = Math.max(1.5, d.r * 0.03);
         g.strokeStyle = "rgba(150,225,245,0.5)";
         g.beginPath();
-        smoothClosedPath(g, dropPoints(d, N, 1, 1, gv2.x, gv2.y, lean2));
+        const rimN = dropPoints(d, N, 1, 1, gv2.x, gv2.y, lean2);
+        smoothClosedPath(g, dropPtsX, dropPtsY, rimN);
         g.stroke();
         // soft aqua fresnel glow just inside the rim
         g.drawImage(fresnelSprite, d.x - d.r, d.y - d.r, d.r * 2, d.r * 2);

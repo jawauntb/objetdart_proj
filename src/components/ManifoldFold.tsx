@@ -190,6 +190,10 @@ type WebLayer = {
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const clamp01 = (v: number) => clamp(v, 0, 1);
 
+// the ruler's band-edge scale values never change at runtime (SCALE_BANDS is
+// a static import) — computed once instead of every frame the lens is raised
+const RULER_EDGES: number[] = [...SCALE_BANDS.map((b) => b.sMin), SCALE_BANDS[SCALE_BANDS.length - 1].sMax];
+
 function hash01(n: number) {
   const x = Math.sin(n * 127.1 + 311.7) * 43758.5453123;
   return x - Math.floor(x);
@@ -316,6 +320,9 @@ export default function ManifoldFold() {
     let height = 0;
     let rectLeft = 0;
     let rectTop = 0;
+    // the background wash's colors are fixed; only its span (height) moves,
+    // and only on resize — rebuilt there, never per frame
+    let bgGradient: CanvasGradient | null = null;
     let lightSpeed = 600; // px/s, set on resize; rays AND pulses share it
     let rayG = 0; // bending strength, derived from lightSpeed
     let raf = 0;
@@ -353,6 +360,9 @@ export default function ManifoldFold() {
     let night = 0;
     let nightTarget = 0;
     const beaconPhase = [0.4, 3.1];
+    // reused every frame instead of a fresh tuple array (room-runtime
+    // contract: no per-frame allocation) — x/y mutated in place below
+    const beaconSpots = [{ x: 0, y: 0, i: 0 }, { x: 0, y: 0, i: 1 }];
     const beadSwell = new Array<number>(SCALE_BANDS.length).fill(0);
     const beadPos = SCALE_BANDS.map(() => ({ x: 0, y: 0 }));
     let beadChargeIdx = -1;
@@ -377,6 +387,15 @@ export default function ManifoldFold() {
     let staticRaysStale = true;
     let expT = 0; // the expansion's comoving clock — dilates, freezes under reduce
     let webLayers: WebLayer[] = [];
+    // the field grid's four per-cell buffers (room-runtime contract: typed
+    // arrays allocated once, no per-frame churn) — grown only when the
+    // lattice (tier-scaled by width/height) needs more cells than before,
+    // never reallocated on a same-size or shrinking frame
+    let meshCap = 0;
+    let vxBuf = new Float64Array(0);
+    let vyBuf = new Float64Array(0);
+    let dispXBuf = new Float64Array(0);
+    let dispYBuf = new Float64Array(0);
     const hold: { mode: "fabric" | "mass" | "bead" | null; massId: string | null; beadIdx: number; placed: boolean; done: boolean } = {
       mode: null,
       massId: null,
@@ -513,6 +532,11 @@ export default function ManifoldFold() {
       canvas.style.height = `${height}px`;
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
       field?.resize(width, height, ratio);
+      const bg = ctx.createLinearGradient(0, 0, 0, height);
+      bg.addColorStop(0, "#04060b");
+      bg.addColorStop(0.6, "#05070d");
+      bg.addColorStop(1, "#060810");
+      bgGradient = bg;
       // one speed of light for this viewport: rays and pulses both use it
       lightSpeed = 0.85 * Math.max(width, height);
       rayG = 50 * lightSpeed * lightSpeed;
@@ -1474,11 +1498,7 @@ export default function ManifoldFold() {
       if (beadChargeIdx >= 0 && hold.mode !== "bead") { beadChargeIdx = -1; beadCharge = 0; }
 
       // ————— background: ink, with the faintest cold breath —————
-      const bg = ctx.createLinearGradient(0, 0, 0, height);
-      bg.addColorStop(0, "#04060b");
-      bg.addColorStop(0.6, "#05070d");
-      bg.addColorStop(1, "#060810");
-      ctx.fillStyle = bg;
+      ctx.fillStyle = bgGradient ?? "#04060b";
       ctx.fillRect(0, 0, width, height);
       // the season's veil — the same room in a different weather of law,
       // gone entirely when the lens shows the bare metric
@@ -1510,10 +1530,18 @@ export default function ManifoldFold() {
       const meshGap = MESH_GAP / Math.max(0.4, detail.samples);
       const cols = Math.ceil(width / meshGap) + 1;
       const rows = Math.ceil(height / meshGap) + 1;
-      const vx: number[] = new Array(cols * rows);
-      const vy: number[] = new Array(cols * rows);
-      const dispX: number[] = new Array(cols * rows);
-      const dispY: number[] = new Array(cols * rows);
+      const cellCount = cols * rows;
+      if (cellCount > meshCap) {
+        meshCap = cellCount;
+        vxBuf = new Float64Array(meshCap);
+        vyBuf = new Float64Array(meshCap);
+        dispXBuf = new Float64Array(meshCap);
+        dispYBuf = new Float64Array(meshCap);
+      }
+      const vx = vxBuf;
+      const vy = vyBuf;
+      const dispX = dispXBuf;
+      const dispY = dispYBuf;
       for (let j = 0; j < rows; j++) {
         for (let i = 0; i < cols; i++) {
           const x = i * meshGap;
@@ -1893,8 +1921,9 @@ export default function ManifoldFold() {
         const byA = height * (0.42 + 0.24 * Math.sin(localT * 0.036 + 0.4));
         const bxB = width * (0.5 + 0.42 * Math.sin(localT * 0.03 + 4.1));
         const byB = height * (0.15 + 0.03 * Math.sin(localT * 0.023 + 2.2));
-        const spots: Array<[number, number, number]> = [[bxA, byA, 0], [bxB, byB, 1]];
-        for (const [bx0, by0, bi] of spots) {
+        beaconSpots[0].x = bxA; beaconSpots[0].y = byA;
+        beaconSpots[1].x = bxB; beaconSpots[1].y = byB;
+        for (const { x: bx0, y: by0, i: bi } of beaconSpots) {
           const bBound = pts.length > 0 ? boundFraction(pts, bx0, by0) : 0;
           const eB = 1 + (sBeacon - 1) * (1 - bBound);
           const bxu = cxv + (bx0 - cxv) * eB;
@@ -1955,8 +1984,7 @@ export default function ManifoldFold() {
           const la = (lens - 0.6) / 0.4;
           ctx.font = "300 10px ui-monospace, 'SF Mono', Menlo, monospace";
           ctx.textAlign = "center";
-          const edges = [...SCALE_BANDS.map((b) => b.sMin), SCALE_BANDS[SCALE_BANDS.length - 1].sMax];
-          for (const s of edges) {
+          for (const s of RULER_EDGES) {
             const x = rulerX(s);
             ctx.strokeStyle = `rgba(206, 222, 250, ${0.35 * la})`;
             ctx.lineWidth = 0.7;

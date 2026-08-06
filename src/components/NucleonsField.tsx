@@ -347,6 +347,8 @@ export default function NucleonsField() {
     let height = 0;
     let rectLeft = 0;
     let rectTop = 0;
+    /** The vessel's backdrop glow — only depends on width/height, rebuilt on resize, never per frame. */
+    let bgGradient: CanvasGradient | null = null;
     let raf = 0;
     let last = performance.now();
     let localT = 0;
@@ -378,6 +380,8 @@ export default function NucleonsField() {
     let lastInteractionAt = performance.now();
     let glimmerAt = 0;
     let lastSaveAt = 0;
+    /** Mirrors the `hasNuclei` state so `save()` only dispatches on change. */
+    let hasNucleiMirror: boolean | null = null;
     let lastWindSoundAt = 0;
     let lastSpinSoundAt = 0;
     let lastChargeNoteAt = 0;
@@ -463,7 +467,11 @@ export default function NucleonsField() {
     // ————— persistence —————
     const save = (force = false) => {
       const now = performance.now();
-      setHasNuclei(nuclei.some((d) => !d.retiringAt));
+      const anyAlive = nuclei.some((d) => !d.retiringAt);
+      if (anyAlive !== hasNucleiMirror) {
+        hasNucleiMirror = anyAlive;
+        setHasNuclei(anyAlive);
+      }
       if (!force && now - lastSaveAt < 800) return;
       lastSaveAt = now;
       try {
@@ -495,7 +503,8 @@ export default function NucleonsField() {
       seedCount = nuclei.length;
       save(true);
     }
-    setHasNuclei(nuclei.length > 0);
+    hasNucleiMirror = nuclei.length > 0;
+    setHasNuclei(hasNucleiMirror);
 
     // ————— sprites: every glow this room draws is baked once —————
     // A radial gradient built inside a per-element loop is the single most
@@ -563,6 +572,18 @@ export default function NucleonsField() {
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      // rebuilt here, not per frame: the same createRadialGradient call, but
+      // it only ever needs to change when width/height do
+      bgGradient = ctx.createRadialGradient(
+        width * 0.5,
+        height * 0.42,
+        Math.min(width, height) * 0.08,
+        width * 0.5,
+        height * 0.5,
+        Math.max(width, height) * 0.82,
+      );
+      bgGradient.addColorStop(0, "#100d0b");
+      bgGradient.addColorStop(1, "#050506");
       if (motes.length === 0) {
         for (let i = 0; i < MOTE_COUNT; i++) {
           motes.push({ x: hash01(i + 17) * width, y: hash01(i + 733) * height, p: hash01(i * 3 + 5) * 7 });
@@ -1163,6 +1184,7 @@ export default function NucleonsField() {
       } catch {
         /* noop */
       }
+      hasNucleiMirror = false;
       setHasNuclei(false);
       try {
         audio().thud();
@@ -2444,17 +2466,7 @@ export default function NucleonsField() {
 
       // ——— paint ———
       ctx.clearRect(0, 0, width, height);
-      const bg = ctx.createRadialGradient(
-        width * 0.5,
-        height * 0.42,
-        Math.min(width, height) * 0.08,
-        width * 0.5,
-        height * 0.5,
-        Math.max(width, height) * 0.82,
-      );
-      bg.addColorStop(0, "#100d0b");
-      bg.addColorStop(1, "#050506");
-      ctx.fillStyle = bg;
+      ctx.fillStyle = bgGradient ?? "#050506";
       ctx.fillRect(0, 0, width, height);
 
       // the season's warmth: the field cold, or the furnace it takes to make

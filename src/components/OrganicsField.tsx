@@ -140,6 +140,22 @@ const ELEMENT_TINT: Record<OrganicElement, string> = {
   O: "218, 132, 108",
 };
 
+/**
+ * The loose-atom halo's two-stop gradient colors, per element × held state —
+ * built once at module scope so the per-frame sprite stamp never rebuilds
+ * the stops array (and its rgba strings) just to hand it to a cache that
+ * already has the sprite baked.
+ */
+const LOOSE_HALO_STOPS: Record<string, Array<[number, string]>> = {};
+for (const el of Object.keys(ELEMENT_TINT) as OrganicElement[]) {
+  for (const held of [0, 1] as const) {
+    LOOSE_HALO_STOPS[`org-loose-halo-${el}-${held}`] = [
+      [0, `rgba(${ELEMENT_TINT[el]}, ${0.2 + (held ? 0.2 : 0)})`],
+      [1, `rgba(${ELEMENT_TINT[el]}, 0)`],
+    ];
+  }
+}
+
 const GROUP_TINT: Record<GroupKey, string> = {
   H: "236, 232, 220",
   OH: "218, 132, 108",
@@ -1678,16 +1694,10 @@ export default function OrganicsField() {
           }
         }
         // a cached sprite per element+held state, stamped with drawImage —
-        // never a createRadialGradient inside the per-atom loop
-        stampSprite(
-          `org-loose-halo-${a.el}-${held ? 1 : 0}`,
-          [
-            [0, `rgba(${ELEMENT_TINT[a.el]}, ${0.2 + (held ? 0.2 : 0)})`],
-            [1, `rgba(${ELEMENT_TINT[a.el]}, 0)`],
-          ],
-          x, y, r * 2.2,
-          1,
-        );
+        // never a createRadialGradient inside the per-atom loop, and the
+        // stops array itself is looked up rather than rebuilt every frame
+        const haloKey = `org-loose-halo-${a.el}-${held ? 1 : 0}`;
+        stampSprite(haloKey, LOOSE_HALO_STOPS[haloKey], x, y, r * 2.2, 1);
         ctx.fillStyle = `rgba(${ELEMENT_TINT[a.el]}, ${0.6 + (held ? 0.3 : 0.1) + breath * 0.06})`;
         ctx.beginPath();
         ctx.arc(x, y, r, 0, Math.PI * 2);
@@ -1705,7 +1715,12 @@ export default function OrganicsField() {
       // the chains
       for (let i = 0; i < list.length; i++) {
         const p = list[i];
-        const c = chainScreen(p);
+        // inlined chainScreen: avoids allocating a {x,y} object per chain
+        // per frame in the hot render loop (chainScreen itself is still
+        // used as-is by the gesture handlers, which run per-event, not
+        // per-frame)
+        const cx = p.nx * width;
+        const cy = p.ny * height;
         const strain = strainEnergy(p.chain);
         const beat = beatHz(strain);
         const tense = clamp01(beat / BEAT_MAX_HZ);
@@ -1722,7 +1737,7 @@ export default function OrganicsField() {
         my /= pts.length;
 
         ctx.save();
-        ctx.translate(c.x, c.y);
+        ctx.translate(cx, cy);
         ctx.rotate(reduced ? 0 : p.spin);
         const alpha = 1 - leaving;
 
@@ -1807,7 +1822,7 @@ export default function OrganicsField() {
           ctx.strokeStyle = `rgba(231, 172, 82, ${(0.12 + p.chain.fold * 0.35) * alpha})`;
           ctx.lineWidth = stage === "folded" ? 1.6 : 1;
           ctx.beginPath();
-          ctx.arc(c.x, c.y, S * (2.6 - p.chain.fold * 0.7), -Math.PI / 2, -Math.PI / 2 + p.chain.fold * Math.PI * 2);
+          ctx.arc(cx, cy, S * (2.6 - p.chain.fold * 0.7), -Math.PI / 2, -Math.PI / 2 + p.chain.fold * Math.PI * 2);
           ctx.stroke();
         }
         // selection ring, keyboard's own
@@ -1815,24 +1830,27 @@ export default function OrganicsField() {
           ctx.strokeStyle = "rgba(242, 238, 230, 0.6)";
           ctx.lineWidth = 1;
           ctx.beginPath();
-          ctx.arc(c.x, c.y, S * 3, 0, Math.PI * 2);
+          ctx.arc(cx, cy, S * 3, 0, Math.PI * 2);
           ctx.stroke();
         }
         // the name, only where notation lives
         if (lens > 0.55) {
-          const named = recognize(chainFormula(p.chain));
+          // chainFormula computed once and reused — it was being called
+          // twice per chain per frame (once for recognize, once for the
+          // fallback label) for the same, unchanged result
+          const f = chainFormula(p.chain);
+          const named = recognize(f);
           ctx.globalAlpha = (lens - 0.55) / 0.45;
           ctx.font = "300 11px ui-monospace, 'SF Mono', Menlo, monospace";
           ctx.textAlign = "center";
           ctx.fillStyle = "rgba(206, 222, 250, 0.75)";
-          const f = chainFormula(p.chain);
           const parts = [
             f.C ? `C${f.C}` : "",
             f.H ? `H${f.H}` : "",
             f.N ? `N${f.N}` : "",
             f.O ? `O${f.O}` : "",
           ].join("");
-          ctx.fillText(named ? named.label : parts, c.x, c.y + S * 3.4);
+          ctx.fillText(named ? named.label : parts, cx, cy + S * 3.4);
           ctx.globalAlpha = 1;
         }
       }

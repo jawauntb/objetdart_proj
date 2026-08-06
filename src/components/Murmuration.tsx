@@ -101,6 +101,9 @@ const CAM_DIST = 78;
 const SKY_SEED = 0xb1d5;
 const SIZE_MIN = 0.35;
 const SIZE_MAX = 1.8;
+/** The three wind axes, walked every frame — hoisted so the loop over them
+ *  never allocates a fresh array literal each tick. */
+const WIND_AXES = ["x", "y", "z"] as const;
 
 type Character = { sep: number; ali: number; coh: number };
 type Stored = Character & { season: number; yaw: number; cleared?: boolean };
@@ -1164,6 +1167,28 @@ export default function Murmuration() {
     const tiltWind = { x: 0, y: 0, z: 0 };
     const handWind = { x: 0, y: 0, z: 0 };
     const lure = { x: 0, y: 0, z: 0 };
+    // Scratch points + the params bag itself, reused every frame instead of
+    // allocating a fresh FlockParams (and fresh lure/predator/thermal
+    // objects) on every rAF tick — advanceFlock only reads these
+    // synchronously within the call, never retains the reference.
+    const musterLurePt = { x: 0, y: 0, z: 0 };
+    const predatorPt = { x: 0, y: 0, z: 0 };
+    const thermalPt = { x: 0, y: 0, z: 0 };
+    const flockParams: FlockParams = {
+      separation: 0,
+      alignment: 0,
+      cohesion: 0,
+      wind,
+      goal: seasonGoal(season),
+      goalPull: 0,
+      lure,
+      lurePull: 0,
+      swirl: 0,
+      predator: undefined,
+      predatorStrength: 0,
+      thermal: undefined,
+      thermalStrength: 0,
+    };
     let lurePull = 0;
     let lurePullTarget = 0;
     let swirl = 0;
@@ -2148,7 +2173,7 @@ export default function Murmuration() {
         seasonBlend = 0;
       }
 
-      for (const k of ["x", "y", "z"] as const) {
+      for (const k of WIND_AXES) {
         const target = tiltWind[k] + (k === "y" ? 0 : handWind[k]);
         wind[k] += (target - wind[k]) * Math.min(1, dt * 1.6);
       }
@@ -2190,6 +2215,8 @@ export default function Murmuration() {
       if (thermalState.active && now > thermalState.until) thermalState.active = false;
 
       // ——— the muster: a ring the flock forms and then collapses ———
+      // musterLure points at the reused musterLurePt scratch object (never a
+      // fresh allocation) whenever the muster is live, else stays null.
       let musterLure: { x: number; y: number; z: number } | null = null;
       let musterLurePull = 0;
       let musterSwirl = 0;
@@ -2201,11 +2228,10 @@ export default function Murmuration() {
         const radius = phase < 0.62
           ? mix(1.5, musterRadius, Math.sin(formPhase * Math.PI * 0.5))
           : mix(musterRadius, 0.6, clamp01((phase - 0.62) / 0.38));
-        musterLure = {
-          x: musterOrigin.x + Math.cos(ringAngle) * radius,
-          y: musterOrigin.y + Math.sin(phase * Math.PI * 2) * 3.2,
-          z: musterOrigin.z + Math.sin(ringAngle) * radius,
-        };
+        musterLurePt.x = musterOrigin.x + Math.cos(ringAngle) * radius;
+        musterLurePt.y = musterOrigin.y + Math.sin(phase * Math.PI * 2) * 3.2;
+        musterLurePt.z = musterOrigin.z + Math.sin(ringAngle) * radius;
+        musterLure = musterLurePt;
         musterLurePull = phase < 0.62 ? 9 + radius * 0.7 : 24 + (phase - 0.62) * 60;
         musterSwirl = musterDir * (phase < 0.85 ? 20 : 6);
       } else if (!musterEndFired) {
@@ -2221,28 +2247,43 @@ export default function Murmuration() {
         }
       }
 
-      // the law the flock is living under this frame
-      const p: FlockParams = {
-        separation: char.sep * (1 + scatter * 0.9),
-        alignment: char.ali * (1 - scatter * 0.95) + gather * 0.5 - soften * 0.22,
-        cohesion: char.coh * (1 - scatter * 0.85) + gather * 0.4 - soften * 0.18,
-        wind,
-        goal: seasonGoal(season),
-        goalPull: SEASON_PULL * (1 - scatter * 0.5),
-        lure: musterLure ?? lure,
-        lurePull: musterLure ? musterLurePull : lurePull + (leaving > 0 ? -14 * leaving : 0),
-        swirl: musterLure ? musterSwirl : swirl,
-        predator: predatorState.active ? { x: predatorState.x, y: predatorState.y, z: predatorState.z } : undefined,
-        predatorStrength: predatorState.active ? 44 : 0,
-        thermal: thermalState.active ? { x: thermalState.x, y: 0, z: thermalState.z } : undefined,
-        thermalStrength: thermalState.active ? 5.5 : 0,
-      };
+      // the law the flock is living under this frame — mutated in place on
+      // the persistent flockParams bag rather than a fresh object literal
+      // every tick; advanceFlock only reads it synchronously below.
+      flockParams.separation = char.sep * (1 + scatter * 0.9);
+      flockParams.alignment = char.ali * (1 - scatter * 0.95) + gather * 0.5 - soften * 0.22;
+      flockParams.cohesion = char.coh * (1 - scatter * 0.85) + gather * 0.4 - soften * 0.18;
+      flockParams.goal = seasonGoal(season);
+      flockParams.goalPull = SEASON_PULL * (1 - scatter * 0.5);
+      flockParams.lure = musterLure ?? lure;
+      flockParams.lurePull = musterLure ? musterLurePull : lurePull + (leaving > 0 ? -14 * leaving : 0);
+      flockParams.swirl = musterLure ? musterSwirl : swirl;
+      if (predatorState.active) {
+        predatorPt.x = predatorState.x;
+        predatorPt.y = predatorState.y;
+        predatorPt.z = predatorState.z;
+        flockParams.predator = predatorPt;
+        flockParams.predatorStrength = 44;
+      } else {
+        flockParams.predator = undefined;
+        flockParams.predatorStrength = 0;
+      }
+      if (thermalState.active) {
+        thermalPt.x = thermalState.x;
+        thermalPt.y = 0;
+        thermalPt.z = thermalState.z;
+        flockParams.thermal = thermalPt;
+        flockParams.thermalStrength = 5.5;
+      } else {
+        flockParams.thermal = undefined;
+        flockParams.thermalStrength = 0;
+      }
 
       // Fixed timestep, accumulator inside: the same second of real time is
       // the same flock whatever the display is doing. Under reduced motion the
       // sky is still, but every verb still moves it.
       const advance = reduced ? (energy > 0 ? dt * timeScale : 0) : dt * timeScale;
-      const steps = advance > 0 ? advanceFlock(state, p, advance) : 0;
+      const steps = advance > 0 ? advanceFlock(state, flockParams, advance) : 0;
       if (!reduced || energy > 0) visualT += dt * timeScale;
       if (pulseT >= 0) {
         pulseT += dt;

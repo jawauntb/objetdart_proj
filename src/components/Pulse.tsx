@@ -221,6 +221,22 @@ function isPatternKind(value: string): value is PatternKind {
   return (PATTERN_KINDS as readonly string[]).includes(value);
 }
 
+// Ring layout is fixed geometry — computed once at module scope so the
+// render loop never allocates an array-of-objects per frame for it.
+const RING_LAYOUT: ReadonlyArray<{
+  key: ChannelKey;
+  radiusMul: number;
+  ampMul: number;
+  squash: number;
+  startMul: number;
+  spanMul: number;
+}> = [
+  { key: "hr", radiusMul: 0.58, ampMul: 0.22, squash: 0.72, startMul: -0.90, spanMul: 1.78 },
+  { key: "breath", radiusMul: 0.83, ampMul: 0.16, squash: 0.69, startMul: -0.78, spanMul: 1.55 },
+  { key: "bp", radiusMul: 1.06, ampMul: 0.13, squash: 0.66, startMul: -0.84, spanMul: 1.68 },
+  { key: "brain", radiusMul: 1.24, ampMul: 0.12, squash: 0.63, startMul: -0.86, spanMul: 1.74 },
+];
+
 function isSavedPattern(value: unknown): value is SavedPattern {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<SavedPattern>;
@@ -551,32 +567,23 @@ export default function Pulse() {
       pushSample(channels.brain, inShock ? 0 : clamp(render.brain + patternSample * 0.06, -1, 1));
 
       drawBackground(ctx, w, h, render.time, stressV, render.touchEnergy + Math.abs(wind.cur) * 1.4, shock.energy, reduce);
-      const center = {
-        x: w * (mobile ? 0.5 : 0.51),
-        y: h * (mobile ? 0.43 : 0.49),
-      };
+      const centerX = w * (mobile ? 0.5 : 0.51);
+      const centerY = h * (mobile ? 0.43 : 0.49);
       const baseR = Math.min(w, h) * (mobile ? 0.255 : 0.30);
-      drawMembrane(ctx, center.x, center.y, baseR, render.time, render.beatGlow, stressV, render.touchEnergy, shock.energy, reduce);
-      drawPatternOrbit(ctx, patternNow.samples, render.patternCursor, patternNow.kind, center.x, center.y, baseR * 1.38, render.time, reduce);
+      drawMembrane(ctx, centerX, centerY, baseR, render.time, render.beatGlow, stressV, render.touchEnergy, shock.energy, reduce);
+      drawPatternOrbit(ctx, patternNow.samples, render.patternCursor, patternNow.kind, centerX, centerY, baseR * 1.38, render.time, reduce);
 
-      const rings = [
-        { key: "hr" as const, radius: baseR * 0.58, amp: baseR * 0.22, squash: 0.72, start: -0.90, span: 1.78 },
-        { key: "breath" as const, radius: baseR * 0.83, amp: baseR * 0.16, squash: 0.69, start: -0.78, span: 1.55 },
-        { key: "bp" as const, radius: baseR * 1.06, amp: baseR * 0.13, squash: 0.66, start: -0.84, span: 1.68 },
-        { key: "brain" as const, radius: baseR * 1.24, amp: baseR * 0.12, squash: 0.63, start: -0.86, span: 1.74 },
-      ];
-
-      for (const ring of rings) {
+      for (const ring of RING_LAYOUT) {
         drawOrbitTrace(
           ctx,
           channels[ring.key],
-          center.x,
-          center.y,
-          ring.radius,
-          ring.amp,
+          centerX,
+          centerY,
+          baseR * ring.radiusMul,
+          baseR * ring.ampMul,
           ring.squash,
-          ring.start * Math.PI,
-          ring.span * Math.PI,
+          ring.startMul * Math.PI,
+          ring.spanMul * Math.PI,
           render.time,
           audioRef.current[ring.key],
           inShock,
@@ -585,7 +592,7 @@ export default function Pulse() {
       }
 
       drawTouchBlooms(ctx, bloomsRef.current, now, reduce);
-      drawNeedle(ctx, center.x, center.y, baseR, render.time, patternSample, render.beatGlow, shock.energy);
+      drawNeedle(ctx, centerX, centerY, baseR, render.time, patternSample, render.beatGlow, shock.energy);
 
       if (shock.armedBell && now > shock.until + 120) {
         shock.armedBell = false;

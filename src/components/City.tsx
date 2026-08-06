@@ -2515,6 +2515,22 @@ export default function City() {
     // entries in place; setPedestrians only reads the fields, never
     // captures the reference beyond the call.
     const _pedInputPool: PedestrianInput[] = [];
+    // drawOverlay() runs once per frame from the tick loop too (it is a
+    // sibling of the subsystem updates above, just called after
+    // composer.render()), so it gets the same zero-alloc treatment.
+    // `projPlot` used to return a fresh `{x,y}` literal on every call —
+    // up to ~150 short-lived objects/frame across the roads, carillon,
+    // community-ring, and satisfaction-lens loops below. It now writes
+    // into a caller-supplied scratch object instead. Two are kept
+    // because the road loop needs two DISTINCT points live at once
+    // (a and b, drawn in the same stroke) — a single shared scratch
+    // would alias both endpoints onto whichever was projected last.
+    const _projScratch: { x: number; y: number } = { x: 0, y: 0 };
+    const _projScratchB: { x: number; y: number } = { x: 0, y: 0 };
+    // The community-ring pass used to build a fresh `new Map()` every
+    // frame just to tally regulars-per-plot. Reused here and cleared at
+    // the top of each pass instead.
+    const _regularCountByPlot = new Map<number, number>();
 
     // ── frame loop ──────────────────────────────────────────────────────
     let stopped = false;
@@ -3395,9 +3411,19 @@ export default function City() {
     // where the extruded prism actually rises regardless of camera pitch.
     // Returns null when the point is behind the camera (or clipped) so a
     // caller can skip drawing rather than mirror the point on screen.
-    function projPlot(nx: number, ny: number): { x: number; y: number } | null {
+    // Writes into `out` and returns it (or null when off-camera) instead
+    // of allocating a fresh {x,y} per call — drawOverlay calls this up to
+    // a few hundred times a frame across its road/plot loops.
+    function projPlot(
+      nx: number,
+      ny: number,
+      out: { x: number; y: number },
+    ): { x: number; y: number } | null {
       const p = projectPlotToScreen(cityCam.camera, nx, ny, width, height);
-      return p.visible ? { x: p.x, y: p.y } : null;
+      if (!p.visible) return null;
+      out.x = p.x;
+      out.y = p.y;
+      return out;
     }
 
     function drawOverlay(): void {
@@ -3417,7 +3443,7 @@ export default function City() {
         // at both ends. Radius grows monotonically so the glimmer expands.
         const alpha = Math.sin(t * Math.PI) * 0.42;
         const r = 22 + t * 46;
-        const proj = projPlot(glimmerAt.nx, glimmerAt.ny);
+        const proj = projPlot(glimmerAt.nx, glimmerAt.ny, _projScratch);
         if (proj) {
           fgctx.strokeStyle = `rgba(232, 187, 129, ${alpha.toFixed(3)})`;
           fgctx.lineWidth = 1.5;
@@ -3456,7 +3482,7 @@ export default function City() {
           fgctx.strokeStyle = `rgba(246, 230, 180, ${alpha.toFixed(3)})`;
           fgctx.lineWidth = 1.5;
           for (const plot of plots) {
-            const proj = projPlot(plot.x, plot.y);
+            const proj = projPlot(plot.x, plot.y, _projScratch);
             if (!proj) continue;
             fgctx.beginPath();
             fgctx.arc(proj.x, proj.y, 14 + t * 36, 0, Math.PI * 2);
@@ -3472,8 +3498,8 @@ export default function City() {
       fgctx.lineWidth = 3;
       fgctx.lineCap = "round";
       for (const road of roads) {
-        const a = projPlot(road.x1, road.y1);
-        const b = projPlot(road.x2, road.y2);
+        const a = projPlot(road.x1, road.y1, _projScratch);
+        const b = projPlot(road.x2, road.y2, _projScratchB);
         if (!a || !b) continue;
         fgctx.beginPath();
         fgctx.moveTo(a.x, a.y);
@@ -3502,7 +3528,7 @@ export default function City() {
         const nextThreshold = nextRoleThreshold(activePlant.role);
         const prev = prevRoleThreshold(activePlant.role);
         const frac = nextThreshold ? Math.min(1, (dwell - prev) / (nextThreshold - prev)) : 1;
-        const proj = projPlot(activePlant.x, activePlant.y);
+        const proj = projPlot(activePlant.x, activePlant.y, _projScratch);
         if (proj) {
           fgctx.strokeStyle = `rgba(255, 232, 178, ${0.55 + plantRingWeight * 0.35})`;
           fgctx.lineWidth = 2;
@@ -3518,19 +3544,19 @@ export default function City() {
       // reads AGAINST its warm plot rather than dissolving into it (a warm
       // ring on a warm awning was one plot and one regular class, both
       // arguing the same hue).
-      const regularCountByPlot = new Map<number, number>();
+      _regularCountByPlot.clear();
       for (const person of people) {
         if (person.regularStoreId != null) {
-          regularCountByPlot.set(person.regularStoreId, (regularCountByPlot.get(person.regularStoreId) ?? 0) + 1);
+          _regularCountByPlot.set(person.regularStoreId, (_regularCountByPlot.get(person.regularStoreId) ?? 0) + 1);
         }
         if (person.regularEventId != null) {
-          regularCountByPlot.set(person.regularEventId, (regularCountByPlot.get(person.regularEventId) ?? 0) + 1);
+          _regularCountByPlot.set(person.regularEventId, (_regularCountByPlot.get(person.regularEventId) ?? 0) + 1);
         }
       }
       for (const plot of plots) {
-        const count = regularCountByPlot.get(plot.id) ?? 0;
+        const count = _regularCountByPlot.get(plot.id) ?? 0;
         if (count < 2) continue;
-        const proj = projPlot(plot.x, plot.y);
+        const proj = projPlot(plot.x, plot.y, _projScratch);
         if (!proj) continue;
         const radius = 22 + count * 3;
         fgctx.strokeStyle = `rgba(74, 158, 158, ${Math.min(0.62, 0.22 + count * 0.10)})`;
@@ -3565,7 +3591,7 @@ export default function City() {
             if ((person.x - plot.x) ** 2 + (person.y - plot.y) ** 2 < 0.005) visitors += 1;
           }
           if (visitors === 0) continue;
-          const proj = projPlot(plot.x, plot.y);
+          const proj = projPlot(plot.x, plot.y, _projScratch);
           if (!proj) continue;
           fgctx.strokeStyle = `rgba(74, 145, 106, ${Math.min(0.55, visitors * 0.18)})`;
           fgctx.lineWidth = 4;

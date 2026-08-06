@@ -498,8 +498,10 @@ export default function DeepSpaceWeb() {
 
     const stepWandererPhysics = (dt: number) => {
       if (wanderers.length < 2) return;
-      const bodies: Wanderer[] = wanderers.map((w) => ({ x: w.x, y: w.y, z: w.z, vx: w.vx, vy: w.vy, vz: w.vz, m: w.m }));
-      const stepped = stepWanderers(bodies, dt, WANDER_G, WANDER_SOFT, WANDER_SPEED_CAP);
+      // stepWanderers only reads each body (x/y/z/vx/vy/vz/m) and returns a
+      // freshly-mapped array of its own — the live array can be passed
+      // straight in, no per-frame copy needed.
+      const stepped = stepWanderers(wanderers, dt, WANDER_G, WANDER_SOFT, WANDER_SPEED_CAP);
       stepped.forEach((b, i) => {
         wanderers[i].x = clamp(b.x, -0.4, 1.4);
         wanderers[i].y = clamp(b.y, -0.4, 1.4);
@@ -799,6 +801,12 @@ export default function DeepSpaceWeb() {
     let volU: Uni = {};
     let galU: Uni = {};
     let galA: Record<string, number> = {};
+    // galA's values, cached as a plain array once per (re)link so the draw
+    // loop never has to call Object.values(galA) every frame.
+    let galALocs: number[] = [];
+    // The volume pass's lone attribute location, cached the same way so the
+    // draw loop never re-queries it from the driver every frame.
+    let volA_pos = -1;
 
     const divisor = (loc: number, d: number) => {
       if (gl2) gl2.vertexAttribDivisor(loc, d);
@@ -807,6 +815,16 @@ export default function DeepSpaceWeb() {
     const drawInstanced = (verts: number, instances: number) => {
       if (gl2) gl2.drawArraysInstanced(gl2.TRIANGLE_STRIP, 0, verts, instances);
       else angle?.drawArraysInstancedANGLE(gl!.TRIANGLE_STRIP, 0, verts, instances);
+    };
+    // Binds one instanced attribute. Hoisted out of the draw loop — it
+    // closed over nothing per-frame, so there is no reason to allocate a
+    // fresh closure for it on every rAF tick.
+    const bind = (buf: WebGLBuffer | null, loc: number, size: number, div: number) => {
+      if (!gl || loc < 0) return;
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+      divisor(loc, div);
     };
 
     // The GL setup below (programs, buffers, texture) is wrapped in a
@@ -932,6 +950,8 @@ export default function DeepSpaceWeb() {
           meta2: gl.getAttribLocation(galProg, "a_meta2"),
           dyn: gl.getAttribLocation(galProg, "a_dyn"),
         };
+        galALocs = Object.values(galA);
+        volA_pos = gl.getAttribLocation(volProg, "a_pos");
       }
       }
     };
@@ -1569,7 +1589,7 @@ export default function DeepSpaceWeb() {
 
         gl.useProgram(volProg);
         gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
-        const aq = gl.getAttribLocation(volProg, "a_pos");
+        const aq = volA_pos;
         gl.enableVertexAttribArray(aq);
         gl.vertexAttribPointer(aq, 2, gl.FLOAT, false, 0, 0);
         divisor(aq, 0);
@@ -1597,13 +1617,6 @@ export default function DeepSpaceWeb() {
         gl.useProgram(galProg);
         gl.bindBuffer(gl.ARRAY_BUFFER, dynBuf);
         gl.bufferSubData(gl.ARRAY_BUFFER, 0, dynArr);
-        const bind = (buf: WebGLBuffer | null, loc: number, size: number, div: number) => {
-          if (loc < 0) return;
-          gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-          gl.enableVertexAttribArray(loc);
-          gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
-          divisor(loc, div);
-        };
         bind(cornerBuf, galA.corner, 2, 0);
         bind(posBuf, galA.gpos, 3, 1);
         bind(metaBuf, galA.meta, 4, 1);
@@ -1622,7 +1635,7 @@ export default function DeepSpaceWeb() {
         gl.uniform1f(galU.u_veil ?? null, shownVeil);
         gl.uniform1f(galU.u_fit ?? null, fitScale);
         drawInstanced(4, count);
-        for (const loc of Object.values(galA)) {
+        for (const loc of galALocs) {
           if (loc >= 0) {
             divisor(loc, 0);
             gl.disableVertexAttribArray(loc);

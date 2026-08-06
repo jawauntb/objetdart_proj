@@ -118,12 +118,6 @@ const NIGHT_TINT: Palette = {
   foam: [204, 218, 236],
 };
 
-const mixColor = (a: RGB, b: RGB, t: number): RGB => [
-  mix(a[0], b[0], t),
-  mix(a[1], b[1], t),
-  mix(a[2], b[2], t),
-];
-
 // ── the field shader ────────────────────────────────────────────────
 // The height field is packed into a two-channel 8-bit texture (16-bit
 // fixed point, ±FIELD_RANGE) so it works identically on WebGL1
@@ -546,6 +540,9 @@ export default function Waves() {
     let height = 0;
     let raf = 0;
     let last = performance.now();
+    // baked once per resize (dimensions are its only real input), not
+    // rebuilt every frame the way a naive inline call would.
+    let vignetteSprite: HTMLCanvasElement | null = null;
 
     const buildSim = (w: number, h: number, detail: ReturnType<typeof detailForTier>) => {
       const aspect = w / Math.max(1, h);
@@ -650,6 +647,16 @@ export default function Waves() {
         if (gl && fieldProgram) gl.viewport(0, 0, glCanvas.width, glCanvas.height);
       }
       buildSim(width, height, detailForTier(tier));
+      vignetteSprite = bakeRadialSprite(`waves-vignette:${Math.round(width)}x${Math.round(height)}`, {
+        width,
+        height,
+        inner: { x: width * 0.5, y: height * 0.5, r: Math.min(width, height) * 0.3 },
+        outer: { x: width * 0.5, y: height * 0.5, r: Math.max(width, height) * 0.72 },
+        stops: [
+          { offset: 0, color: "rgba(0,0,0,0)" },
+          { offset: 1, color: "rgba(0,0,0,0.42)" },
+        ],
+      });
     };
 
     resize();
@@ -741,12 +748,24 @@ export default function Waves() {
       ctx.drawImage(grid, 0, 0, gw, gh, 0, 0, width, height);
     };
 
+    // string-mode backdrop gradient: only `height` ever changes it (a
+    // resize), so it's cached and only rebuilt when height actually moves —
+    // not recreated on every one of the 60 frames/sec it's painted.
+    let stringBgGradient: CanvasGradient | null = null;
+    let stringBgGradientHeight = -1;
+    const getStringBgGradient = (h: number) => {
+      if (!stringBgGradient || stringBgGradientHeight !== h) {
+        stringBgGradient = ctx.createLinearGradient(0, 0, 0, h);
+        stringBgGradient.addColorStop(0, "#05070f");
+        stringBgGradient.addColorStop(0.5, "#0a1420");
+        stringBgGradient.addColorStop(1, "#080610");
+        stringBgGradientHeight = h;
+      }
+      return stringBgGradient;
+    };
+
     const renderString = (sim: Sim, tone: string, glow: number) => {
-      const bg = ctx.createLinearGradient(0, 0, 0, height);
-      bg.addColorStop(0, "#05070f");
-      bg.addColorStop(0.5, "#0a1420");
-      bg.addColorStop(1, "#080610");
-      ctx.fillStyle = bg;
+      ctx.fillStyle = getStringBgGradient(height);
       ctx.fillRect(0, 0, width, height);
 
       const { sN, sa } = sim;
@@ -1631,6 +1650,20 @@ export default function Waves() {
       ],
     });
 
+    let refractionMarkerGradient: CanvasGradient | null = null;
+    let refractionMarkerGradientKey = "";
+    const getRefractionMarkerGradient = (gy: number, tone: string) => {
+      const key = `${gy}|${tone}`;
+      if (!refractionMarkerGradient || refractionMarkerGradientKey !== key) {
+        refractionMarkerGradient = ctx.createLinearGradient(0, gy - 40, 0, gy + 40);
+        refractionMarkerGradient.addColorStop(0, "rgba(0,0,0,0)");
+        refractionMarkerGradient.addColorStop(0.5, colorAlpha(tone, 0.05));
+        refractionMarkerGradient.addColorStop(1, "rgba(0,0,0,0)");
+        refractionMarkerGradientKey = key;
+      }
+      return refractionMarkerGradient;
+    };
+
     let lastNaturalsSaveAt = performance.now();
     let prevDrawSec = performance.now() / 1000;
 
@@ -1787,11 +1820,9 @@ export default function Waves() {
           } else if (gl1) {
             gl1.texImage2D(gl1.TEXTURE_2D, 0, gl1.LUMINANCE_ALPHA, sim.gw, sim.gh, 0, gl1.LUMINANCE_ALPHA, gl1.UNSIGNED_BYTE, sim.fieldEnc);
           }
-          const palMid = mixColor(pal.mid, NIGHT_TINT.mid, nightVal);
-          const palCrest = mixColor(pal.crest, NIGHT_TINT.crest, nightVal);
-          const palTrough = mixColor(pal.trough, NIGHT_TINT.trough, nightVal);
-          const palCaustic = mixColor(pal.caustic, NIGHT_TINT.caustic, nightVal);
-          const palFoam = mixColor(pal.foam, NIGHT_TINT.foam, nightVal);
+          // night-tint blend fed straight into the uniform calls (no
+          // intermediate RGB tuple allocated per channel per frame — the
+          // math is identical, only the throwaway arrays are gone)
           const sunAngle = seasonPos * Math.PI * 2;
           const sunDirX = Math.cos(sunAngle) * 0.65;
           const sunDirY = Math.sin(sunAngle) * 0.35 - 0.15;
@@ -1799,11 +1830,36 @@ export default function Waves() {
           gl.activeTexture(gl.TEXTURE0);
           gl.uniform1i(fieldProgram.loc.uField, 0);
           gl.uniform2f(fieldProgram.loc.uGridSize, sim.gw, sim.gh);
-          gl.uniform3f(fieldProgram.loc.uMid, palMid[0] / 255, palMid[1] / 255, palMid[2] / 255);
-          gl.uniform3f(fieldProgram.loc.uCrest, palCrest[0] / 255, palCrest[1] / 255, palCrest[2] / 255);
-          gl.uniform3f(fieldProgram.loc.uTrough, palTrough[0] / 255, palTrough[1] / 255, palTrough[2] / 255);
-          gl.uniform3f(fieldProgram.loc.uCaustic, palCaustic[0] / 255, palCaustic[1] / 255, palCaustic[2] / 255);
-          gl.uniform3f(fieldProgram.loc.uFoam, palFoam[0] / 255, palFoam[1] / 255, palFoam[2] / 255);
+          gl.uniform3f(
+            fieldProgram.loc.uMid,
+            mix(pal.mid[0], NIGHT_TINT.mid[0], nightVal) / 255,
+            mix(pal.mid[1], NIGHT_TINT.mid[1], nightVal) / 255,
+            mix(pal.mid[2], NIGHT_TINT.mid[2], nightVal) / 255,
+          );
+          gl.uniform3f(
+            fieldProgram.loc.uCrest,
+            mix(pal.crest[0], NIGHT_TINT.crest[0], nightVal) / 255,
+            mix(pal.crest[1], NIGHT_TINT.crest[1], nightVal) / 255,
+            mix(pal.crest[2], NIGHT_TINT.crest[2], nightVal) / 255,
+          );
+          gl.uniform3f(
+            fieldProgram.loc.uTrough,
+            mix(pal.trough[0], NIGHT_TINT.trough[0], nightVal) / 255,
+            mix(pal.trough[1], NIGHT_TINT.trough[1], nightVal) / 255,
+            mix(pal.trough[2], NIGHT_TINT.trough[2], nightVal) / 255,
+          );
+          gl.uniform3f(
+            fieldProgram.loc.uCaustic,
+            mix(pal.caustic[0], NIGHT_TINT.caustic[0], nightVal) / 255,
+            mix(pal.caustic[1], NIGHT_TINT.caustic[1], nightVal) / 255,
+            mix(pal.caustic[2], NIGHT_TINT.caustic[2], nightVal) / 255,
+          );
+          gl.uniform3f(
+            fieldProgram.loc.uFoam,
+            mix(pal.foam[0], NIGHT_TINT.foam[0], nightVal) / 255,
+            mix(pal.foam[1], NIGHT_TINT.foam[1], nightVal) / 255,
+            mix(pal.foam[2], NIGHT_TINT.foam[2], nightVal) / 255,
+          );
           gl.uniform1f(fieldProgram.loc.uGlow, glow);
           gl.uniform1f(fieldProgram.loc.uLens, lensPos);
           gl.uniform1f(fieldProgram.loc.uNight, nightVal);
@@ -1895,30 +1951,17 @@ export default function Waves() {
           }
         }
         if (m === "refraction") {
-          // faint marker of the slow medium boundary
+          // faint marker of the slow medium boundary — cached the same way
+          // as the string backdrop above; rebuilt only when height or tone
+          // actually change, not every frame.
           const gy = height * 0.6;
-          const grad = ctx.createLinearGradient(0, gy - 40, 0, gy + 40);
-          grad.addColorStop(0, "rgba(0,0,0,0)");
-          grad.addColorStop(0.5, colorAlpha(cfg.tone, 0.05));
-          grad.addColorStop(1, "rgba(0,0,0,0)");
-          ctx.fillStyle = grad;
+          ctx.fillStyle = getRefractionMarkerGradient(gy, cfg.tone);
           ctx.fillRect(0, gy - 40, width, 80);
         }
       }
 
-      // vignette — the stops are constant, only width/height (resize-time,
-      // not per-frame) select the bake, so this is a Map lookup on every
-      // frame that isn't a resize.
-      const vignetteSprite = bakeRadialSprite(`waves-vignette:${Math.round(width)}x${Math.round(height)}`, {
-        width,
-        height,
-        inner: { x: width * 0.5, y: height * 0.5, r: Math.min(width, height) * 0.3 },
-        outer: { x: width * 0.5, y: height * 0.5, r: Math.max(width, height) * 0.72 },
-        stops: [
-          { offset: 0, color: "rgba(0,0,0,0)" },
-          { offset: 1, color: "rgba(0,0,0,0.42)" },
-        ],
-      });
+      // vignette — baked once per resize (see resize() above); draw() only
+      // stamps the cached sprite, no per-frame allocation.
       if (vignetteSprite) ctx.drawImage(vignetteSprite, 0, 0, width, height);
 
       // periodic persistence — visible drift/growth is applied per frame,
@@ -2529,6 +2572,72 @@ function colorAlpha(hex: string, alpha: number) {
 // ── natural drawing helpers ────────────────────────────────────────
 // Small tight paintings for things that live on the pond. Kept
 // procedural (no assets) and never man-made — leaves, pads, koi.
+//
+// Each sprite spec below is a module-level constant, not an object literal
+// rebuilt on every call: bakeRadialSprite already caches the baked sprite
+// by key, but a fresh `{ ...,  stops: [...] }` argument is still allocated
+// on every call before that cache lookup ever runs, once per natural per
+// frame. Passing the same reference every time removes that churn too.
+
+const LILY_SPRITE_SPEC = {
+  width: 256,
+  height: 256,
+  inner: { x: 128 - 128 * 0.25, y: 128 - 128 * 0.3, r: 128 * 0.1 },
+  outer: { x: 128, y: 128, r: 128 },
+  stops: [
+    { offset: 0, color: "rgba(150, 196, 118, 0.98)" },
+    { offset: 0.6, color: "rgba( 92, 152,  86, 0.96)" },
+    { offset: 1, color: "rgba( 46, 100,  62, 0.94)" },
+  ],
+};
+
+const KOI_SPRITE_SPEC = {
+  width: 256,
+  height: 256,
+  inner: { x: 128, y: 128, r: 128 * 0.15 },
+  outer: { x: 128, y: 128, r: 128 },
+  stops: [
+    { offset: 0, color: "rgba(6, 14, 26, 0.55)" },
+    { offset: 0.6, color: "rgba(6, 14, 26, 0.35)" },
+    { offset: 1, color: "rgba(6, 14, 26, 0)" },
+  ],
+};
+
+// The leaf's body colour ramp was a fresh `ctx.createLinearGradient` call
+// per leaf per frame (createRadialGradient/createLinearGradient recreated
+// per object per frame is exactly the pattern the room's paint ledger
+// forbids). There are only 4 distinct "warm" variants (seed & 3), so each
+// is baked once into a small square sprite and reused like the lily/koi
+// sprites above: clip to the leaf's own path, then stamp the sprite.
+const LEAF_WARM_BASE = [
+  "rgba(214, 138, 68, 0.96)",
+  "rgba(196, 108, 54, 0.96)",
+  "rgba(228, 176, 90, 0.96)",
+  "rgba(180, 128, 76, 0.96)",
+] as const;
+const leafSpriteCache = new Map<number, HTMLCanvasElement | null>();
+function bakeLeafSprite(warm: number): HTMLCanvasElement | null {
+  const cached = leafSpriteCache.get(warm);
+  if (cached !== undefined) return cached;
+  if (typeof document === "undefined") return null;
+  const size = 128;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const sctx = canvas.getContext("2d");
+  if (!sctx) {
+    leafSpriteCache.set(warm, null);
+    return null;
+  }
+  const g = sctx.createLinearGradient(0, 0, size, 0);
+  g.addColorStop(0, "rgba(240, 210, 154, 0.92)");
+  g.addColorStop(0.5, LEAF_WARM_BASE[warm]);
+  g.addColorStop(1, "rgba(120, 78, 48, 0.94)");
+  sctx.fillStyle = g;
+  sctx.fillRect(0, 0, size, size);
+  leafSpriteCache.set(warm, canvas);
+  return canvas;
+}
 
 function drawLilyPad(
   ctx: CanvasRenderingContext2D,
@@ -2553,17 +2662,7 @@ function drawLilyPad(
   // scales with r, so one sprite normalized to r=1 — baked once through the
   // shared radial-sprite cache — covers every pad at any size: clip to the
   // wedge, then stamp the sprite scaled to this pad's own r.
-  const lilySprite = bakeRadialSprite("waves-lily-body", {
-    width: 256,
-    height: 256,
-    inner: { x: 128 - 128 * 0.25, y: 128 - 128 * 0.3, r: 128 * 0.1 },
-    outer: { x: 128, y: 128, r: 128 },
-    stops: [
-      { offset: 0, color: "rgba(150, 196, 118, 0.98)" },
-      { offset: 0.6, color: "rgba( 92, 152,  86, 0.96)" },
-      { offset: 1, color: "rgba( 46, 100,  62, 0.94)" },
-    ],
-  });
+  const lilySprite = bakeRadialSprite("waves-lily-body", LILY_SPRITE_SPEC);
   ctx.save();
   ctx.beginPath();
   ctx.moveTo(r, 0);
@@ -2610,23 +2709,20 @@ function drawFallenLeaf(
   ctx.beginPath();
   ctx.ellipse(1, 1, r * 1.1, r * 0.42, 0, 0, Math.PI * 2);
   ctx.fill();
-  // body — pinched lens
-  const g = ctx.createLinearGradient(-r, 0, r, 0);
-  const warm = (seed & 3);
-  const base = warm === 0 ? "rgba(214, 138, 68, 0.96)"
-             : warm === 1 ? "rgba(196, 108, 54, 0.96)"
-             : warm === 2 ? "rgba(228, 176, 90, 0.96)"
-             : "rgba(180, 128, 76, 0.96)";
-  g.addColorStop(0, "rgba(240, 210, 154, 0.92)");
-  g.addColorStop(0.5, base);
-  g.addColorStop(1, "rgba(120, 78, 48, 0.94)");
-  ctx.fillStyle = g;
+  // body — pinched lens, stamped from a per-warm-variant sprite baked once
+  // (bakeLeafSprite above) instead of a fresh CanvasGradient per leaf per
+  // frame
+  const warm = seed & 3;
+  const leafSprite = bakeLeafSprite(warm);
+  ctx.save();
   ctx.beginPath();
   ctx.moveTo(-r, 0);
   ctx.quadraticCurveTo(0, -r * 0.55, r, 0);
   ctx.quadraticCurveTo(0, r * 0.55, -r, 0);
   ctx.closePath();
-  ctx.fill();
+  ctx.clip();
+  if (leafSprite) ctx.drawImage(leafSprite, -r, -r, r * 2, r * 2);
+  ctx.restore();
   // central vein
   ctx.strokeStyle = "rgba(96, 56, 32, 0.7)";
   ctx.lineWidth = 0.7;
@@ -2667,17 +2763,7 @@ function drawKoiShadow(
   // body shadow — soft, wide. Fixed colour and offsets, every coordinate
   // proportional to r, so one sprite normalized to r=1 covers every koi:
   // clip to the body ellipse, then stamp the sprite scaled to this fish's r.
-  const koiSprite = bakeRadialSprite("waves-koi-body", {
-    width: 256,
-    height: 256,
-    inner: { x: 128, y: 128, r: 128 * 0.15 },
-    outer: { x: 128, y: 128, r: 128 },
-    stops: [
-      { offset: 0, color: "rgba(6, 14, 26, 0.55)" },
-      { offset: 0.6, color: "rgba(6, 14, 26, 0.35)" },
-      { offset: 1, color: "rgba(6, 14, 26, 0)" },
-    ],
-  });
+  const koiSprite = bakeRadialSprite("waves-koi-body", KOI_SPRITE_SPEC);
   ctx.save();
   ctx.beginPath();
   ctx.ellipse(0, 0, r, r * 0.34, 0, 0, Math.PI * 2);

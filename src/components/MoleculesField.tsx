@@ -141,6 +141,25 @@ function mixHex(a: string, b: string, t: number) {
   return `rgb(${r}, ${g}, ${bl})`;
 }
 
+// polarity used by the per-frame "like dissolves like" force — pure in q,
+// hoisted so the per-pair loop never allocates a closure for it
+function polarityOf(q: Mol): number {
+  return q.morph.felt === "polar" || q.morph.felt === "anomalous" || q.morph.felt === "ionic"
+    ? 1
+    : q.morph.felt === "nonpolar" || q.morph.felt === "inert"
+      ? -1
+      : 0;
+}
+
+// bond-order stroke offsets — fixed per order, so the per-bond per-frame
+// draw passes index into these instead of allocating a tiny array each time
+const BOND_OFFSETS_1: readonly number[] = [0];
+const BOND_OFFSETS_2: readonly number[] = [-1, 1];
+const BOND_OFFSETS_3: readonly number[] = [-1.7, 0, 1.7];
+const LENS_OFFSETS_1: readonly number[] = [0];
+const LENS_OFFSETS_2: readonly number[] = [-1, 1];
+const LENS_OFFSETS_3: readonly number[] = [-1.5, 0, 1.5];
+
 function makeMol(seed: number, nx: number, ny: number, built: number): Mol {
   const morph = moleculeFromSeed(seed);
   const compound = compoundByKey(morph.compound);
@@ -245,6 +264,11 @@ export default function MoleculesField() {
     const pendingNotes: PendingNote[] = [];
     const hints = new Map<string, Hint>(); // bond-hints between reactable neighbors
     const reactPairCache = new Map<string, boolean>();
+    // per-frame scratch buffers, reused every frame instead of being
+    // allocated fresh (filter()/spread/Set literals) inside the render loop
+    const tellMolsBuf: Mol[] = [];
+    const sortedMolsBuf: Mol[] = [];
+    const hintSeenBuf = new Set<string>();
     let greenhouseGlow = 0; // CO₂'s tell: the field warms faintly
     let width = 0;
     let height = 0;
@@ -390,6 +414,21 @@ export default function MoleculesField() {
     const note = (midi: number, ms = 120) => { try { audio().playNote(midi, ms); } catch { /* noop */ } };
     const noteLater = (delayMs: number, midi: number, ms = 120) => {
       pendingNotes.push({ at: performance.now() + delayMs, midi, ms });
+    };
+
+    // the felt tells: one behavioral word per compound, subtle — CO₂
+    // warms the field, flammables shiver near heat, the inert airs stay
+    // serene, and water finds water (the anomaly as a slow lean). Hoisted
+    // out of the render loop so it is not re-allocated as a closure every
+    // frame; reactPairCache (above) still does the actual memoizing.
+    const reactable = (ka: string, kb: string): boolean => {
+      const ck = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+      let v = reactPairCache.get(ck);
+      if (v === undefined) {
+        v = reactionForPair(REACTIONS, ka, kb) != null;
+        reactPairCache.set(ck, v);
+      }
+      return v;
     };
 
     const resize = () => {
@@ -1392,6 +1431,13 @@ export default function MoleculesField() {
     document.addEventListener("visibilitychange", onVis);
 
     // ————— drawing —————
+    // reused across every molecule, every frame: atomPoints writes each
+    // atom's screen position into this pool instead of map()-ing a fresh
+    // array of fresh {x,y} objects per molecule per frame. Grown (once,
+    // lazily, never per-frame) to the largest atom count any morph uses.
+    // Safe because the result is only ever read synchronously within the
+    // same drawMol() call that requested it — never retained across frames.
+    const atomPointsPool: Array<{ x: number; y: number }> = [];
     /**
      * Screen-space atom positions of a molecule at time t: skeleton rotated
      * by rot, scaled to R, flexed conformationally, shivering thermally.
@@ -1413,7 +1459,10 @@ export default function MoleculesField() {
       const vib = m.vib && !reduce ? m.vib : null;
       const vRate = vib ? 0.9 + (vib.wavenumber / 4000) * 5.5 : 0;
       const vPhase = vib ? Math.sin(t * Math.PI * 2 * vRate) * vib.amp : 0;
-      return morph.atoms.map((a, i) => {
+      const atoms = morph.atoms;
+      while (atomPointsPool.length < atoms.length) atomPointsPool.push({ x: 0, y: 0 });
+      for (let i = 0; i < atoms.length; i++) {
+        const a = atoms[i];
         const stretch = 1 + flex * Math.sin(morph.modes[i]);
         let px = a.x * stretch;
         let py = a.y * stretch;
@@ -1435,11 +1484,11 @@ export default function MoleculesField() {
         }
         const jx = jAmp * Math.sin(t * Math.PI * 2 * jRate + morph.modes[i]);
         const jy = jAmp * Math.cos(t * Math.PI * 2 * jRate * 0.93 + morph.modes[i] * 1.7);
-        return {
-          x: (px * cosR - py * sinR + jx) * R,
-          y: (px * sinR + py * cosR + jy) * R,
-        };
-      });
+        const out = atomPointsPool[i];
+        out.x = (px * cosR - py * sinR + jx) * R;
+        out.y = (px * sinR + py * cosR + jy) * R;
+      }
+      return atomPointsPool;
     };
 
     const drawMol = (m: Mol, t: number, breath: number) => {
@@ -1515,7 +1564,7 @@ export default function MoleculesField() {
           const pxv = -(by - ay) / blen;
           const pyv = (bx - ax) / blen;
           const gap = R * 0.055;
-          const offs = b.order === 1 ? [0] : b.order === 2 ? [-1, 1] : [-1.7, 0, 1.7];
+          const offs = b.order === 1 ? BOND_OFFSETS_1 : b.order === 2 ? BOND_OFFSETS_2 : BOND_OFFSETS_3;
           ctx.strokeStyle = colorAlpha(fam[3], 0.55 * feltAlpha);
           ctx.lineWidth = Math.max(1, R * (b.order === 1 ? 0.05 : 0.036));
           ctx.beginPath();
@@ -1578,7 +1627,7 @@ export default function MoleculesField() {
           ctx.strokeStyle = colorAlpha(ink, 0.8 * lensAlpha);
           ctx.lineWidth = 0.8;
           // the notation draws the true count of lines: N≡N earns three
-          const offs2 = b.order === 1 ? [0] : b.order === 2 ? [-1, 1] : [-1.5, 0, 1.5];
+          const offs2 = b.order === 1 ? LENS_OFFSETS_1 : b.order === 2 ? LENS_OFFSETS_2 : LENS_OFFSETS_3;
           ctx.beginPath();
           for (const o of offs2) {
             ctx.moveTo(ax + ox * o, ay + oy * o);
@@ -1674,23 +1723,17 @@ export default function MoleculesField() {
       }
 
       // shared breath: the audio swell clock when audible, RAF when not
-      const audioT = (() => { try { return audio().getAudioTime(); } catch { return null; } })();
+      let audioT: number | null = null;
+      try { audioT = audio().getAudioTime(); } catch { /* noop */ }
       const bt = audioT != null ? audioT : now / 1000;
       const breath = bt * Math.PI * 2 * 0.14;
 
       // the felt tells: one behavioral word per compound, subtle — CO₂
       // warms the field, flammables shiver near heat, the inert airs stay
       // serene, and water finds water (the anomaly as a slow lean)
-      const reactable = (ka: string, kb: string): boolean => {
-        const ck = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
-        let v = reactPairCache.get(ck);
-        if (v === undefined) {
-          v = reactionForPair(REACTIONS, ka, kb) != null;
-          reactPairCache.set(ck, v);
-        }
-        return v;
-      };
-      const tellMols = mols.filter((m) => !m.retiringAt && m.closed && m.sr > 0);
+      tellMolsBuf.length = 0;
+      for (const m of mols) if (!m.retiringAt && m.closed && m.sr > 0) tellMolsBuf.push(m);
+      const tellMols = tellMolsBuf;
       let greenhouseCount = 0;
       for (const m of tellMols) if (m.morph.felt === "greenhouse") greenhouseCount += 1;
       greenhouseGlow += (Math.min(0.05, greenhouseCount * 0.012) - greenhouseGlow) * Math.min(1, dt * 0.8);
@@ -1724,14 +1767,8 @@ export default function MoleculesField() {
           // The solvent the bench is set to tips the balance, so a solvent
           // shift visibly re-sorts the same population without changing it.
           if (!reduce) {
-            const pol = (q: Mol) =>
-              q.morph.felt === "polar" || q.morph.felt === "anomalous" || q.morph.felt === "ionic"
-                ? 1
-                : q.morph.felt === "nonpolar" || q.morph.felt === "inert"
-                  ? -1
-                  : 0;
-            const pm = pol(m);
-            const po = pol(o);
+            const pm = polarityOf(m);
+            const po = polarityOf(o);
             // alike attract, unlike repel; the solvent leans on whichever
             // family it is like, exactly as a real one does
             const like = pm * po;
@@ -1776,7 +1813,8 @@ export default function MoleculesField() {
 
       // the bond-hint: reactable neighbors get a dashed arc after a beat —
       // the room proposing the ceremony, never text
-      const hintSeen = new Set<string>();
+      hintSeenBuf.clear();
+      const hintSeen = hintSeenBuf;
       for (let i = 0; i < tellMols.length; i++) {
         const m = tellMols[i];
         for (let j = i + 1; j < tellMols.length; j++) {
@@ -1972,8 +2010,10 @@ export default function MoleculesField() {
       }
 
       // molecules, painter's order by size (small behind, large in front)
-      const sorted = [...mols].sort((a, b) => a.morph.radius - b.morph.radius);
-      for (const m of sorted) drawMol(m, localT, breath);
+      sortedMolsBuf.length = 0;
+      for (const m of mols) sortedMolsBuf.push(m);
+      sortedMolsBuf.sort((a, b) => a.morph.radius - b.morph.radius);
+      for (const m of sortedMolsBuf) drawMol(m, localT, breath);
 
       // tutti: one soft ring around every molecule, fading together
       if (tuttiPulse > 0.03) {

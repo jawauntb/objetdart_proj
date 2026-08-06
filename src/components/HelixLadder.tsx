@@ -1342,6 +1342,9 @@ export default function HelixLadder() {
         const hh = halfH();
         const hw = helixW();
         const turn = reduced ? 0 : localT * 0.35;
+        // computed once per frame — was being recomputed (a fresh O(n)
+        // array) inside the per-rung loop and inside the fragments loop
+        const comp = complement(seq);
 
         ctx.save();
         ctx.translate(cx, cy);
@@ -1363,8 +1366,6 @@ export default function HelixLadder() {
           return v;
         };
 
-        const pts1: number[] = [];
-        const pts2: number[] = [];
         for (let i = 0; i < n; i++) {
           const r = rungAt(i, n, unzip, supercoil);
           const rOpen = Math.max(r.open, bubbleAt(i));
@@ -1381,8 +1382,6 @@ export default function HelixLadder() {
               (H_BONDS[seq[i]] === 2 ? 1.6 : 0.8) *
               (0.5 + heat);
           const y = r.y * hh + shiver * 0.4;
-          pts1.push(x1 + shiver, y);
-          pts2.push(x2 - shiver, y);
 
           const lit = litRung[i];
           const alpha = (1 - leaving) * (1 - lens * 0.55);
@@ -1413,7 +1412,7 @@ export default function HelixLadder() {
           // the base marks on each backbone
           for (const [xs, b] of [
             [x1 + shiver, seq[i]],
-            [x2 - shiver, complement(seq)[i]],
+            [x2 - shiver, comp[i]],
           ] as [number, Base][]) {
             ctx.fillStyle = `rgba(${BASE_TINT[b]}, ${(0.3 + depth * 0.4 + lit * 0.5) * alpha})`;
             ctx.beginPath();
@@ -1427,7 +1426,7 @@ export default function HelixLadder() {
             ctx.fillStyle = `rgba(${BASE_TINT[seq[i]]}, 0.9)`;
             ctx.fillText(seq[i], hw * 3.2, y + 3);
             ctx.fillStyle = "rgba(206, 222, 250, 0.45)";
-            ctx.fillText(complement(seq)[i], -hw * 3.2 - 6, y + 3);
+            ctx.fillText(comp[i], -hw * 3.2 - 6, y + 3);
             ctx.globalAlpha = 1;
           }
         }
@@ -1436,8 +1435,6 @@ export default function HelixLadder() {
         // curve rather than a polygon, and drawn segment by segment with
         // the near strand over the far one — the turn you see is the turn
         // the geometry actually has.
-        void pts1;
-        void pts2;
         const SUB = 6;
         const steps = Math.max(2, n * SUB);
         for (let k = 0; k < steps; k++) {
@@ -1497,7 +1494,7 @@ export default function HelixLadder() {
             const b = f.seq[i];
             // the pairing itself: a matched base reaches for the template,
             // a mismatched one sits stubbed and unpaired
-            const matched = f.site + i < n && complement(seq)[f.site + i] === b;
+            const matched = f.site + i < n && comp[f.site + i] === b;
             const reach = matched ? -helixW() * 0.55 * f.bound : -helixW() * 0.18 * f.bound;
             ctx.strokeStyle = `rgba(${BASE_TINT[b]}, ${a0 * (matched ? 0.6 : 0.25)})`;
             ctx.lineWidth = H_BONDS[b] === 3 ? 1.5 : 0.9;
@@ -1530,7 +1527,7 @@ export default function HelixLadder() {
         // the daughter chromatid — a condensed complement peeled beside the ladder
         if (chromatid > 0) {
           const m = Math.min(chromatid, n);
-          const daughter = complement(seq).slice(0, m);
+          const daughter = comp.slice(0, m);
           const peel = 0.35 + chromatidCoil * 0.9;
           const cx = hw * (3.6 + peel * 2.4);
           const coil = 1 + chromatidCoil * 1.8;

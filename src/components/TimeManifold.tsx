@@ -177,6 +177,21 @@ export default function TimeManifold() {
       nextRadiateAtRef.current = last + 5000 + hash01(radiateSerialRef.current++) * 6000;
     }
 
+    // scratch tuples for warp()/baseAt(): both are called many hundreds of
+    // times per frame (the warped lattice + metric field walk every grid
+    // point), and every call previously allocated a fresh [x, y] array —
+    // pure garbage churn on a hot per-frame path. Each call site destructures
+    // its result immediately before the next call, so a single reused pair
+    // per helper is safe (no call site holds two outstanding results at once).
+    const warpOut: [number, number] = [0, 0];
+    const baseOut: [number, number] = [0, 0];
+    // worldline sample buffer: sized for the largest possible SAMPLES
+    // (Math.round(90 * detail.samples), detail.samples maxes out at 1) with
+    // headroom, allocated once instead of a new tuple-array per frame.
+    const WORLDLINE_CAPACITY = 128;
+    const worldlineX = new Float32Array(WORLDLINE_CAPACITY + 1);
+    const worldlineY = new Float32Array(WORLDLINE_CAPACITY + 1);
+
     // ── performance contract (room-runtime): a frame governor picks a
     // quality tier from real frame time, and the DPR ceiling + a hard sleep
     // while hidden ride on it. Nothing here draws while the tab can't see it.
@@ -323,11 +338,15 @@ export default function TimeManifold() {
         const d = Math.hypot(dx, dy) + S * 0.06;
         let pull = strength / d;
         if (pull > 0.9) pull = 0.9;
-        return [x - dx * pull, y - dy * pull + pull * pull * S * 0.2];
+        warpOut[0] = x - dx * pull;
+        warpOut[1] = y - dy * pull + pull * pull * S * 0.2;
+        return warpOut;
       };
       const baseAt = (u: number): [number, number] => {
         const up = u * CLIMB;
-        return [Ox + dir * vel * up, Oy - up];
+        baseOut[0] = Ox + dir * vel * up;
+        baseOut[1] = Oy - up;
+        return baseOut;
       };
 
       // ── background ──
@@ -532,21 +551,24 @@ export default function TimeManifold() {
       // cheap additive pass (two wider, fainter strokes under the line)
       // rather than a per-frame ctx.shadowBlur, which is catastrophic on
       // mobile at this line's length.
-      const SAMPLES = Math.max(24, Math.round(90 * detail.samples));
+      const SAMPLES = Math.min(WORLDLINE_CAPACITY, Math.max(24, Math.round(90 * detail.samples)));
       const lineA = 0.34 + wGeo * 0.61 + wFelt * 0.2;
-      const pts: [number, number][] = [];
       const shiver = storm * 3.2;
       for (let i = 0; i <= SAMPLES; i += 1) {
         const [wx, wy] = warp(...baseAt(i / SAMPLES));
         const j = shiver > 0.02 ? Math.sin(i * 1.7 + now * 0.006) * shiver : 0;
-        pts.push([wx + j, wy]);
+        worldlineX[i] = wx + j;
+        worldlineY[i] = wy;
       }
       ctx.save();
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       const strokePath = () => {
         ctx.beginPath();
-        pts.forEach(([px, py], i) => (i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)));
+        for (let i = 0; i <= SAMPLES; i += 1) {
+          if (i === 0) ctx.moveTo(worldlineX[i], worldlineY[i]);
+          else ctx.lineTo(worldlineX[i], worldlineY[i]);
+        }
         ctx.stroke();
       };
       if (!reduce) {

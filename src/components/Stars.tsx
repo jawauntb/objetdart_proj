@@ -2979,6 +2979,7 @@ export default function Stars() {
 
     const drawCosmicEvents = (nowMs: number): void => {
       const base = Math.min(w, h);
+      if (!cosmicEventsRef.current.length) return;
       cosmicEventsRef.current = cosmicEventsRef.current.filter((ev) => (nowMs - ev.t0) / 1000 < ev.life);
       if (!cosmicEventsRef.current.length) return;
 
@@ -3382,9 +3383,11 @@ export default function Stars() {
       // nebula breath flashes — when a user clicks a nebula, a soft
       // expanding overlay flashes within its hit area. Cheap: one
       // additional radial gradient per active breath, briefly.
-      breathsRef.current = breathsRef.current.filter(
-        (br) => (nowMs - br.t0) / 1000 < NEBULA_BREATH_DUR,
-      );
+      if (breathsRef.current.length > 0) {
+        breathsRef.current = breathsRef.current.filter(
+          (br) => (nowMs - br.t0) / 1000 < NEBULA_BREATH_DUR,
+        );
+      }
       if (breathsRef.current.length > 0) {
         const prev = bctx.globalCompositeOperation;
         bctx.globalCompositeOperation = "lighter";
@@ -3500,19 +3503,21 @@ export default function Stars() {
           }
         }
       }
-      // coast born stars that still carry accretion velocity
-      if (motion && bornStarsRef.current.some((s) => (s.vx || s.vy))) {
+      // coast born stars that still carry accretion velocity — mutate the
+      // (already-allocated) entries in place rather than mapping to a fresh
+      // array + fresh objects every frame; this ref never feeds React state
+      // directly from here, so in-place update is safe and visually identical.
+      if (motion) {
         const dt = 1 / 60;
-        bornStarsRef.current = bornStarsRef.current.map((s) => {
-          if (!s.vx && !s.vy) return s;
-          return {
-            ...s,
-            nx: clampPan(s.nx + (s.vx ?? 0) * dt),
-            ny: clampPan(s.ny + (s.vy ?? 0) * dt),
-            vx: (s.vx ?? 0) * 0.985,
-            vy: (s.vy ?? 0) * 0.985,
-          };
-        });
+        const coasting = bornStarsRef.current;
+        for (let ci = 0; ci < coasting.length; ci++) {
+          const s = coasting[ci];
+          if (!s.vx && !s.vy) continue;
+          s.nx = clampPan(s.nx + (s.vx ?? 0) * dt);
+          s.ny = clampPan(s.ny + (s.vy ?? 0) * dt);
+          s.vx = (s.vx ?? 0) * 0.985;
+          s.vy = (s.vy ?? 0) * 0.985;
+        }
       }
       for (const s of bornStarsRef.current) {
         const { x, y } = bornStarPos(s, t);

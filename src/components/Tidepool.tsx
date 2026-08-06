@@ -1028,6 +1028,13 @@ export default function Tidepool() {
       : null;
     const instanceBuffer = createInstanceBuffer(MAX_CREATURES * 3);
 
+    // Reused per-kind ledger buckets — filled fresh each frame by a single
+    // pass over state.creatures instead of three separate `.filter()`
+    // calls (which would allocate three throwaway arrays every rAF tick).
+    const snailLedgerBuf: Creature[] = [];
+    const anemoneLedgerBuf: Creature[] = [];
+    const kelpLedgerBuf: Creature[] = [];
+
     /** Pull every creature out of the physics ledger into its per-kind
      *  population items. Items are matched by id; new creatures spawn,
      *  vanished creatures start retiring (step decrements presence).
@@ -1035,9 +1042,17 @@ export default function Tidepool() {
      *  (the shared ledger) through this synced view — not React state,
      *  local to the effect scope. */
     const syncPopulationsFromLedger = (now: number) => {
+      snailLedgerBuf.length = 0;
+      anemoneLedgerBuf.length = 0;
+      kelpLedgerBuf.length = 0;
+      for (const c of state.creatures) {
+        if (c.kind === "snail") snailLedgerBuf.push(c);
+        else if (c.kind === "anemone") anemoneLedgerBuf.push(c);
+        else if (c.kind === "kelp") kelpLedgerBuf.push(c);
+      }
       // ——— snails ———
       const snailItems = snails.items;
-      const snailLedger = state.creatures.filter((c) => c.kind === "snail");
+      const snailLedger = snailLedgerBuf;
       for (const item of snailItems) {
         if (item.presence < 1) continue;
         if (!snailLedger.some((c) => c.id === item.id)) item.presence = 0.999;
@@ -1071,7 +1086,7 @@ export default function Tidepool() {
       }
       // ——— anemones ———
       const anemoneItems = anemones.items;
-      const anemoneLedger = state.creatures.filter((c) => c.kind === "anemone");
+      const anemoneLedger = anemoneLedgerBuf;
       for (const item of anemoneItems) {
         if (item.presence < 1) continue;
         if (!anemoneLedger.some((c) => c.id === item.id)) item.presence = 0.999;
@@ -1105,7 +1120,7 @@ export default function Tidepool() {
       }
       // ——— kelp ———
       const kelpItems = kelps.items;
-      const kelpLedger = state.creatures.filter((c) => c.kind === "kelp");
+      const kelpLedger = kelpLedgerBuf;
       for (const item of kelpItems) {
         if (item.presence < 1) continue;
         if (!kelpLedger.some((c) => c.id === item.id)) item.presence = 0.999;
