@@ -66,6 +66,56 @@ const zeus = {
     ],
     keeps: "every standing house with its charge and its water column; a spent house is spent between visits too.",
   },
+  // The felt-bar declaration for scripts/test-room-quality.mjs — AGENTS.md
+  // §"The room quality bar" items 3/5/6. The code answers each line the
+  // manifest names: uBreath rides the three visible sky registers, the peal
+  // and every strike land in the hand, the population rides the shared
+  // scene-model, and the ceremony is the bolt to the peak.
+  life: {
+    population: {
+      objects: [
+        {
+          noun: "thunderhead",
+          max_count: 12,
+          state_shape: "id, nx, ny (position in the sky above the ridge), charge (0..2, the store a bolt spends), water (0..1.5, the column that conducts), flicker (0..1.4, sheet lightning inside the anvil), vx/vy (velocity from induction and wind), drift (own slow orbit), phase seed",
+          lifecycle: "born under dwell (or seeded on first visit) → grows on saturating logistic while held → courts every other house by induction (attraction) → merges on contact into a greater house that is neither parent (mergeCells conserves both stores) → spends everything in one bolt to the ridge when the ceremony fires (presence → 0.999, the house leaves the sky it lit) → retires via <LetGo>",
+          persistence: "LetGo",
+          creates_via_verb: "dwell",
+          retires_via: [
+            "ceremony",
+            "LetGo"
+          ],
+          implementation_hint: "SceneObjectSpec"
+        }
+      ]
+    },
+    breath: {
+      period_seconds: 7,
+      reads: [
+        "uBreath uniform (fragment shader — the seeded stars breathe `0.5 + 0.35 * uBreath` against the bruised violet zenith)",
+        "uBreath uniform (charge shimmer across the whole cloud band rides `0.55 + 0.45 * uBreath` — even an empty sky is never still)",
+        "uBreath uniform (the ridge's standing moonlight breathes `0.6 + 0.3 * uBreath` so the mountain is legible between strikes)"
+      ],
+      behavior_at_rest: "three visible registers ride the 7s clock: the star field brightens/dims by ±35%, the charge shimmer over the cloud band swells by ±45%, and the moonlit ridge crest breathes ±30% — a viewer watching an empty sky still sees it live; the horizon also flashes softly every 6-14s after ~15s of stillness, with a low delayed peal, so the sky reminds you it is there."
+    },
+    glimmer: {
+      after_idle_ms: 15000,
+      visual: "the eldest standing house murmurs once with a wider sheet-lightning flicker; separately, distant sheet flashes appear on the horizon and a low delayed rumble arrives from beyond the frame — the sky answers itself"
+    },
+    haptics_grammar: {
+      tap: "ripple",
+      dwell: "tap",
+      ceremony: "storm",
+      twist: "lens",
+      tap3: "roll",
+      knock: "detent",
+      shake: "chop"
+    },
+    make_unmake: {
+      letgo_clears_population: true,
+      ceremony_is: "the bolt to the peak — the held house spends everything in one strike and leaves the sky"
+    }
+  },
 } as const satisfies RoomManifest;
 
 export default zeus;
