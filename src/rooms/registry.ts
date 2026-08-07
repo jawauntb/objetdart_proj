@@ -33,6 +33,7 @@ import beam from "@/rooms/beam/room.config";
 import cabinet from "@/rooms/cabinet/room.config";
 import compass from "@/rooms/compass/room.config";
 import galaxy from "@/rooms/galaxy/room.config";
+import gate from "@/rooms/gate/room.config";
 import geyser from "@/rooms/geyser/room.config";
 import insects from "@/rooms/insects/room.config";
 import land from "@/rooms/land/room.config";
@@ -60,6 +61,7 @@ export const ROOM_MANIFESTS = [
   cabinet,
   compass,
   galaxy,
+  gate,
   geyser,
   insects,
   land,

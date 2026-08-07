@@ -1612,6 +1612,41 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     exempt: {},
   },
   {
+    key: "gate",
+    href: "/gate",
+    kind: "room",
+    source: "src/components/Gate.tsx",
+    page: "src/app/gate/page.tsx",
+    address: { band: "drop" },
+    // The room does NOT own pinch. Unlike /observe (a five-altitude
+    // pinch-through of one substance), /gate is one scene at one altitude —
+    // a diagrammatic cross-section of the NMDA-type ionotropic glutamate
+    // receptor's ion channel with the same substance /observe circles around
+    // (o-chlorophenyl cyclohexanone family, imported from lib/observe) bound
+    // in the transmembrane vestibule above the gate. There is no zoom sweep,
+    // so ScaleTravel presses the /drop band walls normally through pinch.
+    frame: "yield",
+    chrome: "axis",
+    keeps: "objetdart:gate:v1",
+    creates: "an ion",
+    interacts:
+      "one shared pore, not two independent visualisations: the bound substance is the exact " +
+      "absence of the ion flow — stepChannel (lib/gate) sets ionFlow = gateOpenness × " +
+      "(substanceBound ? 0 : 1), so a molecule in the vestibule (bindSubstance snaps its z to " +
+      "VESTIBULE_Z) removes the current the ions were riding regardless of how open a span held " +
+      "the gate. The gate is a door and the block is a blocker in the same channel, not a pair " +
+      "of unrelated animations. Ions above the constriction accumulate when they cannot pass, " +
+      "descend through it when they can — the same population reads the same ionFlow. A twist " +
+      "toggles the GluN2 subunit (toggleSubunit is an involution — 2A ↔ 2B ↔ 2A, pinned in " +
+      "test-gate) and every hue on the two coloured helices reads the flip in the same frame. " +
+      "A three-finger twist walks the substance vestibule → selectivity filter → out " +
+      "(seasonTarget in lib/gate) — a real conformational passage that carries the flow through " +
+      "its whole geometry, not a cut. The substance itself is not duplicated: bornMolecule3D " +
+      "and the Atom3D / Bond3D shapes are imported directly from lib/observe so the compound in " +
+      "the pore is literally the compound the cabinet peer builds up to at its molecule altitude.",
+    exempt: {},
+  },
+  {
     key: "geyser",
     href: "/geyser",
     kind: "room",

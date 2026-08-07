@@ -127,6 +127,7 @@ const expectedKeys = [
   "solar",
   "stars",
   "galaxy",
+  "gate",
   "space",
   "comb",
   "beam",
