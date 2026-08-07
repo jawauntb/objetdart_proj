@@ -57,6 +57,7 @@ import {
   detailForTier,
   type QualityTier,
 } from "@/lib/room-runtime";
+import { clocksFrom } from "@/lib/webgl/sizing";
 
 /**
  * The coast — a section through five materials.
@@ -118,6 +119,7 @@ const FRAG = `
 precision highp float;
 
 uniform float uTime;
+uniform float uBreath;  // shared album 7s respiration, 0..1
 uniform vec2  uRes;
 uniform float uTide;
 uniform float uWind;
@@ -289,6 +291,11 @@ void main() {
   col = mix(col, duneC, duneM);
   col = mix(col, sea, seaM);
   col = mix(col, sky, skyM);
+
+  // shared 7s album breath: the horizon band glows ±15% on the site's
+  // respiration so /coast inhales in step with /reef and /root.
+  float horizonBand = 1.0 - smoothstep(0.0, 0.03, abs(p.y - hz));
+  col += vec3(1.00, 0.93, 0.80) * horizonBand * 0.15 * uBreath;
 
   // ——— what a hand just did ———
   for (int i = 0; i < 8; i++) {
@@ -729,7 +736,7 @@ export default function CoastBeach() {
       gl.useProgram(prog);
       const u: Record<string, WebGLUniformLocation | null> = {};
       for (const name of [
-        "uTime", "uRes", "uTide", "uWind", "uTilt", "uSurf", "uLens", "uPan",
+        "uTime", "uBreath", "uRes", "uTide", "uWind", "uTilt", "uSurf", "uLens", "uPan",
         "uSeason", "uPulse", "uPulseDune", "uTouch", "uTouchCount", "uDetail",
         "uSandProfile", "uBreak", "uBreakCount",
       ]) {
@@ -1895,7 +1902,10 @@ export default function CoastBeach() {
       if (gl && bits) {
         gl.useProgram(bits.prog);
         const u = bits.u;
+        // shared album clocks: /coast inhales in step with /reef, /root.
+        const { breath } = clocksFrom({ time: now / 1000, turbulence: surf, reducedMotion: reduced });
         if (u.uTime) gl.uniform1f(u.uTime, simT);
+        if (u.uBreath) gl.uniform1f(u.uBreath, breath);
         if (u.uRes) gl.uniform2f(u.uRes, glCanvas.width, glCanvas.height);
         if (u.uTide) gl.uniform1f(u.uTide, tide);
         if (u.uWind) gl.uniform1f(u.uWind, windTotal);

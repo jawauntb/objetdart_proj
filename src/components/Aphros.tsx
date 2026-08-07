@@ -32,6 +32,7 @@ import { attachGestures } from "@/lib/gesture";
 import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { createFrameGovernor, onGalleryPause, onVisibility, resolveDpr } from "@/lib/room-runtime";
+import { clocksFrom } from "@/lib/webgl/sizing";
 import LetGo from "@/components/LetGo";
 
 // ── determinism ──────────────────────────────────────────────────────
@@ -675,6 +676,7 @@ export default function Aphros() {
       const frag = `
         precision highp float;
         uniform float uTime;
+        uniform float uBreath;  // shared album 7s respiration, 0..1
         uniform vec2 uRes;
         uniform float uWind;
         uniform float uTilt;
@@ -1072,6 +1074,9 @@ export default function Aphros() {
           col = mix(col, sea, smoothstep(HORIZON - 0.002, HORIZON + 0.004, uv.y));
           float haze = smoothstep(HORIZON - 0.03, HORIZON, uv.y)
                      * (1.0 - smoothstep(HORIZON, HORIZON + 0.05, uv.y));
+          // shared 7s album breath: the gold rent at the horizon swells ±15%
+          // on the site's respiration so /aphros inhales with /reef, /root.
+          col += goldLt * haze * 0.15 * uBreath;
           col = mix(col, vec3(0.97, 0.86, 0.76), haze * 0.45);
           col = mix(col, shore, smoothstep(SHORE - 0.012, SHORE + 0.012, uv.y));
 
@@ -1275,6 +1280,7 @@ export default function Aphros() {
             glReady = true;
             const U = (name: string) => gl.getUniformLocation(prog, name);
             const uTime = U("uTime");
+            const uBreathU = U("uBreath");
             const uRes = U("uRes");
             const uWindU = U("uWind");
             const uTiltU = U("uTilt");
@@ -1488,7 +1494,10 @@ export default function Aphros() {
               }
 
               gl.useProgram(prog);
+              // shared album clocks: /aphros inhales in step with /reef, /root.
+              const { breath } = clocksFrom({ time: now / 1000, turbulence: agitation, reducedMotion: reduced });
               if (uTime) gl.uniform1f(uTime, wT);
+              if (uBreathU) gl.uniform1f(uBreathU, breath);
               if (uRes) gl.uniform2f(uRes, canvas.width, canvas.height);
               if (uWindU) gl.uniform1f(uWindU, wind + tiltX * 0.4);
               if (uTiltU) gl.uniform1f(uTiltU, tiltX);

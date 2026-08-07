@@ -17,6 +17,7 @@ import {
   isEmbeddedFrame,
   detailForTier,
 } from "@/lib/room-runtime";
+import { clocksFrom } from "@/lib/webgl/sizing";
 
 type Ember = {
   alive: boolean;
@@ -135,6 +136,7 @@ export default function Fire() {
     let uLensLoc: WebGLUniformLocation | null = null;
     let uSeasonLoc: WebGLUniformLocation | null = null;
     let uPanLoc: WebGLUniformLocation | null = null;
+    let uBreathLoc: WebGLUniformLocation | null = null;
 
     const setupProgram = () => {
       if (!gl) return;
@@ -149,6 +151,7 @@ export default function Fire() {
       const frag = `
         precision highp float;
         uniform float uTime;
+        uniform float uBreath;  // shared album 7s respiration, 0..1
         uniform vec2 uRes;
         uniform vec2 uPointer;
         uniform float uPointerActive;
@@ -264,6 +267,10 @@ export default function Fire() {
             col = mix(col, diagram, clamp(uLens, 0.0, 1.0));
           }
 
+          // shared 7s album breath: the hearth's ambient rides ±10% on the
+          // site's respiration so /fire inhales with /reef and /root.
+          col *= 1.0 + 0.10 * (uBreath - 0.5);
+
           gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
         }
       `;
@@ -301,6 +308,7 @@ export default function Fire() {
             uLensLoc = gl.getUniformLocation(p, "uLens");
             uSeasonLoc = gl.getUniformLocation(p, "uSeason");
             uPanLoc = gl.getUniformLocation(p, "uPan");
+            uBreathLoc = gl.getUniformLocation(p, "uBreath");
 
             const buf = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -1120,7 +1128,10 @@ export default function Fire() {
 
       if (gl && program) {
         gl.useProgram(program);
+        // shared album clocks: the hearth inhales in step with /reef, /root.
+        const { breath } = clocksFrom({ time: now / 1000, turbulence: pressSmoothed, reducedMotion: reduce });
         if (uTimeLoc) gl.uniform1f(uTimeLoc, elapsed);
+        if (uBreathLoc) gl.uniform1f(uBreathLoc, breath);
         if (uResLoc) gl.uniform2f(uResLoc, heatCanvas.width, heatCanvas.height);
         if (uPointerLoc) gl.uniform2f(uPointerLoc, pointerRef.current.x, pointerRef.current.y);
         if (uPointerActiveLoc) gl.uniform1f(uPointerActiveLoc, pointerRef.current.over ? 1 : 0);

@@ -18,6 +18,7 @@ import {
   isEmbeddedFrame,
   detailForTier,
 } from "@/lib/room-runtime";
+import { clocksFrom } from "@/lib/webgl/sizing";
 
 type WeatherCell = {
   id: number;
@@ -186,6 +187,7 @@ export default function Clouds() {
     let uSeasonLoc: WebGLUniformLocation | null = null;
     let uPanLoc: WebGLUniformLocation | null = null;
     let uMaxStepsLoc: WebGLUniformLocation | null = null;
+    let uBreathLoc: WebGLUniformLocation | null = null;
     let vbo: WebGLBuffer | null = null;
     let lastChargeSync = 0;
     // 4 slots of vec4(uv.x, uv.y, strength, spare) handed to the shader each
@@ -205,6 +207,7 @@ export default function Clouds() {
       const frag = `
         precision highp float;
         uniform float uTime;
+        uniform float uBreath;  // shared album 7s respiration, 0..1
         uniform vec2 uRes;
         uniform float uPhase;   // 0..1 day cycle position
         uniform vec2 uCursor;   // uv 0..1, y up
@@ -566,6 +569,10 @@ export default function Clouds() {
           float vignette = smoothstep(1.10, 0.12, distance(uv, vec2(0.5, 0.54)));
           col *= 0.84 + vignette * 0.20;
 
+          // shared 7s album breath: the vault brightens/dims ±10% on the
+          // site's respiration so /clouds inhales with /reef and /root.
+          col *= 1.0 + 0.10 * (uBreath - 0.5);
+
           col = clamp(col, 0.0, 1.0);
 
           // the lens: the same field read as moisture/temperature, not sky
@@ -616,6 +623,7 @@ export default function Clouds() {
             uSeasonLoc = gl.getUniformLocation(p, "uSeason");
             uPanLoc = gl.getUniformLocation(p, "uPan");
             uMaxStepsLoc = gl.getUniformLocation(p, "uMaxSteps");
+            uBreathLoc = gl.getUniformLocation(p, "uBreath");
 
             const buf = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -1896,7 +1904,10 @@ export default function Clouds() {
         }
 
         gl.useProgram(glProg);
+        // shared album clocks: /clouds inhales in step with /reef and /root.
+        const { breath } = clocksFrom({ time: now / 1000, turbulence: pressSmoothed, reducedMotion: reduce });
         if (uTimeLoc) gl.uniform1f(uTimeLoc, reduce ? 21.5 : elapsed);
+        if (uBreathLoc) gl.uniform1f(uBreathLoc, breath);
         if (uResLoc) gl.uniform2f(uResLoc, sky.width, sky.height);
         if (uDriftLoc) gl.uniform2f(uDriftLoc, driftX, driftY);
         if (uPuffsLoc) gl.uniform4fv(uPuffsLoc, puffData);
