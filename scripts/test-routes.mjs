@@ -157,6 +157,7 @@ const expectedKeys = [
   "compass",
   "geyser",
   "marsh",
+  "observe",
   "orb",
   "pebble",
   "plank",

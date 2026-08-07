@@ -1638,6 +1638,33 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     exempt: {},
   },
   {
+    key: "observe",
+    href: "/observe",
+    kind: "room",
+    source: "src/components/Observe.tsx",
+    page: "src/app/observe/page.tsx",
+    address: { band: "drop" },
+    frame: "yield",
+    chrome: "axis",
+    keeps: "objetdart:observe:v1",
+    creates: "a molecule",
+    interacts:
+      "one shared beam and one shared bath: every photon a hand fires is routed to the "
+      + "molecule column under the beam's wavelength-x (photonHit in lib/observe), and the "
+      + "probability that molecule absorbs is the Gaussian ε(λ) at that wavelength — deterministic "
+      + "in (mol.seed, λ, intensity), never a Math.random. An absorbing molecule swells its "
+      + "excited state (a shudder + an outer glow the color of its emission), then relaxes "
+      + "exponentially with tau ≈ 450ms. Two molecules of the same seed under the same beam "
+      + "always answer the same, so a film can replay backward. The ghost spectrum along the top "
+      + "is the population's own response summed and decayed — every hit lifts A(λ) at that bin "
+      + "and its neighbours, every second of quiet exhales it back out. A knock (the chopper) "
+      + "sends every excited molecule to ground at once — a real coupling across the whole "
+      + "population, not a per-object timer. Concentration (three-finger twist) scales the whole "
+      + "Beer-Lambert wall-paint linearly, and temperature (shake) widens both bands together — "
+      + "the shared field, not each molecule's own copy.",
+    exempt: {},
+  },
+  {
     key: "orb",
     href: "/orb",
     kind: "room",
