@@ -625,6 +625,38 @@ for (const entry of ROOM_REGISTRY) {
   if (band && registerOf(entry) == null) {
     fail(key, `band "${band}" yields no spectral register — entryScaleFor(${entry.href}) returned null`);
   }
+
+  // — 6b. own-frame rooms must not force `travel={true}` on AxisChrome ——
+  //
+  // The registry's `frame: "own"` says ScaleTravel would be a second owner
+  // of pinch — the double-pinch bug where two owners fight for one gesture.
+  // AxisChrome's default `travel` is now derived from the registry, so an
+  // own-frame room gets `travel={false}` for free. An explicit `travel={true}`
+  // on the mount overrides the derivation and reintroduces the exact bug the
+  // derivation was written to prevent. Structural check: grep every AxisChrome
+  // mount in the room's page (and its component, when it mounts one there) for
+  // the literal override.
+  if (entry.frame === "own") {
+    const scanned = [];
+    if (pageSrc) scanned.push({ where: entry.page, text: pageSrc });
+    if (entry.source && entry.source !== entry.page && raw) {
+      scanned.push({ where: entry.source, text: raw });
+    }
+    for (const { where, text } of scanned) {
+      // Every `<AxisChrome ... />` tag, then look for `travel={true}` inside.
+      for (const m of text.matchAll(/<AxisChrome\b[\s\S]*?\/>/g)) {
+        if (/travel\s*=\s*\{\s*true\s*\}/.test(m[0])) {
+          fail(
+            key,
+            `has \`frame: "own"\` but mounts <AxisChrome travel={true}> in ${where} — the registry ` +
+              "makes ScaleTravel stand down for own-frame rooms; forcing `travel={true}` on top of it " +
+              "reintroduces the double-pinch bug (two owners of one gesture). Drop the override, or " +
+              "change the registry to `frame: \"yield\"` and let the derivation carry it",
+          );
+        }
+      }
+    }
+  }
 }
 
 // ———————————————————————————————————————————————————————————————————————
