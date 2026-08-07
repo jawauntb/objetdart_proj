@@ -962,6 +962,7 @@ export const LATERAL_ROUTE_BANDS: { prefix: string; band: ScaleBandId }[] = [
   { prefix: "/coin", band: "drop" },
   { prefix: "/jewel", band: "drop" },
   { prefix: "/observe", band: "drop" },
+  { prefix: "/gate", band: "drop" },
   { prefix: "/tourbillon", band: "drop" },
   { prefix: "/watch", band: "drop" },
   { prefix: "/plasma", band: "drop" },
