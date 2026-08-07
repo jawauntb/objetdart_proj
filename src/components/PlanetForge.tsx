@@ -38,7 +38,15 @@ import type { RoomVoice } from "@/lib/gesture/defaults";
 import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { createGLStage, type GLProgram, type GLStage } from "@/lib/webgl/stage";
 import { clocksFrom } from "@/lib/webgl/sizing";
-import { createIdleWriter } from "@/lib/room-runtime";
+import {
+  createFrameGovernor,
+  createIdleWriter,
+  detailForTier,
+  isEmbeddedFrame,
+  onGalleryPause,
+  onVisibility,
+  resolveDpr,
+} from "@/lib/room-runtime";
 import {
   DUST_TOTAL,
   MASS_MIN,
@@ -546,6 +554,10 @@ export default function PlanetForge() {
     const stage: GLStage | null = createGLStage(glCanvas, {
       label: "planets",
       overlay: over,
+      quality: isEmbeddedFrame() ? "medium" : "high",
+      embedded: isEmbeddedFrame(),
+      reducedMotion: reduced,
+      maxDpr: 1.5,
       contextAttributes: { alpha: false, antialias: true, depth: false, premultipliedAlpha: true },
     });
     const gl = stage?.gl ?? null;
@@ -1402,6 +1414,15 @@ export default function PlanetForge() {
     };
 
     // ——— the frame ———
+    // Shared performance contract (src/lib/room-runtime): a frame governor
+    // that reads real frame time into a quality tier, plus the visibility +
+    // gallery-pause bits every room needs — so the disc doesn't keep
+    // painting when the tab is hidden or the gallery iframe is paused.
+    const gov = createFrameGovernor(isEmbeddedFrame() ? "medium" : "high");
+    let sleeping = false;
+    let galleryPaused = false;
+    const offVis = onVisibility((hidden) => { sleeping = hidden; });
+    const offGal = onGalleryPause((paused) => { galleryPaused = paused; });
     let raf = 0;
     let lastNow = performance.now();
 
@@ -1496,6 +1517,9 @@ export default function PlanetForge() {
 
     const draw = () => {
       const now = performance.now();
+      const tier = gov.beginFrame(now);
+      if (sleeping || galleryPaused) { raf = requestAnimationFrame(draw); return; }
+      const detail = detailForTier(tier);
       const dtReal = Math.min(0.05, (now - lastNow) / 1000);
       lastNow = now;
       const t = audio.getAudioTime() ?? now / 1000;
@@ -1552,7 +1576,10 @@ export default function PlanetForge() {
           "u_alpha",
           (0.12 + (reserve() / DUST_TOTAL) * 0.5 + agitation * 0.1) * (1 - nightNow * 0.75),
         );
-        gl.drawArrays(gl.POINTS, 0, DUST_N);
+        // The dust budget rides the tier — fewer motes when the frame is
+        // struggling; the shader's per-point cost is a real part of the bill.
+        const dustN = Math.max(24, Math.min(DUST_N, Math.round(DUST_N * detail.particles)));
+        gl.drawArrays(gl.POINTS, 0, dustN);
         dustDraw.reset();
 
         // The star.
@@ -1761,6 +1788,8 @@ export default function PlanetForge() {
 
     return () => {
       cancelAnimationFrame(raf);
+      offVis();
+      offGal();
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.clearTimeout(seasonRest);

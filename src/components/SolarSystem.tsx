@@ -48,7 +48,14 @@ import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import RoomShell from "@/components/RoomShell";
 import { createGLStage, FULLSCREEN_VERT_CLIP } from "@/lib/webgl/stage";
 import { clocksFrom } from "@/lib/webgl/sizing";
-import { createIdleWriter } from "@/lib/room-runtime";
+import {
+  createFrameGovernor,
+  createIdleWriter,
+  detailForTier,
+  isEmbeddedFrame,
+  onGalleryPause,
+  onVisibility,
+} from "@/lib/room-runtime";
 import { readWorldClock, stampWorldClock } from "@/lib/world";
 import {
   A_MAX,
@@ -519,7 +526,10 @@ export default function SolarSystem() {
     const stage = createGLStage(glCanvas, {
       label: "solar",
       overlay,
+      quality: isEmbeddedFrame() ? "medium" : "high",
+      embedded: isEmbeddedFrame(),
       reducedMotion: reduced,
+      maxDpr: 1.5,
       contextAttributes: { alpha: false, antialias: true, depth: false },
     });
     const ctx = stage?.overlay2d ?? overlay.getContext("2d");
@@ -1427,10 +1437,20 @@ export default function SolarSystem() {
     const scheduleSave = () => writer.schedule();
     const onHide = () => writer.flush();
     window.addEventListener("pagehide", onHide);
-    const onVis = () => {
-      if (document.visibilityState === "hidden") writer.flush();
-    };
-    document.addEventListener("visibilitychange", onVis);
+
+    // ——— performance contract (src/lib/room-runtime) ———
+    // Governor reads real frame time into a quality tier, and the same
+    // visibility subscription flushes persistence AND puts the loop to
+    // sleep — one bus, not the raw visibilitychange listener the room used
+    // to grow on its own.
+    const gov = createFrameGovernor(isEmbeddedFrame() ? "medium" : "high");
+    let sleeping = false;
+    let galleryPaused = false;
+    const offVis = onVisibility((hidden) => {
+      sleeping = hidden;
+      if (hidden) writer.flush();
+    });
+    const offGal = onGalleryPause((paused) => { galleryPaused = paused; });
 
     // ——— the frame ———
     let raf = 0;
@@ -1439,6 +1459,9 @@ export default function SolarSystem() {
     let lastPerturbAt = performance.now();
     const draw = () => {
       const now = performance.now();
+      const tier = gov.beginFrame(now);
+      if (sleeping || galleryPaused) { raf = requestAnimationFrame(draw); return; }
+      const detail = detailForTier(tier);
       const dt = clamp(now - lastT, 0, 100);
       lastT = now;
 
@@ -1661,9 +1684,12 @@ export default function SolarSystem() {
               : 0;
           const ringA =
             (0.075 + (i === selIdx ? 0.09 * selGlow : 0) + (flare[i] ?? 0) * 0.12 + glim) * orbitAlpha;
-          for (let k = 0; k < ORBIT_SAMPLES; k++) {
+          // Sample stride follows the tier: the ellipse's shape reads the
+          // same at half the resolution when the frame is under strain.
+          const ringStep = Math.max(1, Math.round(1 / detail.samples));
+          for (let k = 0; k < ORBIT_SAMPLES; k += ringStep) {
             const i3 = k * 3;
-            const j3 = ((k + 1) % ORBIT_SAMPLES) * 3;
+            const j3 = ((k + ringStep) % ORBIT_SAMPLES) * 3;
             const s0 = toScreen(path[i3], path[i3 + 1], path[i3 + 2], sf);
             const s0x = s0.sx, s0y = s0.sy;
             const s1 = toScreen(path[j3], path[j3 + 1], path[j3 + 2], sf);
@@ -1858,9 +1884,10 @@ export default function SolarSystem() {
 
     return () => {
       cancelAnimationFrame(raf);
+      offVis();
+      offGal();
       window.removeEventListener("keydown", onThrowKey);
       window.removeEventListener("pagehide", onHide);
-      document.removeEventListener("visibilitychange", onVis);
       writer.flush();
       save();
       engineRef.current = null;
