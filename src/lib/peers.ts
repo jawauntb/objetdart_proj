@@ -140,7 +140,6 @@ const CORE_PEER_CIRCLES: PeerCircle[] = [
       { key: "sine", href: "/sine", label: "a sine", band: "coast" },
       { key: "circularity", href: "/circularity", label: "circles", band: "coast" },
       { key: "pretext", href: "/pretext", label: "pretext", band: "coast" },
-      { key: "aphros", href: "/aphros", label: "aphros", band: "coast" },
     ],
   },
   {

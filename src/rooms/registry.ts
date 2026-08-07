@@ -28,6 +28,7 @@
 import type { RoomGuideEntry, RoomManifest, RoomPlacement } from "@/rooms/types";
 import type { SiteIconVisual } from "@/lib/site-icon-types";
 
+import aphros from "@/rooms/aphros/room.config";
 import atmosphere from "@/rooms/atmosphere/room.config";
 import beam from "@/rooms/beam/room.config";
 import cabinet from "@/rooms/cabinet/room.config";
@@ -57,6 +58,7 @@ import voids from "@/rooms/voids/room.config";
 import zeus from "@/rooms/zeus/room.config";
 
 export const ROOM_MANIFESTS = [
+  aphros,
   atmosphere,
   beam,
   cabinet,

@@ -68,7 +68,7 @@ export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "storm",       icon: "storm",    href: "/storm",                             desc: "pressure · charge · discharge", cluster: "water",     dark: true },
   { key: "clouds",      icon: "clouds",   href: "/clouds",                            desc: "the air floor, four banks deep", cluster: "water",     dark: true },
   { key: "mountain",    icon: "earth",    href: "/mountain",                          desc: "the peak above the fog",       cluster: "nature",    dark: true },
-  { key: "aphros",      icon: "aphros",   href: "/aphros",                            desc: "play the shells",              cluster: "water" },
+  manifestRoute("aphros"),
   { key: "flowers",     icon: "growth",   href: "/flowers",                           desc: "petals · symmetry",            cluster: "nature",    dark: true },
   { key: "birds",       icon: "growth",   href: "/birds",                             desc: "a murmuration",                cluster: "nature",    dark: true },
   { key: "tissue",      icon: "aphros",   href: "/tissue",                            desc: "when one becomes many", cluster: "nature", dark: true },
