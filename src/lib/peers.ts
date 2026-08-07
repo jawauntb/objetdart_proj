@@ -111,7 +111,7 @@ const CORE_PEER_CIRCLES: PeerCircle[] = [
     // up-wall; this is where it lands instead. Circle anchors at earth
     // (the highest band among its rooms), so the nav order is unchanged.
     rooms: [
-      { key: "earth", href: "/earth", label: "the earth", band: "earth" },
+      { key: "earth", href: "/earth", label: "the ground", band: "earth" },
       { key: "fire", href: "/fire", label: "fire", band: "earth" },
       { key: "atlas", href: "/atlas/origin", label: "the atlas", band: "atlas" },
       // A city is a settlement on the atlas — same ground at a different level

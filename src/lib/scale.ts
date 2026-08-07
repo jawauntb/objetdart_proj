@@ -95,7 +95,7 @@ export const SCALE_BANDS: ScaleBand[] = [
   // are real addresses — travel resolves through them until the rooms land.
   { id: "atmosphere", label: "the atmosphere", route: "/atmosphere", sMin: 4.5, sMax: 5.5 },
   { id: "atlas", label: "the atlas", route: "/atlas/origin", sMin: 5.5, sMax: 6.5 },
-  { id: "earth", label: "the earth", route: "/earth", sMin: 6.5, sMax: 9 },
+  { id: "earth", label: "the ground", route: "/earth", sMin: 6.5, sMax: 9 },
   { id: "planets", label: "the planets", route: "/planets", sMin: 9, sMax: 11 },
   { id: "solar", label: "the solar system", route: "/solar", sMin: 11, sMax: 13.5 },
   { id: "stars", label: "the stars", route: "/stars", sMin: 13.5, sMax: 17 },
@@ -675,6 +675,11 @@ export const ROUTE_TRAVEL_OVERRIDES: Partial<Record<string, RouteTravelOverride>
   // The peak descends to the shore by default; press again for the strata
   // it stands on, again for the birds riding its updraft.
   "/mountain": { down: "coast", extraDown: ["/rocks", "birds"] },
+  // The new door-rooms (/viruses, /insects, /land, /localgroup, /voids) take
+  // no route override: each falls through to its band grain (scale.ts §"A wall
+  // a route stays silent on falls through to the band grain entirely"), so
+  // they travel like their band and never perturb another band's pinned doors.
+  // Their kinship is carried by the peer rings (lib/peers.ts), not the axis.
 };
 
 /** A resolved, walkable door: where the hand actually goes today. */
@@ -973,6 +978,18 @@ export const LATERAL_ROUTE_BANDS: { prefix: string; band: ScaleBandId }[] = [
   { prefix: "/geyser", band: "drop" },
   { prefix: "/root", band: "drop" },
   { prefix: "/marsh", band: "drop" },
+  // the swarm at the drop, beside the water and the seed
+  { prefix: "/insects", band: "drop" },
+  // the geometric shells among the organelles (the crystallography sibling of
+  // the rocks, one band smaller than the drop)
+  { prefix: "/viruses", band: "organelles" },
+  // the lived terrain surface, a peer of the coast (the ground cluster,
+  // small → large: the soil at the drop, the land here, the ground at /earth)
+  { prefix: "/land", band: "coast" },
+  // the cosmic large-scale web: a bound group of galaxies at deep space, and
+  // the void that wraps the top of the observable web
+  { prefix: "/localgroup", band: "space" },
+  { prefix: "/voids", band: "beyond" },
 ];
 
 /** Where a route enters the manifold: center of its band. */

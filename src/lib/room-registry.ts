@@ -1615,6 +1615,64 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     exempt: {},
   },
   {
+    key: "insects",
+    href: "/insects",
+    kind: "room",
+    source: "src/components/Insects.tsx",
+    page: "src/app/insects/page.tsx",
+    address: { band: "drop" },
+    frame: "yield",
+    chrome: "travel+peers",
+    keeps: "objetdart:insects:v1",
+    creates: "an insect",
+    interacts:
+      "alignment, cohesion and separation in one shared field (flockForce, lib/insects): the " +
+      "murmuration's shape is that force balance, not a scripted path. Prey flee any predator and " +
+      "a released mantis pursues the nearest on the shared trophic law (huntCatches) — a caught " +
+      "mote is consumed, gone. Two mature imago motes that drift within MATE_REACH lay an egg that " +
+      "is neither parent (layEgg, seed folded from both, deposited between them), which then hatches " +
+      "egg → larva → imago on its own clock.",
+    exempt: {},
+  },
+  {
+    key: "land",
+    href: "/land",
+    kind: "room",
+    source: "src/components/Land.tsx",
+    page: "src/app/land/page.tsx",
+    address: { band: "coast" },
+    frame: "yield",
+    chrome: "travel+peers",
+    keeps: "objetdart:land:v1",
+    creates: "a hummock",
+    interacts:
+      "the cells act through one shared water-and-sediment field: flow couples every cell to its " +
+      "downhill neighbours, a slump couples a cell to its own slope, and eroded highland soil is " +
+      "exactly the soil deposited in the lowlands (mass conserved in stepHydrology / windErosion). " +
+      "Two raised hummocks that meet merge into one hill of their combined mass, and rain routed " +
+      "into the saddle between them carves a channel that is neither hummock.",
+    exempt: {},
+  },
+  {
+    key: "localgroup",
+    href: "/localgroup",
+    kind: "room",
+    source: "src/components/LocalGroup.tsx",
+    page: "src/app/localgroup/page.tsx",
+    address: { band: "space" },
+    frame: "yield",
+    chrome: "travel+peers",
+    keeps: "objetdart:localgroup:v1",
+    creates: "a galaxy",
+    interacts:
+      "softened N-body gravity in one shared field: every galaxy pulls every other about the " +
+      "barycenter, dynamical friction keyed to cosmic time drives the fall, and two whose discs " +
+      "touch coalesce (mergeGalaxies) into a third that is neither parent — mass and momentum " +
+      "summed at the mass-weighted point, a starburst marking the union. A flick unbinds one and " +
+      "it streams a tidal tail out of the group.",
+    exempt: {},
+  },
+  {
     key: "marsh",
     href: "/marsh",
     kind: "room",
@@ -1872,6 +1930,46 @@ export const ROOM_REGISTRY: RoomEntry[] = [
       "kelp frond fragments, an anemone splits by real binary fission (reproduceCreature) — and " +
       "the parent pays a third of its own biomass to fund the offspring, a real budget transfer, " +
       "not a free duplicate.",
+    exempt: {},
+  },
+  {
+    key: "viruses",
+    href: "/viruses",
+    kind: "room",
+    source: "src/components/Viruses.tsx",
+    page: "src/app/viruses/page.tsx",
+    address: { band: "organelles" },
+    frame: "yield",
+    chrome: "travel+peers",
+    keeps: "objetdart:viruses:v1",
+    creates: "a shell",
+    interacts:
+      "Caspar–Klug symmetry, straight: a shell is its class T and its geometric seed, and drawing " +
+      "one onto another (or onto the templating floor) copies that seed — the product is a shell " +
+      "geometrically identical to its template, ringing at the same pitch wherever it drifts, " +
+      "because identity here is the rule and not the place. Subunits are conserved: assembling a " +
+      "T-class shell draws exactly 60·T from the shared free pool (assembleShell/climbShell) and " +
+      "disassembly returns them (dissolveShell), so two small shells and one large one are the same " +
+      "matter differently folded.",
+    exempt: {},
+  },
+  {
+    key: "voids",
+    href: "/voids",
+    kind: "room",
+    source: "src/components/Voids.tsx",
+    page: "src/app/voids/page.tsx",
+    address: { band: "beyond" },
+    frame: "yield",
+    chrome: "travel+peers",
+    keeps: "objetdart:voids:v1",
+    creates: "a node",
+    interacts:
+      "gravity and tension in one shared web: a node pulls matter along the filaments strung to its " +
+      "neighbours (a filament is nothing but the tension line between two nodes, thinning and " +
+      "snapping when the void stretches it past its reach), and two clusters drawn together fall " +
+      "into one great attractor that is neither parent — mass summed, momentum conserved, and it " +
+      "rings lower than either. The void itself is the outward push draining matter onto the walls.",
     exempt: {},
   },
 ];

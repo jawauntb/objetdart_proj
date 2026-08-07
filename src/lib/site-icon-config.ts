@@ -383,8 +383,8 @@ const CORE_SITE_ICON_VISUALS = {
     ink: "#fff3d6",
   },
   earth: {
-    title: "Earth",
-    description: "strata, seismograph, and root",
+    title: "Ground",
+    description: "the ground — strata, seismograph, and root",
     path: "/earth",
     shortName: "earth",
     kind: "earth",
