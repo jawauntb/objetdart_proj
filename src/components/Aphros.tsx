@@ -31,7 +31,13 @@ import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
 import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
-import { createFrameGovernor, onGalleryPause, onVisibility, resolveDpr } from "@/lib/room-runtime";
+import {
+  createFrameGovernor,
+  createIdleWriter,
+  onGalleryPause,
+  onVisibility,
+  resolveDpr,
+} from "@/lib/room-runtime";
 import { clocksFrom } from "@/lib/webgl/sizing";
 import LetGo from "@/components/LetGo";
 
@@ -153,7 +159,10 @@ export default function Aphros() {
       /* a fresh sea */
     }
     setHasKept(bloomsRef.current.length > 0);
-    const save = () => {
+    // Debounced idle writer — the shared bus, not another Float32Array on the
+    // side. Coalesces rapid saves (bursts, spawns, ceremony ascents) so a
+    // save gets to disk when the hand pauses, and flushes on unmount.
+    const persist = createIdleWriter(() => {
       try {
         window.localStorage.setItem(
           STORAGE_KEY,
@@ -164,9 +173,12 @@ export default function Aphros() {
           }),
         );
       } catch {
-        /* noop */
+        /* quota / private mode — the sea still plays */
       }
+    });
+    const save = () => {
       setHasKept(bloomsRef.current.some((b) => b.ascendAt === 0));
+      persist.schedule();
     };
 
     // ── live state the hand writes ───────────────────────────────────
@@ -211,6 +223,13 @@ export default function Aphros() {
     const pointerFx = { x: 0.5, y: 0.6, strength: 0 };
     let silkBoost = 0;
     let galateaGlow = 0;
+    // birthGlow — the afterglow of a ceremony ascent. Held bloom rises into
+    // the shell → birthGlow spikes to 1 and decays over ~25 seconds; the
+    // shader mixes the earthly palette toward heavenly (icon-white,
+    // celestial-blue, halo-cream) for the duration, so an ascent visibly
+    // and slowly cools the whole painting back to its default warmth. The
+    // one uniform is the whole birth: earthly Aphrodite births heavenly.
+    let birthGlow = 0;
     const tritonDiveAt = [0, 0, 0];
     const tritonGlow = [0, 0, 0];
     const seahorseRearAt = [0, 0];
@@ -534,9 +553,51 @@ export default function Aphros() {
           }
           if (e.phase === "release") {
             if (holdBloom && e.tier >= 3) {
-              // the ceremony: the gathered foam ascends into the shell
-              holdBloom.ascendAt = performance.now();
+              // ── the ceremony: her birth ─────────────────────────────
+              // the gathered foam ascends into the shell, and the sea
+              // answers in six senses: the goddess brightens, the whole
+              // painting cools toward heavenly for the length of the
+              // afterglow, all three tritons hail together, the pod
+              // boosts into celebration play, a ripple of foam kisses
+              // radiates outward, and a chord of root-third-fifth
+              // sounds — this is the room's one solemn act, felt as
+              // her birth, and it lasts twenty-five seconds
+              const now = performance.now();
+              holdBloom.ascendAt = now;
+              // (a) the goddess brightens immediately
+              galateaGlow = 1;
+              // (b) the birth afterglow uniform holds for ~25s and
+              // decays in the RAF loop — the palette shift's driver
+              birthGlow = 1;
+              // (c) the birth ripple: a ring of foam kisses radiating
+              // from the bloom's position outward across ~2 seconds.
+              // The wake shader's own `front = dist - age * 0.09`
+              // expands each seeded point over its 2.2s lifetime, so
+              // seeding a small initial ring at birth reads as a
+              // starburst expanding into the surrounding sea.
+              const RIPPLE_N = 8;
+              const R0 = 0.03;
+              for (let i = 0; i < RIPPLE_N; i++) {
+                const ang = (i / RIPPLE_N) * Math.PI * 2;
+                pushWake(
+                  holdBloom.nx + Math.cos(ang) * R0,
+                  holdBloom.ny + Math.sin(ang) * R0 * 0.7,
+                  0.7,
+                );
+              }
+              // (d) the pod celebrates — 15 seconds of boosted play
+              for (let i = 0; i < 3; i++) dolphinBoostUntil[i] = now + 15000;
+              // (e) the tritons hail — all three glow at once
+              for (let i = 0; i < 3; i++) tritonGlow[i] = 1;
+              // (f) a chord instead of a bell: root + major third +
+              // perfect fifth of the bloom's own position on the
+              // shell scale. The birth of beauty is chordal, not a
+              // single note; the release bell still tolls under it.
+              const root = noteAt(holdBloom.nx);
               audio.bell();
+              audio.playNote(root, 1200);
+              audio.playNote(root + 4, 1200);
+              audio.playNote(root + 7, 1200);
               haptics.bloom();
               save();
             } else if (holdBloom) {
@@ -694,6 +755,10 @@ export default function Aphros() {
         uniform vec4 uPointer;               // x, y, strength, -
         uniform float uSilkBoost;            // tapped silk billows
         uniform float uGalatea;              // her answering glow
+        uniform float uBirthGlow;            // the ceremony afterglow, 0..1,
+                                             //   decays over ~25s; drives the
+                                             //   earthly→heavenly palette
+                                             //   shift on ascent
         uniform vec4 uTritons[3];            // x, y, dive, glow
         uniform vec4 uSeahorses[2];          // x, y, rear, facing
         uniform vec4 uCherubFx;              // barrel-roll phase per cherub
@@ -861,6 +926,13 @@ export default function Aphros() {
           float rays = pow(max(0.0, sin(ang * 7.0 + rayN * 5.0 + t * 0.03)), 4.0);
           sky += rays * exp(-sunDist * 2.8) * vec3(1.0, 0.88, 0.66) * 0.22;
           sky += (sunGlow * 0.60 + sunHalo * 0.13) * vec3(1.0, 0.90, 0.68);
+          // heavenly palette shift — earthly Aphrodite births heavenly.
+          // At uBirthGlow=0 the sky is untouched; at uBirthGlow=1 the
+          // storm's rafBlue cools to celestial-pale, the horizon warms
+          // toward halo-cream. One mix() per register, the earthly
+          // composition entirely preserved when nothing is being born.
+          vec3 heavenlySky = mix(vec3(0.72, 0.80, 0.94), vec3(0.96, 0.94, 0.82), skyT);
+          sky = mix(sky, heavenlySky, uBirthGlow * 0.60);
 
           // ── the cherub train — four winged figures riding the falling
           // diagonal (the chi's other stroke), trailing crimson ribbons ──
@@ -920,6 +992,14 @@ export default function Aphros() {
           vec3 sea = mix(nacreW, turq, smoothstep(0.0, 0.34, sd));
           sea = mix(sea, aegean, smoothstep(0.28, 0.66, sd) * 0.75);
           sea = mix(sea, shoal, smoothstep(0.66, 0.98, sd) * 0.7);
+          // heavenly palette shift — the sea cools from Botticelli warmth
+          // toward icon-white at the light and celestial-blue in the deeps
+          // during the ~25s afterglow of a ceremony ascent.
+          vec3 heavenlySea = mix(vec3(0.92, 0.94, 0.98), vec3(0.34, 0.48, 0.78),
+            smoothstep(0.0, 0.55, sd));
+          heavenlySea = mix(heavenlySea, vec3(0.10, 0.14, 0.28),
+            smoothstep(0.55, 0.95, sd) * 0.7);
+          sea = mix(sea, heavenlySea, uBirthGlow * 0.55);
 
           float mir = fbm(vec2(suv.x * aspect * 1.7 + t * 0.05, sd * 14.0));
           sea = mix(sea, vec3(0.95, 0.64, 0.56),
@@ -1028,6 +1108,16 @@ export default function Aphros() {
             0.90 + 0.03 * cos(phase2 + 2.1),
             0.81 + 0.04 * cos(phase2 + 4.2)
           );
+          // heavenly palette shift — the shell's nacre cools toward
+          // icon-white with a cool-blue iridescence during the birth
+          // afterglow, so the scallop reads as hieratic rather than
+          // sensual for the ~25s the ascent holds.
+          vec3 heavenlyPearl = vec3(
+            0.97 + 0.015 * cos(phase2),
+            0.97 + 0.02 * cos(phase2 + 2.1),
+            0.99 + 0.02 * cos(phase2 + 4.2)
+          );
+          pearl = mix(pearl, heavenlyPearl, uBirthGlow * 0.55);
           float ridgeLight = smoothstep(0.2, 1.0, fan * fan);
           vec3 groove = pearl * vec3(0.68, 0.60, 0.50);
           vec3 shellCol = mix(groove, pearl, ridgeLight);
@@ -1076,7 +1166,11 @@ export default function Aphros() {
                      * (1.0 - smoothstep(HORIZON, HORIZON + 0.05, uv.y));
           // shared 7s album breath: the gold rent at the horizon swells ±15%
           // on the site's respiration so /aphros inhales with /reef, /root.
-          col += goldLt * haze * 0.15 * uBreath;
+          // On a ceremony ascent the rent intensifies by ~40% and its hue
+          // cools toward halo-cream — the sky brightens with her birth
+          // for the ~25s the afterglow holds, then cools back to gold.
+          vec3 rentHue = mix(goldLt, vec3(0.98, 0.94, 0.78), uBirthGlow);
+          col += rentHue * haze * (0.15 + uBirthGlow * 0.06) * uBreath;
           col = mix(col, vec3(0.97, 0.86, 0.76), haze * 0.45);
           col = mix(col, shore, smoothstep(SHORE - 0.012, SHORE + 0.012, uv.y));
 
@@ -1139,21 +1233,35 @@ export default function Aphros() {
             if (length(glcl - vec2(0.0, -0.5)) < 1.6) {
               float hairM = smoothstep(0.03, -0.03, galateaHair(glcl));
               col = mix(col, vec3(0.80, 0.58, 0.28) * (0.95 + uGalatea * 0.3), hairM * 0.96);
-              float gm = smoothstep(0.022, -0.022, galateaSdf(glcl));
+              // her outline breathes ±2% on the shared 7s clock — she is
+              // alive before the hand ever touches the canvas
+              float galateaThresh = 0.022 * (1.0 + 0.02 * (uBreath - 0.5));
+              float gm = smoothstep(galateaThresh, -galateaThresh, galateaSdf(glcl));
               // warm ivory skin, shaded on the storm side, blushed by rose
               vec3 skinG = vec3(0.93, 0.78, 0.68);
               skinG *= 0.82 + 0.22 * smoothstep(-0.9, 0.7, glcl.x);
               skinG += vec3(0.05, 0.010, 0.015) * smoothstep(0.6, 0.0, abs(glcl.y + 0.38));
               skinG += uGalatea * vec3(0.16, 0.10, 0.07);
+              // heavenly palette shift — her flesh cools toward luminous
+              // alabaster (blessed marble) during the ~25s afterglow, so
+              // earthly Aphrodite's rose-blushed skin resolves into
+              // heavenly Aphrodite's icon-alabaster for the length of
+              // the birth answer
+              skinG = mix(skinG, vec3(0.98, 0.96, 0.93), uBirthGlow * 0.55);
               col = mix(col, skinG, gm * 0.98);
               // the rose wrap at her hips, folded, not a ball
               float wrapM = smoothstep(0.03, -0.03,
                 sdEll(rot2(0.14) * (glcl - vec2(-0.01, -0.30)), vec2(0.145, 0.105)));
               vec3 wrapCol = vec3(0.68, 0.20, 0.24) * (0.82 + 0.18 * sin(glcl.x * 16.0 + glcl.y * 8.0));
               col = mix(col, wrapCol, wrapM * 0.94);
-              // backlit rim from the gold rent behind her
+              // backlit rim from the gold rent behind her — the album
+              // 7s respiration reaches her rim (+10%), the ceremony
+              // afterglow blesses her (+25%), and the birth palette
+              // shift cools the rim's hue toward halo-cream
               float grim = smoothstep(0.035, 0.0, abs(galateaSdf(glcl))) * (1.0 - gm);
-              col += grim * vec3(1.0, 0.90, 0.70) * (0.42 + uGalatea * 0.35 + breath * 0.10);
+              vec3 rimHue = mix(vec3(1.0, 0.90, 0.70), vec3(0.98, 0.95, 0.80), uBirthGlow);
+              col += grim * rimHue *
+                (0.42 + uGalatea * 0.35 + breath * 0.10 + uBirthGlow * 0.25);
             }
           }
 
@@ -1298,6 +1406,7 @@ export default function Aphros() {
             const uPointerU = U("uPointer");
             const uSilkBoostU = U("uSilkBoost");
             const uGalateaU = U("uGalatea");
+            const uBirthGlowU = U("uBirthGlow");
             const uTritonsU = U("uTritons");
             const uSeahorsesU = U("uSeahorses");
             const uCherubFxU = U("uCherubFx");
@@ -1343,6 +1452,11 @@ export default function Aphros() {
               pointerFx.strength *= Math.exp(-rawDt / 1.4);
               silkBoost *= Math.exp(-rawDt / 1.6);
               galateaGlow *= Math.exp(-rawDt / 1.3);
+              // birthGlow decays over ~25s — the whole afterglow of an
+              // ascent, the palette-shift's clock. Slower than
+              // galateaGlow so her flash fades first, then the sea
+              // cools back to Botticelli warmth around her.
+              birthGlow *= Math.exp(-rawDt / 25);
 
               // the court's envelopes — dives, rears, rolls, glows
               for (let i = 0; i < 3; i++) {
@@ -1515,6 +1629,7 @@ export default function Aphros() {
               if (uPointerU) gl.uniform4f(uPointerU, pointerFx.x, pointerFx.y, pointerFx.strength, 0);
               if (uSilkBoostU) gl.uniform1f(uSilkBoostU, silkBoost);
               if (uGalateaU) gl.uniform1f(uGalateaU, galateaGlow);
+              if (uBirthGlowU) gl.uniform1f(uBirthGlowU, birthGlow);
               if (uTritonsU) gl.uniform4fv(uTritonsU, tritonData);
               if (uSeahorsesU) gl.uniform4fv(uSeahorsesU, seahorseData);
               if (uCherubFxU) gl.uniform4f(uCherubFxU, cherubFx[0], cherubFx[1], cherubFx[2], cherubFx[3]);
@@ -1550,6 +1665,7 @@ export default function Aphros() {
     window.addEventListener("keydown", onKey);
 
     return () => {
+      persist.flush();
       observer.disconnect();
       offVisibility();
       offGalleryPause();

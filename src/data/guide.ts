@@ -515,30 +515,8 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
     ],
     keeps: "the cairns you stacked",
   },
-  {
-    key: "aphros",
-    title: "play the shells",
-    href: "/aphros",
-    essence: "a full-viewport painting of the Triumph of Galatea, where foam is the material and every gesture writes into the shader.",
-    moves: [
-      "tap → a kiss of foam wake and a note chosen by position",
-      "rapid taps (1 / 3 / 5 / n) → foam → the pod leaps → the shell rings → a squall breaks",
-      "hold → plants a lace bloom that keeps growing the longer you hold",
-      "release at the ceremony tier → the bloom ascends into the shell",
-      "twist → the painting crossfades into its own preparatory sepia line-drawing",
-      "scrub → winds a whirlpool, churning harder the deeper and faster you circle",
-      "a steady tap tempo → the surf entrains, breaking at the shell on your pulse",
-      "two-finger tap → the drawing lowers, or the frame springs home",
-      "three-finger tap → tutti, every bloom flashes at once",
-      "shake / tilt (once invited) → a squall, or a leaning swell",
-    ],
-    finds: [
-      "after 20s untouched, the sea gathers a wake at the shell unbidden",
-      "the dolphins' leaps genuinely push wakes into the shader when they break the water",
-      "a three-finger hold keeps slowing the shore the longer it stays",
-    ],
-    keeps: "up to 12 living blooms (ascended ones are let go)",
-  },
+  // aphros migrated to src/rooms/aphros/room.config.ts — its guide entry
+  // travels with the room now, spliced in by roomGuideEntries() at the tail.
 
   // --- nature ---
   {
