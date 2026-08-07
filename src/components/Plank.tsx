@@ -27,6 +27,7 @@ import {
   createFrameGovernor,
   createIdleWriter,
   detailForTier,
+  onGalleryPause,
   onVisibility,
 } from "@/lib/room-runtime";
 import { createGLStage, FULLSCREEN_VERT_CLIP } from "@/lib/webgl/stage";
@@ -743,9 +744,14 @@ export default function Plank() {
 
     const gov = createFrameGovernor();
     let hidden = false;
+    let galleryPaused = false;
     const offVisibility = onVisibility((h) => {
       hidden = h;
       if (h) gov.force("sleep");
+    });
+    const offGalleryPause = onGalleryPause((p) => {
+      galleryPaused = p;
+      if (p) gov.force("sleep");
     });
 
     const input: FieldInput = {
@@ -770,7 +776,7 @@ export default function Plank() {
     let lastStanding = -1;
     const draw = (t: number) => {
       const tier = gov.beginFrame(t);
-      if (hidden) {
+      if (hidden || galleryPaused) {
         last = t;
         raf = requestAnimationFrame(draw);
         return;
@@ -1038,6 +1044,7 @@ export default function Plank() {
     return () => {
       cancelAnimationFrame(raf);
       offVisibility();
+      offGalleryPause();
       writer.flush();
       layer?.dispose();
       quad?.dispose();

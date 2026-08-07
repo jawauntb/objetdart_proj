@@ -7,7 +7,7 @@ import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
 import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
-import { createFrameGovernor, detailForTier, onVisibility, resolveDpr } from "@/lib/room-runtime";
+import { createFrameGovernor, detailForTier, onGalleryPause, onVisibility, resolveDpr } from "@/lib/room-runtime";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 import {
   addNatural as worldAddNatural,
@@ -199,7 +199,9 @@ export default function Tide() {
     // ── the performance contract (src/lib/room-runtime) ─────────────
     const gov = createFrameGovernor();
     let sleeping = false;
+    let galleryPaused = false;
     const offVisibility = onVisibility((hidden) => { sleeping = hidden; });
+    const offGalleryPause = onGalleryPause((p) => { galleryPaused = p; });
 
     // ── persistent tideline naturals (from the shared world) ────
     // Shells, driftwood, starfish left along the shore live in the shared
@@ -935,7 +937,7 @@ export default function Tide() {
     // ── render loop ─────────────────────────────────────────────────
     const draw = (nowMs: number) => {
       const tier = gov.beginFrame(nowMs);
-      if (sleeping) { raf = requestAnimationFrame(draw); return; } // no draw while hidden
+      if (sleeping || galleryPaused) { raf = requestAnimationFrame(draw); return; } // no draw while hidden or gallery-paused
       const detail = detailForTier(tier);
       const now = nowMs;
       if (lastFrameAt == null) lastFrameAt = nowMs;
@@ -1459,6 +1461,7 @@ export default function Tide() {
     return () => {
       cancelAnimationFrame(raf);
       offVisibility();
+      offGalleryPause();
       if (weatherTimer) clearTimeout(weatherTimer);
       persistNaturals();
       unsubscribeWorld();

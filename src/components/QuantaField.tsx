@@ -51,6 +51,7 @@ import {
   createFrameGovernor,
   detailForTier,
   isEmbeddedFrame,
+  onGalleryPause,
   onVisibility,
   resolveDpr,
 } from "@/lib/room-runtime";
@@ -258,7 +259,9 @@ export default function QuantaField() {
     // ————— performance contract —————
     const gov = createFrameGovernor();
     let sleeping = false;
+    let galleryPaused = false;
     const offVis = onVisibility((hidden) => { sleeping = hidden; });
+    const offGalleryPause = onGalleryPause((p) => { galleryPaused = p; });
 
     // three-finger twist = season: the field's own slow cycle
     let season = 0;
@@ -1646,7 +1649,7 @@ export default function QuantaField() {
       raf = requestAnimationFrame(frame);
       const nowReal = performance.now();
       const tier = gov.beginFrame(nowReal);
-      if (sleeping) return; // no draw while the document is hidden
+      if (sleeping || galleryPaused) return; // no draw while the document is hidden or the gallery has paused this iframe
       const detail = detailForTier(tier);
       const dtReal = Math.min(64, nowReal - last);
       last = nowReal;
@@ -2104,6 +2107,7 @@ export default function QuantaField() {
       detach();
       detachVessel();
       offVis();
+      offGalleryPause();
       markLens(false);
       wrap.removeEventListener("keydown", onKeyDown);
       wrap.removeEventListener("keyup", onKeyUp);

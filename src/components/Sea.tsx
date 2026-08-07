@@ -8,7 +8,7 @@ import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
 import { onVessel, requestVessel } from "@/lib/vessel";
 import { relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
-import { createFrameGovernor, detailForTier, onVisibility, resolveDpr } from "@/lib/room-runtime";
+import { createFrameGovernor, detailForTier, onGalleryPause, onVisibility, resolveDpr } from "@/lib/room-runtime";
 
 /**
  * The Atlantic.
@@ -339,7 +339,9 @@ export default function Sea({
     // ── the performance contract (src/lib/room-runtime) ─────────────
     const gov = createFrameGovernor();
     let sleeping = false;
+    let galleryPaused = false;
     const offVisibility = onVisibility((hidden) => { sleeping = hidden; });
+    const offGalleryPause = onGalleryPause((p) => { galleryPaused = p; });
 
     // ── resize handler ────────────────────────────────────────────
     const resize = () => {
@@ -605,7 +607,7 @@ export default function Sea({
 
     const draw = (now: number) => {
       const tier = gov.beginFrame(now);
-      if (sleeping) { raf = requestAnimationFrame(draw); return; } // no draw while hidden
+      if (sleeping || galleryPaused) { raf = requestAnimationFrame(draw); return; } // no draw while hidden or gallery-paused
       const detail = detailForTier(tier);
       const w = lines.clientWidth;
       const h = lines.clientHeight;
@@ -864,6 +866,7 @@ export default function Sea({
       lines.removeEventListener("pointerleave", onLeave);
       detachVessel();
       offVisibility();
+      offGalleryPause();
       water.removeEventListener("webglcontextlost", onGlContextLost);
       water.removeEventListener("webglcontextrestored", onGlContextRestored);
       if (gl) {
