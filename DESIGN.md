@@ -41,15 +41,15 @@ These two axioms — three registers, water-as-template — predict almost every
 
 ### `/` (the home page)
 
-**A scrolling gallery of live route previews.** Not an instrument: `src/app/page.tsx`
-renders `SiteHeader` + `ScrollingGallery` and nothing else. The gallery walks
-`GALLERY_ROUTES` — the derived scale order, manifold at the top, quanta at the
-bottom — mounting each room in an iframe that is paused unless it is the active or
-entered card, and posting `{ type: "objetdart:room", pause }` across the boundary.
-The home page therefore answers no gesture of its own; every verb belongs to the
-room inside the frame.
+**The door opens onto the manifold.** `src/app/page.tsx` is a redirect to
+`/manifold` and nothing else: the fold — every scale kept in one place — is the
+index, and the room keeps its one registry address so chrome, guide, and axis
+all resolve where they always did. The constellation panel ("view all" in the
+header) remains the way to every other room.
 
-It replaced a seven-section scroll journey (Threshold hero, the concern compass,
+The manifold replaced a scrolling gallery of live route previews
+(`ScrollingGallery`, now unmounted like `Threshold` before it), which itself
+replaced a seven-section scroll journey (Threshold hero, the concern compass,
 the atlas, the generated reading, the sea, the archive, the colophon). Those
 surfaces did not go away — they became routes:
 
@@ -98,7 +98,7 @@ surfaces did not go away — they became routes:
 src/
   app/
     layout.tsx                       — html shell, fonts, candle + sound toggle global
-    page.tsx                         — home: SiteHeader + ScrollingGallery, nothing else
+    page.tsx                         — home: a redirect to /manifold, nothing else
     cabinet/page.tsx                 — the case (HomeCabinet), off the scale axis
     compass/page.tsx                 — the concern compass (ConcernField), off the axis
     orb/page.tsx                     — plasma discs (PlasmaOrb), a peer of /plasma at the drop
@@ -128,7 +128,7 @@ src/
     ConcernField.tsx                 — /compass (radar polygon, drag, tones, the rose lens)
     HomeCabinet.tsx                  — /cabinet (the gold armature, the gems, the embers)
     PlasmaOrb.tsx                    — /orb (a population of plasma discs, one shader)
-    ScrollingGallery.tsx             — /, the paused-iframe gallery of every room
+    ScrollingGallery.tsx             — the paused-iframe gallery of every room (unmounted since the manifold became the door)
     ConcernSigil.tsx                 — small polygon glyph (reusable everywhere)
     KeptConstellation.tsx            — kept-readings-as-stars on the sea
     MorphText.tsx                    — paragraph crossfade
@@ -431,7 +431,7 @@ If you're an agent or reviewer, here's the order I'd suggest you do this in:
 4. **Press `read the room →`**, then click the small sigil next to the permalink. You should hear ~12 seconds of music that is *this* night's specifically.
 5. **Type a question into "ask the room."** This is the only AI surface in the main flow. If the answer doesn't feel of-a-piece with the rest, the system prompt is wrong.
 6. Open `/atlas/spirit`, `/archive/the-harbor-system`, `/kept` (after keeping a couple of readings), and `/compare?a=<hash>&b=<hash>`.
-7. Open the home page on mobile (≤414px). Confirm the gallery scrolls, each card's room loads and the inactive ones stay paused. Then walk `/cabinet`, `/compass`, `/atlas/origin` and `/archive` at the same width: the case's ring collapses to its drawer, the compass reads single-column, the map and the cards hold. The compass drag is still the weakest interaction on a phone; everything else should be solid.
+7. Open the home page on mobile (≤414px). Confirm the door lands you on the manifold and the fold takes your touch. Then walk `/cabinet`, `/compass`, `/atlas/origin` and `/archive` at the same width: the case's ring collapses to its drawer, the compass reads single-column, the map and the cards hold. The compass drag is still the weakest interaction on a phone; everything else should be solid.
 
 Push back hardest on the **Known gaps & open questions** section. Items 2, 3, and 10 are the biggest live debates.
 

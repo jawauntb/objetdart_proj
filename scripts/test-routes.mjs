@@ -419,7 +419,16 @@ for (const key of PRIMARY_ROUTE_KEYS) {
   assert.ok(SITE_ROUTE_BY_KEY[key], `primary route ${key} should resolve`);
 }
 
-assert.match(homePageSource, /<ScrollingGallery\s*\/>/, "home page should render the scrolling gallery");
+assert.match(
+  homePageSource,
+  /redirect\("\/manifold"\)/,
+  "the threshold sends the visitor to the manifold — the fold is the index",
+);
+assert.doesNotMatch(
+  homePageSource,
+  /<ScrollingGallery/,
+  "the gallery no longer stands at the door — it is unmounted, like Threshold before it",
+);
 assert.equal(
   existsSync(new URL("src/app/experiment/page.tsx", rootUrl)),
   false,
@@ -441,7 +450,7 @@ for (const path of ["/aphros", "/archive", "/colophon", "/timekeeper", "/coinage
   assert.equal(isDarkRoutePath(path), false, `${path} should not match a dark route by prefix accident`);
 }
 
-assert.equal(isDarkRoutePath("/"), true, "the scrolling home page should use dark chrome");
+assert.equal(isDarkRoutePath("/"), true, "the threshold uses dark chrome — it opens onto the fold");
 
 for (const path of ["/", "/coin", "/coin/deep", "/tourbillon", "/archive", "/timekeeper"]) {
   assert.equal(isDarkRoute(path), isDarkRoutePath(path), `isDarkRoute should delegate ${path}`);
