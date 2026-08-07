@@ -171,6 +171,7 @@ const expectedKeys = [
   "tidepool",
   "viruses",
   "voids",
+  "zeus",
 ];
 const validClusters = new Set(["field", "water", "nature", "mechanism"]);
 const validIcons = new Set(

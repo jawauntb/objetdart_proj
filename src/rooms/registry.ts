@@ -54,6 +54,7 @@ import spring from "@/rooms/spring/room.config";
 import tidepool from "@/rooms/tidepool/room.config";
 import viruses from "@/rooms/viruses/room.config";
 import voids from "@/rooms/voids/room.config";
+import zeus from "@/rooms/zeus/room.config";
 
 export const ROOM_MANIFESTS = [
   atmosphere,
@@ -82,6 +83,7 @@ export const ROOM_MANIFESTS = [
   tidepool,
   viruses,
   voids,
+  zeus,
 ] as const;
 
 /** Literal union of every manifest-declared room key. */

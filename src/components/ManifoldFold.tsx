@@ -329,6 +329,12 @@ export default function ManifoldFold() {
     let massSerial = 0;
     const rays: RayState[] = [];
     let spawnSerial = 0;
+    // The one entropy roll this room is allowed (named in the registry's
+    // `nondeterminism` field): a session salt for the ambient light rays.
+    // The rays are never part of the kept state and no film replays them,
+    // so the seed law's replay guarantee is untouched — the salt only keeps
+    // the door's sky from flying last visit's exact crossings again.
+    const raySalt = Math.floor(Math.random() * 0xffff);
     const pulses: Pulse[] = [];
     const tugs: Tug[] = [];
     let orbit: Orbit | null = null;
@@ -890,12 +896,15 @@ export default function ManifoldFold() {
       else delete wrap.dataset.lensRaised;
     };
 
-    // deterministic ray spawning: seeded by its serial, entering from an edge
+    // Ray spawning: the entering edge keeps its predetermined serial cycle,
+    // but the rest of the flight — where along that edge it enters, and
+    // which way it tilts across the fold — draws on the session's one salt
+    // (see `raySalt` above), so the sky never replays last visit's crossings.
     const spawnRay = (): RayState => {
       const s = spawnSerial++;
       const edge = Math.floor(hash01(s * 7 + 1) * 4);
-      const along = 0.12 + hash01(s * 13 + 5) * 0.76;
-      const tilt = (hash01(s * 29 + 11) - 0.5) * 0.9;
+      const along = 0.12 + hash01(s * 13 + 5 + raySalt) * 0.76;
+      const tilt = (hash01(s * 29 + 11 + raySalt * 3) - 0.5) * 0.9;
       let x = 0, y = 0, a = 0;
       if (edge === 0) { x = -20; y = along * height; a = tilt; }
       else if (edge === 1) { x = width + 20; y = along * height; a = Math.PI + tilt; }

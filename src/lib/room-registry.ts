@@ -515,6 +515,11 @@ export const ROOM_REGISTRY: RoomEntry[] = [
       "haptic storm and a damped-sinusoid ringdown (ringdownEnvelope) in the same frame. A " +
       "tier-3 tap on a standing mass instead collapses it a step denser (star, neutron star, " +
       "black hole); a tier-5 tap forces the two nearest masses into an immediate inspiral",
+    nondeterminism:
+      "one Math.random() at mount salts the ambient light rays' entry points and tilts " +
+      "(their entering edge keeps its deterministic serial cycle). The rays are decoration in " +
+      "flight — never kept, never replayed by a film — and the salt exists so the door's sky " +
+      "does not fly last visit's exact crossings again now that / opens here.",
   },
   {
     key: "overlook",
@@ -2065,6 +2070,29 @@ export const ROOM_REGISTRY: RoomEntry[] = [
       "snapping when the void stretches it past its reach), and two clusters drawn together fall " +
       "into one great attractor that is neither parent — mass summed, momentum conserved, and it " +
       "rings lower than either. The void itself is the outward push draining matter onto the walls.",
+    exempt: {},
+  },
+  {
+    key: "zeus",
+    href: "/zeus",
+    kind: "room",
+    source: "src/components/Zeus.tsx",
+    page: "src/app/zeus/page.tsx",
+    address: { band: "olympus" },
+    frame: "yield",
+    chrome: "axis",
+    keeps: "objetdart:zeus:v1",
+    creates: "a thunderhead",
+    interacts:
+      "electrostatic induction across one court: every standing thunderhead pulls every other " +
+      "toward it in proportion to the product of their charges (lib/zeussky attraction, softened " +
+      "so closing cores never blow up), and two houses whose anvils touch merge (mergeCells) into " +
+      "a greater house that is neither parent — charge and water summed exactly, the new court at " +
+      "the charge-weighted centroid, landing as a flash, a low tone at the union's own thunderHz, " +
+      "and a haptic roll in the same frame. A tier-3 tap calves the tapped house — the satellite " +
+      "is paid for out of the parent's own stores (calve), never minted; a tier-5 tap summons the " +
+      "two nearest houses into an immediate union; the ceremony spends a house in one bolt whose " +
+      "pitch IS its energy (thunderHz inverts, test-pinned).",
     exempt: {},
   },
 ];
