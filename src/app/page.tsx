@@ -1,11 +1,8 @@
-import SiteHeader from "@/components/SiteHeader";
-import ScrollingGallery from "@/components/ScrollingGallery";
+import { redirect } from "next/navigation";
 
+// The door opens onto the fold itself. The manifold keeps its one registry
+// address (/manifold) — chrome, guide, and axis all resolve there — so the
+// threshold sends the visitor rather than mounting a second copy of the room.
 export default function Page() {
-  return (
-    <>
-      <SiteHeader />
-      <ScrollingGallery />
-    </>
-  );
+  redirect("/manifold");
 }
