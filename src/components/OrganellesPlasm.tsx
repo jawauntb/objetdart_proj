@@ -53,6 +53,7 @@ import {
   onVisibility,
   resolveDpr,
 } from "@/lib/room-runtime";
+import { clocksFrom } from "@/lib/webgl/sizing";
 import { centerFieldForce } from "@/lib/scene/center-field";
 import {
   KIND_BASE_HZ,
@@ -1267,7 +1268,10 @@ export default function OrganellesPlasm() {
 
       const list = listRef.current;
       const t = audio.getAudioTime() ?? now / 1000;
-      const breath = reduced ? 0.5 : Math.sin(t * Math.PI * 2 * 0.14) * 0.5 + 0.5;
+      // the album's shared 7s breath (clocksFrom) — the plasm horizon,
+      // membrane radius, and vesicle glow all ride it, so this cellular-
+      // scale field lifts and settles in phase with the shader rooms.
+      const breath = clocksFrom({ time: t, reducedMotion: reduced }).breath;
 
       // the cell membrane closes around a full set, of its own accord —
       // and when that ring settles, the plasm becomes the cell above

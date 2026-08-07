@@ -19,6 +19,7 @@ import {
   resolveDpr,
   type QualityTier,
 } from "@/lib/room-runtime";
+import { clocksFrom } from "@/lib/webgl/sizing";
 
 /**
  * /earth — a tactile geologic instrument.
@@ -2079,6 +2080,12 @@ export default function Earth() {
         lastFramed = framed;
         bg.style.transform = framed;
       }
+      // the sky breathes on the site's shared 7s clock — the pre-baked
+      // background canvas rides a small opacity swell so the horizon lifts
+      // and settles with /reef and /root, never below 0.9 so the rock never
+      // ghosts out.
+      const { breath: __skyBreath } = clocksFrom({ time: now / 1000, reducedMotion: reduce });
+      bg.style.opacity = (0.90 + 0.10 * __skyBreath).toFixed(3);
 
       const x0 = spanX0();
       const x1 = spanX1();

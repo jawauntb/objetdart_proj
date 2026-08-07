@@ -54,6 +54,7 @@ import {
   onVisibility,
   resolveDpr,
 } from "@/lib/room-runtime";
+import { clocksFrom } from "@/lib/webgl/sizing";
 import {
   ANTI_TINTS,
   BARYON_DEPTH,
@@ -1951,6 +1952,10 @@ export default function QuarksVacuum() {
       const bt = audioT != null ? audioT : now / 1000;
       const breath = bt * Math.PI * 2 * 0.14;
       const quick = bt * Math.PI * 2 * REGISTER.lfoHz;
+      // the album's shared 7s breath (clocksFrom) — the deep-vacuum candle
+      // glow rides its amplitude ±10% so this deepest-scale field lifts and
+      // settles in phase with the shader rooms next to it in the gallery.
+      const { breath: __qvBreath } = clocksFrom({ time: now / 1000, reducedMotion: reduce });
       const md = minDim();
 
       const stepDt = Math.min(0.05, dt) * timeScale;
@@ -2169,8 +2174,9 @@ export default function QuarksVacuum() {
       bg.addColorStop(1, bgLow);
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, width, height);
-      // the candle, eighteen orders of magnitude above: the faintest warmth
-      const glowPulse = reduce ? 0.03 : 0.028 + Math.sin(breath) * 0.012;
+      // the candle, eighteen orders of magnitude above: the faintest
+      // warmth, its amplitude riding the shared 7s breath (±10%)
+      const glowPulse = reduce ? 0.03 : (0.028 + Math.sin(breath) * 0.012) * (0.9 + 0.20 * __qvBreath);
       const glow = ctx.createRadialGradient(width * 0.5, height * 0.38, 10, width * 0.5, height * 0.38, Math.max(width, height) * 0.8);
       glow.addColorStop(0, `rgba(231, 172, 82, ${glowPulse + lens * 0.02})`);
       glow.addColorStop(0.55, "rgba(200, 115, 42, 0.02)");

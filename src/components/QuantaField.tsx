@@ -55,6 +55,7 @@ import {
   onVisibility,
   resolveDpr,
 } from "@/lib/room-runtime";
+import { clocksFrom } from "@/lib/webgl/sizing";
 import {
   C_PX_S,
   CONFINEMENT_REACH_PX,
@@ -1657,7 +1658,10 @@ export default function QuantaField() {
       const dt = (dtReal * timeScale) / 1000;
       localT += dt;
       const t = audio().getAudioTime() ?? nowReal / 1000;
-      const breath = reduce ? 0 : Math.sin(t * Math.PI * 2 * 0.14) * 0.5 + 0.5;
+      // the album's shared 7s breath — the vacuum motes and the entrain
+      // envelope both ride it, so this deep-scale field lifts and settles
+      // in phase with the shader rooms next to it in the gallery.
+      const breath = clocksFrom({ time: t, reducedMotion: reduce }).breath;
 
       lens += (lensTarget - lens) * 0.14;
       night += (nightTarget - night) * (nightTarget > night ? 0.09 : 0.16);

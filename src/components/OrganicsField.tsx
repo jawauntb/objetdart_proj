@@ -49,6 +49,7 @@ import {
   onVisibility,
   resolveDpr,
 } from "@/lib/room-runtime";
+import { clocksFrom } from "@/lib/webgl/sizing";
 import {
   BEAT_MAX_HZ,
   COVALENCE,
@@ -1393,7 +1394,10 @@ export default function OrganicsField() {
         : "";
 
       const t = audio.getAudioTime() ?? now / 1000;
-      const breath = reduced ? 0.5 : Math.sin(t * Math.PI * 2 * 0.14) * 0.5 + 0.5;
+      // the album's shared 7s breath (clocksFrom) — the chains' atom-glow
+      // and dashed-bond luminance ride it in phase with the shader rooms
+      // next to /organics in the gallery.
+      const breath = clocksFrom({ time: t, reducedMotion: reduced }).breath;
 
       // ——— physics ———
       // rebound after any merge, split or birth below — the population is
