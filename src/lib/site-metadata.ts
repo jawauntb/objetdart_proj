@@ -1,8 +1,11 @@
 import type { Metadata } from "next";
 import {
+  APPLE_SPLASH_DEVICES,
   SITE_ICON_VISUALS,
   SITE_ORIGIN,
+  appleSplashMediaQuery,
   siteIconPath,
+  siteSplashPath,
   type SiteIconKey,
 } from "@/lib/site-icon-config";
 import { SITE_ROUTE_BY_KEY } from "@/lib/routes";
@@ -75,6 +78,15 @@ export function siteMetadata(key: SiteIconKey, options: SiteMetadataOptions = {}
       apple: [
         { url: siteIconPath(key, "apple"), sizes: "180x180", type: "image/png" },
       ],
+      // The iOS launch splashes. Without these, an installed PWA flashes
+      // white between tap-open and first React frame. One <link> per device
+      // viewport; iOS matches on the media query and paints the room's
+      // splash instead of the white default.
+      other: APPLE_SPLASH_DEVICES.map((device) => ({
+        rel: "apple-touch-startup-image",
+        url: siteSplashPath(key, device.slug),
+        media: appleSplashMediaQuery(device),
+      })),
     },
     appleWebApp: {
       capable: true,
