@@ -61,6 +61,7 @@ import {
   onVisibility,
   resolveDpr,
 } from "@/lib/room-runtime";
+import { clocksFrom } from "@/lib/webgl/sizing";
 import {
   ATOM_FAMILIES,
   MAX_ATOMS,
@@ -2004,6 +2005,10 @@ export default function AtomsField() {
       try { audioT = audio().getAudioTime(); } catch { audioT = null; }
       const bt = audioT != null ? audioT : now / 1000;
       const breath = bt * Math.PI * 2 * 0.14;
+      // the album's shared 7s breath (clocksFrom) — one visible register (the
+      // candle-warm ambient glow overhead) rides it so the field's brightness
+      // lifts and settles with the shader rooms next to it in the gallery.
+      const { breath: __sharedBreath } = clocksFrom({ time: now / 1000, reducedMotion: reduce });
 
       // atoms: growth, excitation decay, drift, bonds as soft springs
       const byId = new Map(atoms.map((a) => [a.id, a]));
@@ -2229,8 +2234,9 @@ export default function AtomsField() {
       bg.addColorStop(1, bgLow);
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, width, height);
-      // the candle far above the vacuum: a faint warm presence
-      const glowPulse = reduce ? 0.05 : 0.045 + Math.sin(breath) * 0.02;
+      // the candle far above the vacuum: a faint warm presence, its
+      // amplitude riding the shared 7s breath (±10%)
+      const glowPulse = reduce ? 0.05 : (0.045 + Math.sin(breath) * 0.02) * (0.9 + 0.20 * __sharedBreath);
       const glow = ctx.createRadialGradient(width * 0.5, height * 0.4, 10, width * 0.5, height * 0.4, Math.max(width, height) * 0.8);
       glow.addColorStop(0, `rgba(231, 172, 82, ${glowPulse + lens * 0.03})`);
       glow.addColorStop(0.55, "rgba(200, 115, 42, 0.028)");

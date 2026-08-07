@@ -51,6 +51,7 @@ import {
   onVisibility,
   resolveDpr,
 } from "@/lib/room-runtime";
+import { clocksFrom } from "@/lib/webgl/sizing";
 import {
   MAX_MOLECULES,
   MOLECULE_FAMILIES,
@@ -1730,6 +1731,10 @@ export default function MoleculesField() {
       try { audioT = audio().getAudioTime(); } catch { /* noop */ }
       const bt = audioT != null ? audioT : now / 1000;
       const breath = bt * Math.PI * 2 * 0.14;
+      // the album's shared 7s breath (clocksFrom, 0..1) — the candle beneath
+      // the bench rides its amplitude ±10% so molecules breathe with the
+      // shader rooms on either side in the gallery.
+      const { breath: __sharedBreath } = clocksFrom({ time: now / 1000, reducedMotion: reduce });
 
       // the felt tells: one behavioral word per compound, subtle — CO₂
       // warms the field, flammables shiver near heat, the inert airs stay
@@ -1897,8 +1902,10 @@ export default function MoleculesField() {
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, width, height);
       // the candle beneath the bench: a breathing warm pool of light
-      // greenhouseGlow is CO₂'s tell — the candle pool warms with the census
-      const glowPulse = ((reduce ? 0.08 : 0.07 + Math.sin(breath) * 0.025) + greenhouseGlow + seasonWarm * 0.02) * (1 - night * 0.85);
+      // greenhouseGlow is CO₂'s tell — the candle pool warms with the census;
+      // its amplitude rides the shared 7s breath (±10%) so the pool lifts
+      // and settles in phase with the shader rooms
+      const glowPulse = ((reduce ? 0.08 : 0.07 + Math.sin(breath) * 0.025) + greenhouseGlow + seasonWarm * 0.02) * (1 - night * 0.85) * (0.9 + 0.20 * __sharedBreath);
       const glow = ctx.createRadialGradient(width * 0.5, height * 0.44, 10, width * 0.5, height * 0.44, Math.max(width, height) * 0.72);
       glow.addColorStop(0, `rgba(231, 172, 82, ${glowPulse + lens * 0.05})`);
       glow.addColorStop(0.55, "rgba(200, 115, 42, 0.04)");
@@ -1939,27 +1946,46 @@ export default function MoleculesField() {
               m.vy += s.dy * k * dt * 10;
             }
           }
-          for (const v of vortices) {
-            const age = (now - v.born) / 3000;
-            if (age >= 1) continue;
-            const dx = m.x - v.x;
-            const dy = m.y - v.y;
-            const dist = Math.max(14, Math.hypot(dx, dy));
-            const pull = (v.omega * (1 - age) * 900) / (dist * dist) * 60;
-            m.vx += (-dy / dist) * pull * dt * 10;
-            m.vy += (dx / dist) * pull * dt * 10;
-            m.vx -= (dx / dist) * Math.abs(pull) * dt * 2;
-            m.vy -= (dy / dist) * Math.abs(pull) * dt * 2;
-          }
-          for (const w of wavefronts) {
-            const age = (now - w.born) / 900;
-            if (age >= 1) continue;
-            const fr = w.maxR * age;
-            const d = Math.hypot(m.x - w.x, m.y - w.y);
-            if (Math.abs(d - fr) < 16 && d > 1) {
-              const k = w.strength * (1 - age) * 160;
-              m.vx += ((m.x - w.x) / d) * k * dt * 10;
-              m.vy += ((m.y - w.y) / d) * k * dt * 10;
+          // The wavefronts + vortex inner loops read as ambient stirring on
+          // the top tier; on low-tier / mobile (detail.samples < 0.5) they
+          // are the first thing to cull — the motes still Brownian-jitter,
+          // and the ring rippling through them was the fine polish, not
+          // the reading. Cheaper per-mote cost is the whole point of the
+          // tier ladder.
+          if (detail.samples >= 0.5) {
+            for (const v of vortices) {
+              const age = (now - v.born) / 3000;
+              if (age >= 1) continue;
+              const dx = m.x - v.x;
+              const dy = m.y - v.y;
+              // cache d² and only pay sqrt when the mote is actually within
+              // the vortex's reach — floor at 14 so the divide never blows
+              const d2v = dx * dx + dy * dy;
+              const dist = d2v > 196 ? Math.sqrt(d2v) : 14;
+              const pull = (v.omega * (1 - age) * 900) / (dist * dist) * 60;
+              m.vx += (-dy / dist) * pull * dt * 10;
+              m.vy += (dx / dist) * pull * dt * 10;
+              m.vx -= (dx / dist) * Math.abs(pull) * dt * 2;
+              m.vy -= (dy / dist) * Math.abs(pull) * dt * 2;
+            }
+            for (const w of wavefronts) {
+              const age = (now - w.born) / 900;
+              if (age >= 1) continue;
+              const fr = w.maxR * age;
+              // cache d² and only compute sqrt when the mote is plausibly
+              // near the ring (|d−fr| < 16 ⇒ (fr−16)² ≤ d² ≤ (fr+16)²)
+              const dxw = m.x - w.x;
+              const dyw = m.y - w.y;
+              const d2w = dxw * dxw + dyw * dyw;
+              const lo = Math.max(0, fr - 16);
+              const hi = fr + 16;
+              if (d2w < lo * lo || d2w > hi * hi) continue;
+              const d = Math.sqrt(d2w);
+              if (Math.abs(d - fr) < 16 && d > 1) {
+                const k = w.strength * (1 - age) * 160;
+                m.vx += (dxw / d) * k * dt * 10;
+                m.vy += (dyw / d) * k * dt * 10;
+              }
             }
           }
           m.x += m.vx * dt * timeScale;

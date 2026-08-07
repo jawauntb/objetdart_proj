@@ -50,6 +50,7 @@ import {
   onVisibility,
   resolveDpr,
 } from "@/lib/room-runtime";
+import { clocksFrom } from "@/lib/webgl/sizing";
 import {
   BASES,
   BASES_PER_TURN,
@@ -1109,7 +1110,10 @@ export default function HelixLadder() {
       const seq = seqRef.current;
       const n = seq.length;
       const t = audio.getAudioTime() ?? now / 1000;
-      const breath = reduced ? 0.5 : Math.sin(t * Math.PI * 2 * 0.14) * 0.5 + 0.5;
+      // the album's shared 7s breath (clocksFrom) — the ladder's strand
+      // luminance, nucleoplasm dust radius and origin glimmer all ride it,
+      // so /dna lifts and settles in phase with the shader rooms.
+      const breath = clocksFrom({ time: t, reducedMotion: reduced }).breath;
 
       // the zipper breaks bonds IN ORDER, one tick each
       const opened = openPairs(n, unzip);

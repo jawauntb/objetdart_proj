@@ -69,6 +69,7 @@ import {
   onVisibility,
   resolveDpr,
 } from "@/lib/room-runtime";
+import { clocksFrom } from "@/lib/webgl/sizing";
 import {
   HAND_MAX_A,
   MAX_A,
@@ -2476,8 +2477,13 @@ export default function NucleonsField() {
         ctx.fillRect(0, 0, width, height);
       }
 
-      // the vacuum's own faint grain
+      // the vacuum's own faint grain — its brightness rides the album's
+      // shared 7s breath (clocksFrom, ±10%) so this deep-scale field lifts
+      // and settles in phase with the shader rooms next to it in the gallery
+      const { breath: __nBreath } = clocksFrom({ time: nowReal / 1000, reducedMotion: reduce });
       const moteShown = Math.max(12, Math.round(motes.length * detail.particles));
+      ctx.save();
+      ctx.globalAlpha = 0.9 + 0.10 * __nBreath;
       for (let i = 0; i < moteShown; i++) {
         const m = motes[i];
         const dx = reduce ? 0 : Math.sin(localT * 0.24 + m.p) * 6 + windX * 22;
@@ -2487,6 +2493,7 @@ export default function NucleonsField() {
         ctx.arc(m.x + dx, m.y + dy, 0.8 + hash01(i + 9) * 0.7, 0, Math.PI * 2);
         ctx.fill();
       }
+      ctx.restore();
 
       // blasts, under the drops
       for (let i = blasts.length - 1; i >= 0; i--) {

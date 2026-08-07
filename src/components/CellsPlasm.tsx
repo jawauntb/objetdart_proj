@@ -48,6 +48,7 @@ import {
   onVisibility,
   resolveDpr,
 } from "@/lib/room-runtime";
+import { clocksFrom } from "@/lib/webgl/sizing";
 import {
   CELL_FAMILIES,
   CONTACT_RATIO,
@@ -1458,6 +1459,10 @@ export default function CellsPlasm() {
       try { audioT = audio().getAudioTime(); } catch { audioT = null; }
       const bt = audioT != null ? audioT : now / 1000;
       const breath = bt * Math.PI * 2 * 0.14;
+      // the album's shared 7s breath (clocksFrom) — the candle pool's
+      // amplitude rides it ±10% so this biological-scale field lifts and
+      // settles in phase with the shader rooms next to /cells in the gallery.
+      const { breath: __cellsBreath } = clocksFrom({ time: now / 1000, reducedMotion: reduce });
 
       // cells: growth, drift, decay of pushes and charges, retirement
       for (let i = cells.length - 1; i >= 0; i--) {
@@ -1639,8 +1644,9 @@ export default function CellsPlasm() {
       // otherwise it is one blit, and the whole frame budget goes to life.
       // season (three-finger twist) drifts the plasm's own slow warmth cycle
       const seasonWarm = Math.max(0, Math.sin(season * Math.PI * 2)) * 0.02;
+      // glowPulse amplitude rides the shared 7s breath (±10%)
       const glowPulse = ((reduce ? 0.1 : 0.09 + Math.sin(breath) * 0.03) + seasonWarm)
-        * (1 - night * 0.85) * (1 - breathGust * 0.55);
+        * (1 - night * 0.85) * (1 - breathGust * 0.55) * (0.9 + 0.20 * __cellsBreath);
       if (stageCtx && (Math.abs(lens - stageLens) > 0.003 || Math.abs(glowPulse - stageGlow) > 0.0015)) {
         stageLens = lens;
         stageGlow = glowPulse;
