@@ -391,6 +391,12 @@ export function useBandEdgeTravel(
     leaving: false,
     uiPressure: 0,
     offer: freshOffer(),
+    // Fingers still pressing: the room reports() while active and release()s
+    // on lift, so the tick TTL (a wheel/trackpad safety) must not steal the
+    // input mid-gesture. Without this a hand held at the room's zoom extreme
+    // — where no more report() calls arrive because the room's own zoom has
+    // stopped moving — bleeds wall intent instead of building it.
+    pressing: false,
   });
 
   const loop = useCallback(
@@ -403,7 +409,12 @@ export function useBandEdgeTravel(
       }
       const dt = now - r.lastT;
       r.lastT = now;
-      r.input = liveInput(r.input, now - r.lastEventAt);
+      // Skip the tick TTL while the hand is pressing — the room signals
+      // release() explicitly on lift, so stationary fingers at the extreme
+      // must keep pressing so intent can build past 320 ms.
+      if (!r.pressing) {
+        r.input = liveInput(r.input, now - r.lastEventAt);
+      }
       const { state, events, edgePressure } = stepScale(st, r.input, dt);
       r.state = state;
 
@@ -478,6 +489,7 @@ export function useBandEdgeTravel(
         if (!r.state) r.state = initialScaleState(scaleForRoomZoom(spec, zoom));
         r.input = input;
         r.lastEventAt = performance.now();
+        r.pressing = true;
       } else {
         r.input = { zoomVel: 0, active: false };
         // Inside the range the room owns the camera: keep s in lockstep and
@@ -493,7 +505,9 @@ export function useBandEdgeTravel(
   );
 
   const release = useCallback(() => {
-    refs.current.input = { zoomVel: 0, active: false };
+    const r = refs.current;
+    r.pressing = false;
+    r.input = { zoomVel: 0, active: false };
     wake();
   }, [wake]);
 
@@ -501,6 +515,7 @@ export function useBandEdgeTravel(
     const r = refs.current;
     r.input = { zoomVel: 0, active: false };
     r.state = null;
+    r.pressing = false;
     if (r.uiPressure !== 0 && !r.leaving) {
       r.uiPressure = 0;
       setUi(IDLE_UI);
@@ -530,6 +545,15 @@ export default function ScaleTravel({ route }: { route: string }) {
   // a change in the door is a felt event, not just a redrawn vignette.
   const pointRef = useRef<FramePoint | null>(null);
   const offeredRouteRef = useRef<string | null>(null);
+  // Fingers still on the glass, between pinch:start and pinch:end. The
+  // gesture engine only emits pinch:move when the two-pointer decomposition
+  // detects a scale change; once the hand has reached its physical range
+  // and stopped moving, no more move events fire and liveInput's tick TTL
+  // (a wheel/trackpad safety) marks the input inactive within 150 ms —
+  // pinch-holding at a wall then bleeds intent instead of building it, and
+  // the hand can never actually cross. Touch pinch has an explicit end,
+  // so we ignore the TTL while the fingers are known to be down.
+  const pinchDownRef = useRef(false);
 
   useEffect(() => {
     const entry = entryScaleFor(route);
@@ -559,7 +583,14 @@ export default function ScaleTravel({ route }: { route: string }) {
       if (!st || leavingRef.current) return;
       const dt = now - lastT;
       lastT = now;
-      inputRef.current = liveInput(inputRef.current, now - lastPinchAtRef.current);
+      // Skip the tick TTL while fingers are known to be down — the pinch:end
+      // signal is the reliable release for touch, and stationary fingers at
+      // a wall must keep pressing so intent can build past 320 ms. Wheel
+      // pinch has no start/end, so pinchDownRef stays false and the TTL is
+      // the only guard against a stray tick keeping the wall pressed.
+      if (!pinchDownRef.current) {
+        inputRef.current = liveInput(inputRef.current, now - lastPinchAtRef.current);
+      }
       const { state, events, edgePressure } = stepScale(st, inputRef.current, dt);
       stateRef.current = state;
 
@@ -640,10 +671,16 @@ export default function ScaleTravel({ route }: { route: string }) {
       {
         pinch: (e) => {
           if (e.phase === "end") {
+            pinchDownRef.current = false;
             inputRef.current = { zoomVel: 0, active: false };
             pointRef.current = null;
             offeredRouteRef.current = null;
           } else {
+            // Touch pinch fires start/move; wheel pinch fires only move. On
+            // touch this marks the hand as pressing so the loop can hold the
+            // last velocity past the tick TTL; on wheel it stays false and
+            // TTL still governs release.
+            pinchDownRef.current = true;
             // Spreading fingers = zoom in = toward smaller scales (s falls).
             inputRef.current = { zoomVel: -e.velocity, active: true };
             lastPinchAtRef.current = performance.now();
