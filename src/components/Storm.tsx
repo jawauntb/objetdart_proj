@@ -18,6 +18,13 @@ import {
   detailForTier,
 } from "@/lib/room-runtime";
 import { clocksFrom } from "@/lib/webgl/sizing";
+import {
+  buildBolt,
+  hashSeed as boltHashSeed,
+  mulberry32 as boltMulberry32,
+  DEFAULT_BOLT_CFG,
+  type BoltSeg,
+} from "@/lib/lightning";
 
 /**
  * /storm — a PRESSURE + ELECTRICITY instrument.
@@ -74,12 +81,17 @@ export default function Storm() {
   // calm scalar — when "clear sky" is pressed, ramps amp toward 0.
   const calmRef = useRef<number>(0);
   const calmStartedRef = useRef<number>(0);
-  // forked lightning bolt currently on screen.
-  type BoltSeg = { x0: number; y0: number; x1: number; y1: number; main: boolean };
+  // forked lightning bolt currently on screen — the segment shape comes
+  // from src/lib/lightning.ts so /zeus builds bolts with the same anatomy.
   const lightningRef = useRef<{
     t0: number; life: number; segments: BoltSeg[]; intensity: number; hitX: number; hitY: number;
   } | null>(null);
   const lastLightningAt = useRef<number>(0);
+  // per-strike seed advance — increments on each discharge so consecutive
+  // bolts differ. The extraction moved the bolt from Math.random to a
+  // seeded stream (src/lib/lightning.ts); the visitor still sees variety,
+  // the room is now deterministic given (seed, strike count).
+  const stormBoltSeedRef = useRef<number>(0x570e | 0);
   // bridge so React controls can trigger a discharge defined inside the loop.
   const dischargeRef = useRef<(() => void) | null>(null);
   // bridge for LetGo — the room's kept storm cells, cleared from outside the loop.
@@ -593,28 +605,10 @@ export default function Storm() {
     };
 
     // ── forked lightning generator ────────────────────────────────
-    const buildBolt = (
-      x0: number, y0: number, x1: number, y1: number,
-      gen: number, disp: number, main: boolean, out: BoltSeg[],
-    ) => {
-      const dx = x1 - x0;
-      const dy = y1 - y0;
-      if (gen <= 0 || dx * dx + dy * dy < 64) {
-        out.push({ x0, y0, x1, y1, main });
-        return;
-      }
-      const mx = (x0 + x1) / 2 + (Math.random() - 0.5) * disp;
-      const my = (y0 + y1) / 2 + (Math.random() - 0.5) * disp * 0.35;
-      buildBolt(x0, y0, mx, my, gen - 1, disp * 0.58, main, out);
-      buildBolt(mx, my, x1, y1, gen - 1, disp * 0.58, main, out);
-      if (gen > 1 && Math.random() < 0.42) {
-        const bl = 0.5 + Math.random() * 0.7;
-        const bx = mx + dx * bl * 0.5 + (Math.random() - 0.5) * disp * 1.2;
-        const by = my + Math.abs(dy) * bl * 0.5 + Math.random() * disp * 0.4;
-        buildBolt(mx, my, bx, by, gen - 2, disp * 0.5, false, out);
-      }
-    };
-
+    // The shape is in src/lib/lightning.ts now — a shared, seeded, pure
+    // fractal both /storm and /zeus draw from. Storm keeps feeling random
+    // to the visitor because we advance the seed per strike; the change
+    // under the hood is Math.random → seeded pseudo-random.
     const dischargeAt = (sxFrac: number) => {
       const now = performance.now();
       const cur = lightningRef.current;
@@ -623,13 +617,20 @@ export default function Storm() {
       const h = lines.clientHeight;
       const charge = Math.max(0.28, chargeRef.current);
       const intensity = 0.5 + charge * 0.55;
-      const x0 = sxFrac * w + (Math.random() - 0.5) * w * 0.04;
+      // advance the per-strike seed — the visitor sees a fresh bolt on
+      // every discharge, and a replay of the same seed lands the same one.
+      stormBoltSeedRef.current = (stormBoltSeedRef.current + 1) | 0;
+      const strikeSeed = boltHashSeed(stormBoltSeedRef.current, Math.floor(sxFrac * 10000));
+      const rng = boltMulberry32(strikeSeed);
+      const x0 = sxFrac * w + (rng() - 0.5) * w * 0.04;
       const y0 = h * 0.015;
       const seaTopPx = h * SEA_TOP;
-      const hitY = seaTopPx + h * (0.03 + Math.random() * 0.10);
-      const hitX = x0 + (Math.random() - 0.5) * w * 0.10;
-      const segments: BoltSeg[] = [];
-      buildBolt(x0, y0, hitX, hitY, 6, w * 0.12, true, segments);
+      const hitY = seaTopPx + h * (0.03 + rng() * 0.10);
+      const hitX = x0 + (rng() - 0.5) * w * 0.10;
+      const segments: BoltSeg[] = buildBolt(x0, y0, hitX, hitY, {
+        ...DEFAULT_BOLT_CFG,
+        displacement: w * DEFAULT_BOLT_CFG.displacement,
+      }, strikeSeed);
       lightningRef.current = { t0: simNow, life: 0.42, segments, intensity, hitX, hitY };
       lastLightningAt.current = now;
 
