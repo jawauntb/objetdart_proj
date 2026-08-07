@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { getFieldAudio } from "@/lib/audio";
 import { attachGestures } from "@/lib/gesture";
 import { onVessel } from "@/lib/vessel";
-import { onVisibility, resolveDpr } from "@/lib/room-runtime";
+import { onGalleryPause, onVisibility, resolveDpr } from "@/lib/room-runtime";
 import * as haptics from "@/lib/haptics";
 
 /**
@@ -487,13 +487,15 @@ export default function PhaseChart({
 
     // no cascade drawing while the tab/frame is hidden.
     let sleeping = document.hidden;
+    let galleryPaused = false;
     const offVisibility = onVisibility((hidden) => { sleeping = hidden; });
+    const offGalleryPause = onGalleryPause((p) => { galleryPaused = p; });
 
     if (reduce) {
       // Static, fully drawn — no cascade.
       progressBuf.fill(1);
       drawAt(progressBuf);
-      return () => { ro.disconnect(); offVisibility(); };
+      return () => { ro.disconnect(); offVisibility(); offGalleryPause(); };
     }
 
     // IntersectionObserver: when the canvas crosses threshold 0.3,
@@ -503,7 +505,7 @@ export default function PhaseChart({
     let startTime = 0;
 
     const tick = (now: number) => {
-      if (sleeping) { raf = requestAnimationFrame(tick); return; }
+      if (sleeping || galleryPaused) { raf = requestAnimationFrame(tick); return; }
       if (!startTime) startTime = now;
       const elapsed = now - startTime;
       const overall = Math.min(1, elapsed / DRAW_IN_MS);
@@ -541,6 +543,7 @@ export default function PhaseChart({
       io.disconnect();
       ro.disconnect();
       offVisibility();
+      offGalleryPause();
       if (raf) cancelAnimationFrame(raf);
     };
   }, [kind, accent]);

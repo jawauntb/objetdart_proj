@@ -31,7 +31,7 @@ import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
 import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
-import { createFrameGovernor, onVisibility, resolveDpr } from "@/lib/room-runtime";
+import { createFrameGovernor, onGalleryPause, onVisibility, resolveDpr } from "@/lib/room-runtime";
 import LetGo from "@/components/LetGo";
 
 // ── determinism ──────────────────────────────────────────────────────
@@ -106,7 +106,9 @@ export default function Aphros() {
     // ── the performance contract (src/lib/room-runtime) ────────────────
     const gov = createFrameGovernor();
     let sleeping = false;
+    let galleryPaused = false;
     const offVisibility = onVisibility((hidden) => { sleeping = hidden; });
+    const offGalleryPause = onGalleryPause((p) => { galleryPaused = p; });
 
     // ── size ─────────────────────────────────────────────────────────
     let width = 0;
@@ -1316,7 +1318,7 @@ export default function Aphros() {
 
             const draw = (now: number) => {
               gov.beginFrame(now);
-              if (sleeping || contextLost) { raf = requestAnimationFrame(draw); return; } // no draw while hidden
+              if (sleeping || galleryPaused || contextLost) { raf = requestAnimationFrame(draw); return; } // no draw while hidden or gallery-paused
               const rawDt = Math.min(64, now - lastNow) / 1000;
               lastNow = now;
               timeScale += (timeScaleTarget - timeScale) * Math.min(1, rawDt * 5);
@@ -1541,6 +1543,7 @@ export default function Aphros() {
     return () => {
       observer.disconnect();
       offVisibility();
+      offGalleryPause();
       canvas.removeEventListener("webglcontextlost", onGlContextLost);
       canvas.removeEventListener("webglcontextrestored", onGlContextRestored);
       detachGestures();

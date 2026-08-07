@@ -33,6 +33,7 @@ import {
   createIdleWriter,
   detailForTier,
   isEmbeddedFrame,
+  onGalleryPause,
   onVisibility,
 } from "@/lib/room-runtime";
 import { createGLStage, FULLSCREEN_VERT_CLIP } from "@/lib/webgl/stage";
@@ -651,9 +652,14 @@ export default function PlasmaOrb() {
 
     const gov = createFrameGovernor();
     let hidden = false;
+    let galleryPaused = false;
     const offVisibility = onVisibility((h) => {
       hidden = h;
       if (h) gov.force("sleep");
+    });
+    const offGalleryPause = onGalleryPause((p) => {
+      galleryPaused = p;
+      if (p) gov.force("sleep");
     });
 
     let raf = 0;
@@ -663,9 +669,9 @@ export default function PlasmaOrb() {
 
     const draw = (now: number) => {
       const tier = gov.beginFrame(now);
-      if (hidden) {
+      if (hidden || galleryPaused) {
         last = now;
-        raf = requestAnimationFrame(draw); // no draw while the tab is away
+        raf = requestAnimationFrame(draw); // no draw while the tab is away or the gallery has paused this iframe
         return;
       }
       const detail = detailForTier(tier);
@@ -747,6 +753,7 @@ export default function PlasmaOrb() {
     return () => {
       cancelAnimationFrame(raf);
       offVisibility();
+      offGalleryPause();
       media.removeEventListener?.("change", onMedia);
       writer.flush();
       quad?.dispose();

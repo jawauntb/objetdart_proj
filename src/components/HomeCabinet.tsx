@@ -28,7 +28,7 @@ import * as haptics from "@/lib/haptics";
 import { attachGestures } from "@/lib/gesture";
 import { THRESHOLDS, tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
-import { createFrameGovernor, createIdleWriter, detailForTier, isEmbeddedFrame, onVisibility, resolveDpr } from "@/lib/room-runtime";
+import { createFrameGovernor, createIdleWriter, detailForTier, isEmbeddedFrame, onGalleryPause, onVisibility, resolveDpr } from "@/lib/room-runtime";
 import { SITE_ROUTE_BY_KEY, SITE_ROUTES, type SiteRouteCluster, type SiteRouteEntry } from "@/lib/routes";
 import { useField } from "@/store/field";
 import type { ConcernKey } from "@/lib/types";
@@ -864,7 +864,9 @@ export default function HomeCabinet() {
     // the tab is hidden. No allocation happens inside tick() below.
     const gov = createFrameGovernor();
     let sleeping = false;
+    let galleryPaused = false;
     const offVisibility = onVisibility((hidden) => { sleeping = hidden; });
+    const offGalleryPause = onGalleryPause((p) => { galleryPaused = p; });
     const embedded = isEmbeddedFrame();
 
     const resize = () => {
@@ -895,7 +897,7 @@ export default function HomeCabinet() {
       if (tier !== lastTier) { lastTier = tier; resize(); }
       const dtReal = Math.min(0.05, (now - last) / 1000);
       last = now;
-      if (sleeping) { raf = requestAnimationFrame(tick); return; } // no draw while hidden
+      if (sleeping || galleryPaused) { raf = requestAnimationFrame(tick); return; } // no draw while hidden or gallery-paused
 
       // three-finger hold dilates the cabinet's own time, eased so it
       // never snaps; every periodic term below reads simTime, not the
@@ -1039,6 +1041,7 @@ export default function HomeCabinet() {
       cancelAnimationFrame(raf);
       ro.disconnect();
       offVisibility();
+      offGalleryPause();
       reduceMotion.removeEventListener?.("change", updateReduce);
       delete (window as unknown as Record<string, unknown>).__homeCabinet;
       routeGems.forEach(({ material, line }) => {

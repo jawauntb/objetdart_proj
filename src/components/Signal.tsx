@@ -12,7 +12,7 @@ import WaterText from "@/components/WaterText";
 import { attachGestures } from "@/lib/gesture";
 import { holdTier, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
-import { createFrameGovernor, detailForTier, onVisibility, resolveDpr } from "@/lib/room-runtime";
+import { createFrameGovernor, detailForTier, onGalleryPause, onVisibility, resolveDpr } from "@/lib/room-runtime";
 import LetGo from "@/components/LetGo";
 
 // Same mapping as audio.ts — duplicated here only so the UI can label the
@@ -813,7 +813,9 @@ export default function Signal() {
     // + DPR ceiling + tier-scaled detail. No draw while document.hidden.
     const gov = createFrameGovernor();
     let sleeping = document.hidden;
+    let galleryPaused = false;
     const offVisibility = onVisibility((hidden) => { sleeping = hidden; });
+    const offGalleryPause = onGalleryPause((p) => { galleryPaused = p; });
 
     // cached gradients — rebuilt only on resize, never per frame.
     let bgGrad: CanvasGradient | null = null;
@@ -1158,7 +1160,7 @@ export default function Signal() {
     const draw = (now: number) => {
       const tier = gov.beginFrame(now);
       raf = requestAnimationFrame(draw);
-      if (sleeping) return; // no draw while the tab/frame is hidden
+      if (sleeping || galleryPaused) return; // no draw while the tab/frame is hidden or the gallery has paused this iframe
 
       const detail = detailForTier(tier);
       const w = window.innerWidth;
@@ -1436,6 +1438,7 @@ export default function Signal() {
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", resize);
       offVisibility();
+      offGalleryPause();
       detachGestures();
       detachVessel();
       for (const t of lockTimers) window.clearTimeout(t);

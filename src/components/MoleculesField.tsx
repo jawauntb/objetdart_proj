@@ -47,6 +47,7 @@ import {
   createFrameGovernor,
   detailForTier,
   isEmbeddedFrame,
+  onGalleryPause,
   onVisibility,
   resolveDpr,
 } from "@/lib/room-runtime";
@@ -327,7 +328,9 @@ export default function MoleculesField() {
     // ————— performance contract: frame governor + visibility sleep —————
     const gov = createFrameGovernor();
     let sleeping = false;
+    let galleryPaused = false;
     const offVis = onVisibility((hidden) => { sleeping = hidden; });
+    const offGalleryPause = onGalleryPause((p) => { galleryPaused = p; });
 
     // the world-law's slow cycle (three-finger twist): the solvent's own
     // season, 0..1 cyclic — a warm/cool drift in the candlelight, nothing else
@@ -1667,7 +1670,7 @@ export default function MoleculesField() {
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
       const tier = gov.beginFrame(now);
-      if (sleeping) return; // no draw while the document is hidden
+      if (sleeping || galleryPaused) return; // no draw while the document is hidden or the gallery has paused this iframe
       if (!reduce && now - lastFrame < 30) return;
       lastFrame = now;
       const detail = detailForTier(tier);
@@ -2118,6 +2121,7 @@ export default function MoleculesField() {
       detach();
       detachVessel();
       offVis();
+      offGalleryPause();
       markLens(false);
       wrap.removeEventListener("keydown", onKeyDown);
       wrap.removeEventListener("keyup", onKeyUp);

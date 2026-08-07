@@ -45,6 +45,7 @@ import {
   createFrameGovernor,
   detailForTier,
   isEmbeddedFrame,
+  onGalleryPause,
   onVisibility,
   resolveDpr,
 } from "@/lib/room-runtime";
@@ -229,7 +230,9 @@ export default function OrganicsField() {
     // ————— performance contract —————
     const gov = createFrameGovernor();
     let sleeping = false;
+    let galleryPaused = false;
     const offVis = onVisibility((hidden) => { sleeping = hidden; });
+    const offGalleryPause = onGalleryPause((p) => { galleryPaused = p; });
 
     // three-finger twist = season: the solvent's own slow cycle
     let season = 0;
@@ -1367,7 +1370,7 @@ export default function OrganicsField() {
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
       const tier = gov.beginFrame(now);
-      if (sleeping) return; // no draw while the document is hidden
+      if (sleeping || galleryPaused) return; // no draw while the document is hidden or the gallery has paused this iframe
       const detail = detailForTier(tier);
       const delta = Math.min(64, now - last);
       last = now;
@@ -1912,6 +1915,7 @@ export default function OrganicsField() {
       detachGestures();
       detachVessel();
       offVis();
+      offGalleryPause();
       markLens(false);
       wrap.removeEventListener("keydown", onKeyDown);
       wrap.removeEventListener("keyup", onKeyUp);
