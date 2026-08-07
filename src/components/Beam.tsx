@@ -115,6 +115,8 @@ attribute float aDepth;   // 0 near .. 1 far — drives focus and parallax
 attribute float aPhase;   // per-petal random phase
 attribute float aSeed;    // per-petal random 0..1
 attribute float aSun;     // which sun this petal belongs to (0 or 1)
+attribute float aIdx;     // per-petal integer index (0..COUNT-1) so the
+                          // idle-glimmer can single out one loose petal by id
 
 uniform float uTime;
 uniform float uRot;
@@ -130,6 +132,8 @@ uniform float uRippleAmp; // 1.0 for a tap, larger for the long-press exhale
 uniform float uFlash;
 uniform float uFocus;     // which depth is in focus 0..1
 uniform float uPupil;     // long-press dilation 0..1
+uniform int   uMeteorIdx; // the petal chosen for the idle glimmer, -1 when none
+uniform float uMeteorT;   // ms since the glimmer started; >= 1400 means over
 
 varying vec2 vUv;
 varying float vBlur;
@@ -169,7 +173,14 @@ void main() {
   }
 
   float twinkle = 0.5 + 0.5 * sin(uTime * (1.3 + aSeed * 2.2) + aPhase * 20.0);
-  vGlow = 0.58 + 0.55 * wave + 0.9 * glowR + uFlash + 0.34 * twinkle;
+  // idle glimmer: a single loose petal, chosen by uMeteorIdx, brightens
+  // its trail for 1400ms and then falls back into formation. The manifest
+  // has promised this for the whole life of the room — the wiring finally
+  // arrives with uMeteorIdx / uMeteorT.
+  float meteor = smoothstep(1400.0, 0.0, uMeteorT)
+               * step(abs(aIdx - float(uMeteorIdx)), 0.5);
+  vGlow = 0.58 + 0.55 * wave + 0.9 * glowR + uFlash + 0.34 * twinkle
+        + meteor * 1.15;
 
   // out-of-focus petals swell and soften — bokeh
   vBlur = abs(aDepth - uFocus) * (0.75 + uPupil * 0.5);
@@ -525,6 +536,12 @@ export default function Beam() {
   const shakeRef = useRef({ pending: 0 });
   const knockRef = useRef({ pending: 0 });
   const reduceRef = useRef(false);
+  // The idle-glimmer's memory of when the room was last touched. Every
+  // classified gesture and every vessel event bumps it; the render loop
+  // reads it and triggers a lone-petal meteor once the interval passes.
+  // Bumped from two useEffects (vessel + gesture) so it must live at the
+  // component scope, not inside either one.
+  const lastGestureRef = useRef<number>(0);
 
   const [memory] = useState<BeamMemory>(loadMemory);
   const [tempo, setTempo] = useState(memory.tempo ?? 1);
@@ -592,15 +609,19 @@ export default function Beam() {
       tilt: ({ beta, gamma }) => {
         tiltRef.current.tx = clamp(gamma / 40, -1, 1);
         tiltRef.current.ty = clamp(beta / 40, -1, 1);
+        lastGestureRef.current = performance.now();
       },
       shake: ({ intensity }) => {
         if (reduceRef.current) return;
         shakeRef.current.pending = clamp(intensity, 0.4, 1);
+        lastGestureRef.current = performance.now();
       },
       knock: ({ intensity }) => {
         knockRef.current.pending = clamp(0.5 + intensity * 0.4, 0.5, 1);
+        lastGestureRef.current = performance.now();
       },
       flip: ({ faceDown }) => {
+        lastGestureRef.current = performance.now();
         if (!faceDown) return;
         nightWantRef.current = true;
         setIsNight(true);
@@ -705,6 +726,13 @@ export default function Beam() {
       uMeteorA: { value: new THREE.Vector2(0, 0) },
       uMeteorD: { value: new THREE.Vector2(1, 0) },
       uMeteorAge: { value: 99 },
+      // The idle-only petal-glimmer. Independent of the ballistic sky-streak
+      // above (uMeteorA/D/Age) — that one is either a triple-tap shower or a
+      // ceremony call, and neither has ever waited for the room to go quiet.
+      // uMeteorIdx = -1 while nothing is chosen, so the shader's step(...)
+      // rejects every petal until an idle interval trips the raf-loop check.
+      uMeteorIdx: { value: -1 },
+      uMeteorT: { value: 9999 },
     };
 
     // background sky
@@ -740,6 +768,10 @@ export default function Beam() {
     const aPhase = new Float32Array(COUNT);
     const aSeed = new Float32Array(COUNT);
     const aSun = new Float32Array(COUNT);
+    // aIdx carries the instance index into the vert so the idle-glimmer can
+    // pick one loose petal by id without needing gl_InstanceID (which was not
+    // available in the WebGL1 path this shader still compiles under).
+    const aIdx = new Float32Array(COUNT);
     // petals arranged in loose rings, like the video: a few seeds per ring
     // step, jittered so the formation is organic rather than mechanical.
     // Seeded, not Math random — the initial formation is what the room
@@ -753,6 +785,7 @@ export default function Beam() {
       aPhase[i] = formRng();
       aSeed[i] = formRng();
       aSun[i] = formRng() < 0.55 ? 0 : 1;
+      aIdx[i] = i;
     }
     geo.setAttribute("aRing", new THREE.InstancedBufferAttribute(aRing, 1));
     geo.setAttribute("aAng", new THREE.InstancedBufferAttribute(aAng, 1));
@@ -760,6 +793,7 @@ export default function Beam() {
     geo.setAttribute("aPhase", new THREE.InstancedBufferAttribute(aPhase, 1));
     geo.setAttribute("aSeed", new THREE.InstancedBufferAttribute(aSeed, 1));
     geo.setAttribute("aSun", new THREE.InstancedBufferAttribute(aSun, 1));
+    geo.setAttribute("aIdx", new THREE.InstancedBufferAttribute(aIdx, 1));
 
     const petalMat = new THREE.ShaderMaterial({
       vertexShader: PETAL_VERT,
@@ -832,6 +866,16 @@ export default function Beam() {
     // replays the same way.
     let meteorNext = 12 + Math.random() * 18;
     let meteorSerial = 0;
+    // Idle petal-glimmer — the manifest's 20s promise. lastMeteorAt gates
+    // repeats to at most one every 8s, so a still viewer sees the room
+    // remember them without being pestered. The trip picks a petal via the
+    // seeded PRNG (never Math.random) so the same idle window on the same
+    // second always glimmers the same petal.
+    lastGestureRef.current = performance.now();
+    let lastMeteorAt = 0;
+    const GLIMMER_IDLE_MS = 20000;
+    const GLIMMER_COOLDOWN_MS = 8000;
+    const GLIMMER_DURATION_MS = 1400;
     let bary = new THREE.Vector2(0, 0);
     const baryTarget = new THREE.Vector2(0, 0);
     let orbAng = 0;
@@ -936,8 +980,14 @@ export default function Beam() {
       try { haptics.storm(); } catch { /* noop */ }
     };
 
+    // Every classified gesture bumps lastGestureRef; the render loop uses
+    // it to decide when the room has gone quiet enough for the idle-glimmer
+    // to fire a lone-petal meteor.
+    const bumpIdle = () => { lastGestureRef.current = performance.now(); };
+
     const detachGestures = attachGestures(renderer.domElement, {
       tap: (e) => {
+        bumpIdle();
         ensureAudio();
         if (e.fingers === 2) {
           // step back: a focus pinned by a tap breathes free again
@@ -992,6 +1042,7 @@ export default function Beam() {
         }
       },
       drag: (e) => {
+        bumpIdle();
         ensureAudio();
         if (e.fingers === 3) {
           if (e.phase === "end") return;
@@ -1014,12 +1065,14 @@ export default function Beam() {
         }
       },
       flick: (e) => {
+        bumpIdle();
         if (e.fingers !== 1) return;
         gustAmt = clamp(gustAmt + Math.min(2, e.speed * 0.8), 0, 2);
         try { audioRef.current?.whoosh(1); } catch { /* noop */ }
         try { haptics.chop(); } catch { /* noop */ }
       },
       scrub: (e) => {
+        bumpIdle();
         ensureAudio();
         // a circling finger stirs the whole formation after the hand — the
         // rings turn with the winding, faster the faster you circle
@@ -1033,6 +1086,7 @@ export default function Beam() {
         try { haptics.ripple(0.35); } catch { /* noop */ }
       },
       rhythm: (e) => {
+        bumpIdle();
         // a steady tapped pulse: the room's whole clock — rotation, wave,
         // waltz, weather — entrains to the hand's tempo and keeps it
         if (e.stability <= 0.7 || e.bpm < 40 || e.bpm > 200) return;
@@ -1043,6 +1097,7 @@ export default function Beam() {
         try { haptics.lens(); } catch { /* noop */ }
       },
       hold: (e) => {
+        bumpIdle();
         ensureAudio();
         if (e.fingers === 3) {
           // three fingers hold the law: time dilates to a quarter speed
@@ -1098,6 +1153,7 @@ export default function Beam() {
         }
       },
       pinch: (e) => {
+        bumpIdle();
         ensureAudio();
         if (e.phase === "end") {
           memRef.current.sep = sepTarget;
@@ -1110,6 +1166,7 @@ export default function Beam() {
         sepTarget = clamp(sepTarget * e.scale, 0.04, 0.9);
       },
       twist: (e) => {
+        bumpIdle();
         ensureAudio();
         if (e.fingers === 3) {
           // three-finger twist: advance/rewind the formation's season
@@ -1120,6 +1177,7 @@ export default function Beam() {
         if (e.phase === "move") rotExtra -= e.angle;
       },
       pan2: (e) => {
+        bumpIdle();
         ensureAudio();
         // two fingers carry the system across the sky
         const rect = renderer.domElement.getBoundingClientRect();
@@ -1209,6 +1267,22 @@ export default function Beam() {
         flash = Math.max(flash, 0.5);
         try { audioRef.current?.nightfall(night); } catch { /* noop */ }
         try { haptics.ripple(0.6); } catch { /* noop */ }
+      }
+
+      // The idle-glimmer, wall-clock gated: after 20s of no gesture, and
+      // no more than once every 8s, one loose petal brightens its trail
+      // for 1.4s. The single petal is picked by hashing the second of `now`
+      // so a returning eye sees the same room's memory of the same second.
+      if (now - lastGestureRef.current > GLIMMER_IDLE_MS
+          && now - lastMeteorAt > GLIMMER_COOLDOWN_MS
+          && !reduced) {
+        const seed = hashSeed(Math.floor(now / 1000), 0x91ce);
+        uniforms.uMeteorIdx.value = Math.floor(mulberry32(seed)() * COUNT);
+        uniforms.uMeteorT.value = 0;
+        lastMeteorAt = now;
+      }
+      if (uniforms.uMeteorT.value < GLIMMER_DURATION_MS) {
+        uniforms.uMeteorT.value += dt * 1000;
       }
 
       // a loose petal, every so often
