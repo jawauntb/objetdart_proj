@@ -1,22 +1,27 @@
 "use client";
 
 /**
- * Zeus — the peak ring's fourth seat: the charged sky as the mountain's king.
+ * Zeus — the peak ring's fourth seat: the charged sky held as the god who
+ * surveys the whole world.
  *
  * /storm owns the meteorology of a storm — pressure, charge, discharge as
- * weather. This room is the same sky held as governance: thunderheads gather
- * under a dwell, court each other by induction (lib/zeussky attraction),
- * merge into greater houses when their anvils touch, and spend themselves in
- * one bolt to the ridge. The thunder is the ledger — thunderHz inverts, so a
- * listener reads the size of every strike off its pitch alone.
+ * weather. This room is the same sky held as governance: cosmic thunderheads
+ * gather under a dwell, court each other by induction (lib/zeussky
+ * attraction), merge into greater houses when their anvils touch, and spend
+ * themselves in one bolt that arcs across the cosmos to the small earth in
+ * the corner. The thunder is the ledger — thunderHz inverts, so a listener
+ * reads the size of every strike off its pitch alone.
  *
- * The material is a fragment shader (sky, ridge, flash, ridge-scorch) plus
- * a 2D overlay for the bolt itself — every strike is a set of segments
- * returned by src/lib/lightning.ts's buildBolt, drawn on the overlay with
- * the same glow + branch + main-channel grammar /storm uses, so a visitor
- * moving between the two rooms sees the same lightning anatomy. The
- * population is one instanced draw; every law the room claims lives in
- * src/lib/zeussky.ts and is pinned by scripts/test-zeussky.mjs.
+ * The material is a fragment shader (deep cosmos, dense starfield, faint
+ * galactic wisp, and the earth-in-corner: a shaded sphere with terminator,
+ * atmosphere rim, procedural continents, and the earth-scorch — the god's
+ * warm touch where a ceremony bolt lands) plus a 2D overlay for the bolt
+ * itself. Every strike is a set of segments returned by src/lib/lightning.ts's
+ * buildBolt, drawn on the overlay with the same glow + branch + main-channel
+ * grammar /storm uses, so a visitor moving between the two rooms sees the
+ * same lightning anatomy. The population is one instanced draw; every law
+ * the room claims lives in src/lib/zeussky.ts and is pinned by
+ * scripts/test-zeussky.mjs.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -65,12 +70,24 @@ import {
 
 const STORAGE_KEY = "objetdart:zeus:v1";
 
-// The sky the court convenes in: clouds hold to the upper reaches, above the
-// ridge the bolts answer to.
-const SKY_TOP = 0.08;
-const SKY_FLOOR = 0.52;
+// The cosmos the court convenes in: houses roam almost the whole frame — the
+// earth-in-corner is the only anchor, so the SKY_TOP climbs and the SKY_FLOOR
+// falls almost to the frame's bottom. These constants ARE the shader's uv
+// bounds for the thunderhead population; the earth-corner constants below
+// keep the JS side agreed with what the shader draws.
+const SKY_TOP = 0.05;
+const SKY_FLOOR = 0.75;
 
-// ——— the field: night over the peak, charge shimmer, sheet flash, the bolt.
+// The earth-in-corner — position and radius in uv space. uv.y here is the
+// shader's already-flipped uv (0 at bottom, 1 at top). Hoisted to JS so both
+// the shader and fireBolt agree on where the earth actually is: a ceremony
+// bolt aims at a point on the lit hemisphere derived from these numbers.
+const EARTH_CENTER_UV_X = 0.82;
+const EARTH_CENTER_UV_Y = 0.20;
+const EARTH_RADIUS_UV = 0.10;
+
+// ——— the field: deep cosmos, dense starfield, faint galactic wisp, the
+// earth-in-corner, and the earth-scorch where the god's touch lands.
 // Naming: the shared breath (`uBreath`) reaches every room whose shader
 // declares it, per `src/lib/webgl/sizing.ts` — same convention as /reef and
 // /root — and the room-quality bar reads the manifest's `life.breath.reads`
@@ -88,128 +105,209 @@ uniform float u_wind;
 uniform float u_charge;
 uniform float u_flash;
 uniform float u_night;
-uniform float u_season;
 uniform float u_lens;
-// the ridge's answer to the bolt — 1 at the moment of the strike, decaying
-// to 0 over ~1.5s. u_strikeX is where along the ridge the bolt landed, so
-// the scorch is local, not a curtain over the whole crest.
-uniform float u_ridgeStrike;
-uniform float u_strikeX;
-// the vessel's own lean — gamma / 45 clamped to ±1. Pushes the cloud band and
-// the star field a few percent of the frame laterally, so a tilt actually
-// leans the whole court.
+// the earth's answer to the bolt — 1 at the moment of the strike, decaying
+// to 0 over ~1.5s. u_earthStrikeUV is a 2D point in local earth space
+// (offset from the earth's center in radius-units, ~-1..1 on each axis) so
+// the warm scorch stays exactly where the bolt actually landed.
+uniform float u_earthStrike;
+uniform vec2  u_earthStrikeUV;
+// the vessel's own lean — gamma / 45 clamped to ±1. Pushes the cosmos and
+// the starfield a few percent of the frame laterally, so a tilt actually
+// leans the whole sky.
 uniform float u_tiltX;
 // pre-ceremony dimming — 0 at rest, climbs while a one-finger hold approaches
-// the ceremony tier so the sky feels inevitable before the crack lands.
+// the ceremony tier so the cosmos feels inevitable before the crack lands.
 uniform float u_darken;
 
 float hash(float n) { return fract(sin(n) * 43758.5453123); }
+float hash2(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
 float noise(float x) {
   float i = floor(x);
   float f = fract(x);
   float u = f * f * (3.0 - 2.0 * f);
   return mix(hash(i), hash(i + 1.0), u);
 }
-
-// layer: ridge — the peak itself, a closed-form skyline the bolts strike.
-float ridge(float x) {
-  float y = 0.66;
-  y -= 0.16 * exp(-pow((x - 0.52) * 4.2, 2.0));       // the summit
-  y -= 0.07 * exp(-pow((x - 0.22) * 5.5, 2.0));       // the western shoulder
-  y -= 0.05 * exp(-pow((x - 0.80) * 6.0, 2.0));       // the eastern shoulder
-  y += 0.012 * sin(x * 41.0) + 0.008 * sin(x * 97.0); // scree
-  return y;
+// 2D value noise for the earth's continents and the galactic wisp.
+float noise2(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  float a = hash2(i);
+  float b = hash2(i + vec2(1.0, 0.0));
+  float c = hash2(i + vec2(0.0, 1.0));
+  float d = hash2(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+// Three-octave fbm — the wisp is faint, so four would be waste.
+float fbm2(vec2 p) {
+  float s = 0.0;
+  float a = 0.5;
+  for (int i = 0; i < 3; i++) {
+    s += a * noise2(p);
+    p = p * 2.03 + vec2(11.7, 5.3);
+    a *= 0.5;
+  }
+  return s;
 }
 
 // The bolt itself is no longer drawn in the shader — /storm and /zeus now
 // share the fractal in src/lib/lightning.ts and render the segments on a
-// 2D overlay on top of this pass. The shader still owns the ridge scorch
-// (u_ridgeStrike / u_strikeX) so the mountain visibly RECEIVES the strike,
-// and the sky-wide u_flash still lights the cloud band from within.
+// 2D overlay on top of this pass. The shader still owns the earth-scorch
+// (u_earthStrike / u_earthStrikeUV) so the earth visibly RECEIVES the
+// strike, and the frame-wide u_flash still lights the cosmic thunderheads
+// from within.
+
+// The earth-in-corner: a shaded sphere with a lit hemisphere, a terminator,
+// a paler atmosphere rim, procedural continents, and a warm scorch where a
+// ceremony bolt landed. Returns pre-multiplied vec4 so it composites cleanly
+// on the cosmos underneath.
+vec4 earthCorner(vec2 uv, float earthStrike, vec2 earthStrikeUV) {
+  vec2 center = vec2(${EARTH_CENTER_UV_X.toFixed(3)}, ${EARTH_CENTER_UV_Y.toFixed(3)});
+  float radius = ${EARTH_RADIUS_UV.toFixed(3)};
+  vec2 d = uv - center;
+  float r = length(d);
+  if (r > radius * 1.20) return vec4(0.0);
+  // rim: atmosphere reads first, before the body
+  float atmo = smoothstep(radius * 1.18, radius * 1.00, r);
+  float body = smoothstep(radius * 1.02, radius * 0.96, r);
+  // sphere normal — clamp so the sqrt behaves at the limb
+  float rn = min(1.0, r / radius);
+  float z = sqrt(max(0.0, 1.0 - rn * rn));
+  vec3 n = normalize(vec3(d / radius, z));
+  // light from the upper-left, warm-white; the terminator is dot(n, L)
+  vec3 L = normalize(vec3(-0.42, 0.55, 0.72));
+  float lit = max(0.0, dot(n, L));
+  float day = smoothstep(-0.05, 0.40, dot(n, L));
+  // continents: a two-octave noise on the local sphere direction, thresholded
+  // into a landness field. Not literal geography — a plausible world.
+  float land = fbm2(n.xy * 3.6 + vec2(n.z * 2.1, -n.z * 1.3));
+  float coast = smoothstep(0.48, 0.56, land);
+  vec3 sea = mix(vec3(0.05, 0.09, 0.18), vec3(0.10, 0.16, 0.28), 0.5 + 0.5 * n.z);
+  vec3 landLo = vec3(0.14, 0.20, 0.14);
+  vec3 landHi = vec3(0.32, 0.30, 0.18);
+  vec3 surface = mix(sea, mix(landLo, landHi, smoothstep(0.55, 0.75, land)), coast);
+  // ice on the poles — a subtle cap on the north/south of the sphere
+  float ice = smoothstep(0.72, 0.86, abs(n.y));
+  surface = mix(surface, vec3(0.78, 0.82, 0.90), ice * 0.55);
+  // shade: day side keeps its color, night side falls into deep indigo. A
+  // narrow band of golden terminator warms the boundary.
+  vec3 nightSide = surface * 0.05 + vec3(0.010, 0.014, 0.030);
+  vec3 shaded = mix(nightSide, surface * (0.35 + 0.75 * lit), day);
+  // terminator warmth — the boundary between night and day catches a ribbon
+  // of the star's light like a real horizon does
+  float term = exp(-pow((dot(n, L) - 0.02) * 6.0, 2.0));
+  shaded += vec3(0.35, 0.20, 0.08) * term * 0.20;
+  // atmosphere rim: pale blue at the limb, denser on the day side; also
+  // breathes with the site's 7s swell so the air visibly lives.
+  vec3 atmoTint = vec3(0.32, 0.52, 0.78);
+  vec3 atmoLayer = atmoTint * atmo * (0.40 + 0.55 * day) * (0.85 + 0.15 * uBreath);
+  vec3 c = shaded * body + atmoLayer;
+  // earth-scorch: the god's touch, warm at the strike point. u_earthStrike
+  // decays 1 → 0 over ~1.5s; the color cools from bright orange to a deep
+  // ember red as it fades. Distance from the strike point falls off sharply
+  // so the scorch is a small, precise mark, not a curtain over the sphere.
+  vec2 strikePx = earthStrikeUV * radius;
+  vec2 strikeD = d - strikePx;
+  float strikeR = length(strikeD);
+  float scorch = exp(-strikeR / (radius * 0.22)) * earthStrike;
+  vec3 hot = mix(vec3(0.32, 0.06, 0.02), vec3(1.0, 0.62, 0.22), earthStrike);
+  c += hot * scorch * body * 2.0;
+  // alpha: the body writes fully, the atmosphere writes softly at the rim
+  float a = max(body, atmo * 0.55);
+  return vec4(c, a);
+}
 
 void main() {
   vec2 uv = vUv * 0.5 + 0.5;
   uv.y = 1.0 - uv.y;
   float aspect = u_resolution.x / max(1.0, u_resolution.y);
 
-  // layer: sky — a bruised violet night that carries the court's charge.
-  float horizon = smoothstep(0.0, 0.9, uv.y);
-  vec3 zenith = vec3(0.030, 0.036, 0.082);
-  vec3 low = vec3(0.115, 0.088, 0.170);
-  // the season leans the low sky from winter iron to summer wine
-  low = mix(low, vec3(0.150, 0.078, 0.120), 0.5 + 0.5 * sin(u_season * 6.2831853));
-  vec3 sky = mix(zenith, low, horizon);
+  // layer: cosmos — a near-black base with a faint blue-violet gradient
+  // that gently sways on the shared breath. Even an empty cosmos is not
+  // still: the tint drifts a percent or two with uBreath, and the horizon
+  // vs. zenith carries a small warm-cold difference so the frame reads as
+  // depth, not a flat wash.
+  vec3 zenith = vec3(0.006, 0.008, 0.020);
+  vec3 low = vec3(0.020, 0.014, 0.036);
+  float depth = smoothstep(0.0, 1.0, uv.y);
+  vec3 sky = mix(zenith, low, depth);
+  sky += vec3(0.008, 0.006, 0.014) * (0.5 + 0.5 * uBreath);
 
-  // layer: stars — a seeded scatter above the weather, each one a point
-  // with its own falloff inside its cell, breathing faintly. The tilt lean
-  // shifts the field a few percent laterally so the phone's own body is felt
-  // in the star scatter, not only in the wind.
+  // layer: starfield — a dense scatter, denser than /storm's sky by a
+  // factor of two, with each star its own falloff inside its cell and its
+  // own breath phase. The tilt lean pushes the whole field a few percent
+  // laterally so the phone's body is felt in the stars, not just anywhere.
   vec2 starUv = uv + vec2(u_tiltX * 0.02, 0.0);
-  vec2 grid = vec2(60.0 * aspect, 60.0);
-  vec2 cell = floor(starUv * grid);
-  float starSeed = hash(cell.x * 127.1 + cell.y * 311.7);
-  vec2 starPos = vec2(hash(starSeed * 53.7), hash(starSeed * 97.3));
-  float starD = length(fract(starUv * grid) - starPos);
-  float star = step(0.93, starSeed) * smoothstep(0.16, 0.0, starD) * smoothstep(0.5, 0.05, uv.y);
-  sky += vec3(0.85, 0.88, 1.0) * star * (0.5 + 0.35 * uBreath) * (0.4 + 0.6 * fract(starSeed * 91.7));
-
-  // layer: cloud drift — slow fbm banks riding the wind, denser with charge.
-  // The cloud band leans farther than the stars — the low sky is closer, so
-  // a tilt reads there first (max ~4% of frame width).
-  float drift = u_time * (0.012 + 0.02 * abs(u_wind)) * (1.0 - u_reduced);
-  vec2 cloudUv = uv + vec2(u_tiltX * 0.04, 0.0);
-  float bank = noise(cloudUv.x * 5.0 * aspect + drift * 3.0 + cloudUv.y * 4.0)
-             * noise(cloudUv.x * 2.3 * aspect - drift * 2.0 + 7.0);
-  float cloudBand = smoothstep(0.55, 0.12, uv.y) * smoothstep(0.02, 0.2, uv.y);
-  sky += vec3(0.11, 0.095, 0.16) * bank * cloudBand * (0.9 + 0.8 * u_charge);
-
-  // layer: charge shimmer — the whole sky holds its breath, deeper as the
-  // court's charge builds; never fully still even over an empty sky.
-  sky += vec3(0.045, 0.038, 0.09) * (0.12 + u_charge) * (0.55 + 0.45 * uBreath) * cloudBand;
-
-  // layer: lens — two fingers turn the sky into its charge chart: isolines
-  // of height brighten so the court reads as a field, not a picture.
-  float iso = smoothstep(0.94, 1.0, sin(uv.y * 90.0)) * u_lens;
-  sky += vec3(0.10, 0.09, 0.16) * iso * cloudBand;
-
-  // layer: sheet flash — the inside of the nearest cloud, lit for a frame.
-  sky += vec3(0.85, 0.82, 0.95) * u_flash * cloudBand;
-
-  // layer: the ridge the bolts land on. The bolt itself is drawn on a 2D
-  // overlay above this pass (src/lib/lightning.ts + linesRef canvas below),
-  // so the shader carries the SKY-WIDE flash (u_flash) plus the ridge's own
-  // scorch answer (u_ridgeStrike / u_strikeX further down) — the ridge sees
-  // the strike even though the strike itself is a set of overlaid lines.
-  float g = ridge(uv.x);
-  vec3 c = sky;
-  if (uv.y > g) {
-    // the mountain: dark stone under a moonlit crest, caught by every strike
-    float depth = smoothstep(g, 1.0, uv.y);
-    vec3 stone = mix(vec3(0.052, 0.052, 0.070), vec3(0.016, 0.016, 0.024), depth);
-    float crest = exp(-(uv.y - g) * 34.0);
-    // the standing moonlight: the ridge is always readable, breathing
-    stone += vec3(0.22, 0.23, 0.30) * crest * (0.6 + 0.3 * uBreath);
-    float snow = smoothstep(0.58, 0.50, g) * crest;
-    stone += vec3(0.12, 0.13, 0.17) * snow;
-    stone += vec3(0.55, 0.53, 0.6) * crest * u_flash;
-    stone += vec3(0.05, 0.05, 0.07) * crest * u_charge * uBreath;
-    // layer: ridge scorch — the ridge answers the bolt. u_ridgeStrike
-    // spikes to 1 at the moment of a strike and decays over ~1.5s. A small
-    // region above the bolt's landing X brightens with a hot afterimage that
-    // cools through orange → deep-red → gone, so the ridge visibly RECEIVES
-    // the strike instead of standing indifferent to it.
-    float strikeD = abs(uv.x - u_strikeX);
-    float strikeBand = exp(-strikeD * 46.0) * exp(-(uv.y - g) * 22.0);
-    // hot afterglow cools with the decay: 1 → orange → deep red → dark
-    vec3 hot = mix(vec3(0.32, 0.06, 0.02), vec3(1.0, 0.62, 0.22), u_ridgeStrike);
-    stone += hot * strikeBand * u_ridgeStrike * 1.6;
-    c = stone;
+  // three grids at different densities — the same technique as the seeded
+  // scatter /storm's sky uses, but layered so the eye reads it as a real deep
+  // field, not a flat scatter
+  for (int layer = 0; layer < 3; layer++) {
+    float lf = float(layer);
+    vec2 grid = vec2((80.0 + lf * 60.0) * aspect, 80.0 + lf * 60.0);
+    vec2 cell = floor(starUv * grid);
+    float starSeed = hash(cell.x * 127.1 + cell.y * 311.7 + lf * 71.3);
+    vec2 starPos = vec2(hash(starSeed * 53.7), hash(starSeed * 97.3));
+    float starD = length(fract(starUv * grid) - starPos);
+    float thr = 0.88 - lf * 0.02;
+    float bright = 0.4 + 0.6 * fract(starSeed * 91.7);
+    float twinklePhase = fract(starSeed * 17.3);
+    float twinkle = 0.65 + 0.35 * sin(u_time * (0.6 + twinklePhase) + twinklePhase * 6.28);
+    float star = step(thr, starSeed) * smoothstep(0.10 - lf * 0.02, 0.0, starD);
+    // faint blue-white tint that shifts toward warm on the low-threshold
+    // stars — a few of the brightest read as older, redder suns
+    vec3 starTint = mix(vec3(0.9, 0.94, 1.0), vec3(1.0, 0.88, 0.72), step(0.97, starSeed));
+    sky += starTint * star * bright * twinkle * (0.5 + 0.35 * uBreath);
   }
 
+  // layer: galactic wisp — a faint interstellar dust cloud drifting across
+  // the mid-frame at an angle. Two-octave fbm on a slowly sliding field,
+  // thresholded soft so it reads as gas, not a shape. Very low amplitude:
+  // the eye should sense it, not name it.
+  vec2 wispUv = uv + vec2(u_tiltX * 0.015, 0.0);
+  // wind picks up the wisp — a three-finger drag drifts the whole galactic
+  // dust with the hand's own weather, so a gesture the eye can name lands
+  float wispDrift = u_time * (0.006 + abs(u_wind) * 0.008) * (1.0 - u_reduced);
+  vec2 wispRot = vec2(
+    wispUv.x * 0.94 - wispUv.y * 0.34,
+    wispUv.x * 0.34 + wispUv.y * 0.94
+  );
+  float wisp = fbm2(wispRot * 2.1 * vec2(aspect, 1.0) + vec2(wispDrift + u_wind * 0.4, -wispDrift * 0.3));
+  float band = exp(-pow((uv.y - 0.52) * 3.4, 2.0));
+  float wispField = smoothstep(0.42, 0.72, wisp) * band;
+  vec3 wispTint = mix(vec3(0.10, 0.09, 0.20), vec3(0.28, 0.20, 0.36), wisp);
+  sky += wispTint * wispField * 0.32;
+
+  // layer: cosmic dust — a very-low-frequency haze that gathers where the
+  // charge is high, so a court that is full of unspent bolts visibly
+  // charges the space around it. The lens raises this into a chart.
+  float dust = fbm2(uv * 3.2 * vec2(aspect, 1.0) + vec2(u_time * 0.003, 0.0));
+  sky += vec3(0.045, 0.038, 0.09) * dust * (0.12 + u_charge) * (0.55 + 0.45 * uBreath);
+
+  // layer: lens — two fingers turn the sky into its charge chart. Isolines
+  // of the noise field brighten so the cosmos reads as a field, not a
+  // picture, exactly the same instrument /storm carried.
+  float iso = smoothstep(0.94, 1.0, sin(uv.y * 90.0)) * u_lens;
+  sky += vec3(0.10, 0.09, 0.16) * iso;
+
+  // layer: frame-wide flash — a bolt lights the whole cosmos for a frame,
+  // brightest near the mid-band and falling with distance from center.
+  sky += vec3(0.85, 0.82, 0.95) * u_flash * (0.35 + 0.65 * band);
+
+  vec3 c = sky;
+
   // pre-ceremony dimming: a one-finger hold approaching the ceremony tier
-  // dims the whole sky by up to 30%, so the crack lands into a darker frame
-  // and the moment before feels inevitable.
+  // dims the whole cosmos by up to 30%, so the crack lands into a darker
+  // frame and the moment before feels inevitable.
   c *= 1.0 - 0.30 * u_darken;
+
+  // the earth-in-corner — composited on top of the cosmos so its lit
+  // hemisphere reads clean against the deep space around it
+  vec4 earth = earthCorner(uv, u_earthStrike, u_earthStrikeUV);
+  c = mix(c, earth.rgb, earth.a);
+
   c *= 1.0 - 0.72 * u_night;
   c *= u_brightness;
   float vig = smoothstep(1.35, 0.45, length(uv - vec2(0.5, 0.48)));
@@ -477,7 +575,7 @@ export default function Zeus() {
     // the field's strike state — one bolt at a time, decaying in the loop.
     // The bolt is a set of overlaid line segments returned by buildBolt
     // (src/lib/lightning.ts); `lightning` holds the current strike's
-    // segments + a lifetime + intensity. When null, the sky is between
+    // segments + a lifetime + intensity. When null, the cosmos is between
     // strikes and the overlay renders nothing.
     let flash = 0;
     let lightning: {
@@ -488,11 +586,31 @@ export default function Zeus() {
       main: boolean; // true for a ceremony bolt, false for a knock's small strike
     } | null = null;
     let strikeSeedCounter = 0;
-    // the ridge's answer — spikes to 1 on any strike, decays over ~1.5s. The
-    // strike x-coordinate stays with it so the scorch stays where the bolt
-    // actually landed even after subsequent frames.
-    let ridgeStrike = 0;
-    let strikeX = 0.5;
+    // the earth's answer — spikes to 1 on any ceremony strike, decays over
+    // ~1.5s. The strike UV stays with it so the warm scorch stays where the
+    // bolt actually landed on the sphere even after subsequent frames.
+    let earthStrike = 0;
+    // earthStrikeUV is a 2D offset in local earth space (in radius-units,
+    // ~-1..1 on each axis) reused across frames without reallocation.
+    const earthStrikeUV = { x: 0, y: 0 };
+
+    // Pick a point on the earth's LIT hemisphere as a seeded polar coord.
+    // Bias the angle toward the light direction the shader uses
+    // (upper-left in local uv), so a scorch lands where a real bolt would
+    // — never on the night side where nothing would see it. Reused across
+    // strikes; the returned pair is copied into earthStrikeUV in place.
+    const litAngle = Math.atan2(0.55, -0.42); // shader light dir, upper-left
+    const pickEarthStrike = (seed: number): void => {
+      const rng = mulberry32(seed);
+      // radius biased by area — most strikes near the terminator, few at the
+      // limb, none in the extreme rim where the sphere is glancing anyway
+      const r = Math.sqrt(rng()) * 0.78;
+      // angle in a wide cone around the lit direction — the whole day-side
+      // hemisphere is reachable but the mean is where light strongest
+      const angle = litAngle + (rng() - 0.5) * Math.PI * 1.25;
+      earthStrikeUV.x = r * Math.cos(angle);
+      earthStrikeUV.y = r * Math.sin(angle);
+    };
 
     // The idle sky's own speech — after a stretch of no hand, the horizon
     // flashes softly and a low rumble arrives from beyond the frame. The
@@ -541,11 +659,20 @@ export default function Zeus() {
     const discharge = (s: Thunderhead, tMs: number, solo: boolean) => {
       const energy = boltEnergy(s.charge, s.water);
       flash = Math.min(1, 0.5 + energy * 0.3);
-      // the ridge answers: the scorch lands where the bolt actually did, and
-      // decays over ~1.5s. Solo bolts (the ceremony) burn the hottest.
-      ridgeStrike = Math.min(1, solo ? 1 : 0.7 + energy * 0.2);
-      strikeX = s.nx;
-      fireBolt(s, energy, tMs, solo);
+      // the earth answers: the god's touch lands warm on the lit hemisphere
+      // and decays over ~1.5s. Solo bolts (the ceremony) burn the hottest.
+      // The strike UV is a seeded pick on the lit half of the sphere so
+      // replays land the same mark; the pick uses the strike seed so every
+      // ceremony bolt scorches a different point on the world.
+      strikeSeedCounter = (strikeSeedCounter + 1) | 0;
+      const strikeSeed = boltHashSeed(
+        Math.floor(s.seed) | 0,
+        strikeSeedCounter,
+        Math.floor(s.nx * 10000),
+      );
+      pickEarthStrike(strikeSeed);
+      earthStrike = Math.min(1, solo ? 1 : 0.7 + energy * 0.2);
+      fireBolt(s, energy, tMs, solo, strikeSeed);
       const delaySec = strikeDelaySec(s.nx);
       // the thunder is the ledger: pitch reads the strike, length rides it —
       // and the whole clap layers a sub-bass thump, a mid-band discharge,
@@ -556,19 +683,24 @@ export default function Zeus() {
       if (solo) haptics.storm();
       else haptics.chop();
       s.charge = 0;
-      s.presence = 0.999; // spent — the house leaves the sky it lit
+      s.presence = 0.999; // spent — the house leaves the cosmos it lit
       writer.schedule();
     };
 
-    // A small strike — the knock on the vessel's back. Half the flash, half
-    // the ridge scorch, no ceremony, and it does NOT spend the house — the
-    // sky answers the knock as with any storm-god propitiation.
+    // A small strike — the knock on the vessel's back. Half the flash, no
+    // earth-scorch (the strike is local to the source cell, it does NOT
+    // arc across the cosmos), and it does NOT spend the house — the sky
+    // answers the knock as with any storm-god propitiation.
     const smallStrike = (s: Thunderhead, tMs: number) => {
       const energy = boltEnergy(s.charge * 0.55, s.water * 0.7);
       flash = Math.min(1, Math.max(flash, 0.35 + energy * 0.2));
-      ridgeStrike = Math.min(1, Math.max(ridgeStrike, 0.55));
-      strikeX = s.nx;
-      fireBolt(s, energy, tMs, false);
+      strikeSeedCounter = (strikeSeedCounter + 1) | 0;
+      const strikeSeed = boltHashSeed(
+        Math.floor(s.seed) | 0,
+        strikeSeedCounter,
+        Math.floor(s.nx * 10000),
+      );
+      fireBolt(s, energy, tMs, false, strikeSeed);
       const delaySec = strikeDelaySec(s.nx);
       audio.playThunder(energy * 0.6, delaySec, Math.max(1, thunderLayers() - 1));
       s.flicker = Math.min(1.4, s.flicker + 0.7);
@@ -579,40 +711,46 @@ export default function Zeus() {
     // Populate the lightning overlay for one strike. Called by discharge()
     // and smallStrike() so every visible bolt goes through the shared
     // fractal — no shader-drawn jag alongside a 2D-drawn tree, always one
-    // consistent geometry. Solo (ceremony) bolts are bigger and drawn from
-    // a slightly higher origin so the fall to the ridge reads as longer.
-    const fireBolt = (s: Thunderhead, energy: number, tMs: number, solo: boolean) => {
+    // consistent geometry. Solo (ceremony) bolts are bigger and arc across
+    // the entire frame to the earth-in-corner; a small strike stays local
+    // to its source cell so a knock reads as sheet lightning, not judgement.
+    const fireBolt = (s: Thunderhead, energy: number, tMs: number, solo: boolean, seed: number) => {
       const rect = lines.getBoundingClientRect();
       const w = rect.width;
       const h = rect.height;
       if (!w || !h) return;
-      strikeSeedCounter = (strikeSeedCounter + 1) | 0;
-      const seed = boltHashSeed(
-        Math.floor(s.seed) | 0,
-        strikeSeedCounter,
-        Math.floor(s.nx * 10000),
-      );
-      // origin: high in the cloud band, close to the house's x. A ceremony
-      // bolt drops from the sky top so the fall reads as tall; a small
-      // strike drops from just above the house so it reads as local.
+      // origin: the source house's position. A ceremony bolt fires from the
+      // exact cell that spent itself; a small strike fires from just above
+      // the house so it reads as a local flash and not a landing.
       const x0 = s.nx * w;
-      const y0 = h * (solo ? SKY_TOP : Math.max(SKY_TOP + 0.02, s.ny - 0.04));
-      // terminus: the ridge line. The shader's `ridge(x)` is a closed-form
-      // skyline; SKY_FLOOR is the flat mean the ridge modulates around, so
-      // this lands the bolt at the ridge's meeting-line with a small jitter
-      // that varies by house so nearby bolts don't stack their impacts.
-      const hitX = x0;
-      const hitY = h * SKY_FLOOR;
+      const y0 = h * (solo ? Math.max(SKY_TOP, s.ny - 0.02) : Math.max(SKY_TOP + 0.02, s.ny - 0.04));
+      let hitX: number;
+      let hitY: number;
+      if (solo) {
+        // terminus: a point on the lit hemisphere of the earth-in-corner.
+        // The shader's uv has y=0 at the bottom (after the flip), so the
+        // canvas y is (1 - earth_uv_y) * h. earthStrikeUV is in radius-units
+        // and was already picked in discharge() from the same seeded stream
+        // so the bolt's fractal seed and the scorch's location share their
+        // history.
+        hitX = (EARTH_CENTER_UV_X + earthStrikeUV.x * EARTH_RADIUS_UV) * w;
+        hitY = (1 - EARTH_CENTER_UV_Y - earthStrikeUV.y * EARTH_RADIUS_UV) * h;
+      } else {
+        // small strike: land near the source house, a short local jag
+        hitX = x0;
+        hitY = Math.min(h - 4, h * s.ny + h * 0.06);
+      }
       const segments = buildBolt(x0, y0, hitX, hitY, {
         ...DEFAULT_BOLT_CFG,
         // one more generation than storm — zeus's bolts are the room's
-        // solemn act, so give them more visible fractal detail
-        generations: solo ? 7 : 5,
+        // solemn act, so give them more visible fractal detail. Ceremony
+        // bolts cross the whole frame so the extra depth reads as reach.
+        generations: solo ? 8 : 5,
         displacement: w * DEFAULT_BOLT_CFG.displacement,
       }, seed);
       lightning = {
         t0: tMs,
-        life: solo ? 0.42 : 0.28, // ceremony bolts linger a beat longer
+        life: solo ? 0.48 : 0.28, // ceremony bolts linger a beat longer
         segments,
         intensity: 0.55 + energy * 0.5,
         main: solo,
@@ -946,9 +1084,9 @@ export default function Zeus() {
       // Bolt lifetime is stored on the `lightning` state itself now (t0 +
       // life), not a decayed amplitude — the overlay pass reads age vs life
       // and fades naturally.
-      // ridge scorch cools over ~1.5s regardless of frame rate
-      ridgeStrike *= 1 - Math.min(1, dt / 1.5);
-      if (ridgeStrike < 0.001) ridgeStrike = 0;
+      // earth-scorch cools over ~1.5s regardless of frame rate
+      earthStrike *= 1 - Math.min(1, dt / 1.5);
+      if (earthStrike < 0.001) earthStrike = 0;
       // pre-ceremony darken climbs while a one-finger hold is past ~1500ms
       // and there IS a standing house to spend; it decays fast on release
       // so a hand that lifts short of ceremony leaves the sky bright again.
@@ -995,9 +1133,12 @@ export default function Zeus() {
         audio.playThunder(distEnergy, 0.5 + 0.3 * bias, Math.max(1, thunderLayers() - 1));
         // reschedule 6-14s ahead
         nextDistantFlashMs = t + 6000 + Math.floor(distantRng() * 8000);
-        // decorate the horizon x used by the ridge-scorch subtly, but do NOT
-        // set ridgeStrike — the flash is above the horizon, the ridge stays cool
-        strikeX = fx;
+        // distant flashes are far from the earth — they light the cosmos
+        // but leave the world unmarked. Do NOT set earthStrike here; the
+        // scorch stays reserved for the god's ceremony touch. `fx` is only
+        // used inside this block; the frame-wide flash above carries the
+        // visual, so no earth uniform mutation is needed.
+        void fx;
       }
 
       // ——— the court's own politics: induction between every standing pair,
@@ -1033,8 +1174,8 @@ export default function Zeus() {
             born.flicker = 1.2;
             const energy = boltEnergy(m.charge, m.water);
             flash = Math.min(1, 0.4 + energy * 0.2);
-            // a merge is a lesser peal — layered thunder, no ridge strike;
-            // the union RINGS but does not spend itself on the ridge.
+            // a merge is a lesser peal — layered thunder, no earth strike;
+            // the union RINGS but does not spend itself on the world.
             audio.playThunder(energy * 0.5, strikeDelaySec(m.nx), Math.max(1, thunderLayers() - 1));
             audio.playTone(thunderHz(energy) * 1.5, 0.7, strikeDelaySec(m.nx));
             haptics.roll();
@@ -1072,10 +1213,12 @@ export default function Zeus() {
         prog?.setFloat("u_charge", totalCharge);
         prog?.setFloat("u_flash", flash);
         prog?.setFloat("u_night", night);
-        prog?.setFloat("u_season", season);
+        // season is still tracked in JS (three-finger twist still cycles it)
+        // but the cosmos has no seasons the way a peak had; the uniform is
+        // dropped from the shader and the setFloat call would silently no-op
         prog?.setFloat("u_lens", lensAmount);
-        prog?.setFloat("u_ridgeStrike", ridgeStrike);
-        prog?.setFloat("u_strikeX", strikeX);
+        prog?.setFloat("u_earthStrike", earthStrike);
+        prog?.setVec2("u_earthStrikeUV", earthStrikeUV.x, earthStrikeUV.y);
         prog?.setFloat("u_tiltX", tiltX);
         prog?.setFloat("u_darken", ceremonyDarken);
         quad?.draw();
@@ -1095,8 +1238,9 @@ export default function Zeus() {
       }
 
       // ——— the bolt overlay: the shared fractal on top of the shader pass.
-      // The shader owns the sky, the ridge, the flash and the ridge scorch
-      // (u_ridgeStrike / u_strikeX are already pushed above); the bolt
+      // The shader owns the cosmos, the earth-in-corner, the frame-wide
+      // flash and the earth-scorch (u_earthStrike / u_earthStrikeUV are
+      // already pushed above); the bolt
       // itself is a set of stroked segments layered on top of everything,
       // additive-blended so it reads as light on top of the world. Same
       // stroke grammar /storm uses — glow underlay, branches, main channel
@@ -1205,13 +1349,13 @@ export default function Zeus() {
           ref={canvasRef}
           role="application"
           tabIndex={0}
-          aria-label="a charged sky above the peak — rest a finger and a thunderhead gathers, hold to the ceremony and it spends itself in one bolt to the ridge"
+          aria-label="a court of cosmic thunderheads adrift in deep space above the small earth — rest a finger and a house gathers, hold to the ceremony and it spends itself in one bolt across the cosmos to the world"
           style={{ position: "absolute", inset: 0, width: "100%", height: "100%", touchAction: "none" }}
         />
         {/* the bolt overlay — every strike's fractal segments live here on
             top of the shader. Pointer-events off so the shader canvas keeps
             catching the hand; aria-hidden because the bolt speaks through
-            sound + the ridge scorch below it, not through this layer. */}
+            sound + the earth-scorch below it, not through this layer. */}
         <canvas
           ref={linesRef}
           aria-hidden
