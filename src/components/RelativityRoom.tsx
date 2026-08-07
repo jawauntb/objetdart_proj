@@ -316,6 +316,23 @@ export default function RelativityRoom() {
       [0, "rgba(240, 246, 255, 0.9)"],
       [1, "rgba(0,0,0,0)"],
     ]);
+    // Two more per-family sprites for the clocks / beacons / lantern-body
+    // glows — each of those was allocating a fresh createRadialGradient
+    // per object per frame (a clock photon per clock, two beacons, one
+    // lantern-body — up to five gradient objects a frame, in loops the
+    // paint test cannot see textually). Warm carries the candle end of
+    // the range (lantern-body, dilated beacon, photon core); cold carries
+    // the undilated beacon. Callers pick by warmth and let globalAlpha
+    // stand in for the varying center-stop intensity.
+    const warmSprite = makeRadialSprite([
+      [0, "rgba(255, 226, 170, 1)"],
+      [0.4, "rgba(231, 172, 82, 0.35)"],
+      [1, "rgba(0,0,0,0)"],
+    ]);
+    const coldSprite = makeRadialSprite([
+      [0, "rgba(223, 233, 255, 1)"],
+      [1, "rgba(0,0,0,0)"],
+    ]);
 
     // ————— performance contract (room-runtime) —————
     const gov = createFrameGovernor();
@@ -2374,14 +2391,16 @@ export default function RelativityRoom() {
         const beta = clamp(sp / c, 0, 0.95);
         const dxn = sp > 1 ? lantern.vx / sp : 0;
         const dyn = sp > 1 ? lantern.vy / sp : 0;
-        const body = ctx.createRadialGradient(lantern.x, lantern.y, 0, lantern.x, lantern.y, 26);
-        body.addColorStop(0, "rgba(255, 226, 170, 0.9)");
-        body.addColorStop(0.4, "rgba(231, 172, 82, 0.35)");
-        body.addColorStop(1, "rgba(0,0,0,0)");
-        ctx.fillStyle = body;
-        ctx.beginPath();
-        ctx.arc(lantern.x, lantern.y, 26, 0, Math.PI * 2);
-        ctx.fill();
+        // stamp the baked warmSprite instead of allocating a fresh
+        // createRadialGradient for the lantern body every frame; the
+        // sprite carries the same warm ramp with a 1.0 center that
+        // globalAlpha attenuates back to the old 0.9 stop.
+        {
+          const prev = ctx.globalAlpha;
+          ctx.globalAlpha = prev * 0.9;
+          ctx.drawImage(warmSprite, lantern.x - 26, lantern.y - 26, 52, 52);
+          ctx.globalAlpha = prev;
+        }
         if (beta > 0.04) {
           const lead = ctx.createRadialGradient(
             lantern.x + dxn * 14, lantern.y + dyn * 14, 0,
@@ -2449,13 +2468,16 @@ export default function RelativityRoom() {
             ctx.lineTo(k.photonTrail[i].x, k.photonTrail[i].y);
             ctx.stroke();
           }
-          const glow = ctx.createRadialGradient(k.x, py, 0, k.x, py, 9);
-          glow.addColorStop(0, `rgba(255, ${Math.round(250 - slow * 60)}, ${Math.round(240 - slow * 120)}, 0.95)`);
-          glow.addColorStop(1, "rgba(0,0,0,0)");
-          ctx.fillStyle = glow;
-          ctx.beginPath();
-          ctx.arc(k.x, py, 9, 0, Math.PI * 2);
-          ctx.fill();
+          // stamp the baked warmSprite for the photon glow — the old
+          // per-clock createRadialGradient allocated once per clock every
+          // frame (two clocks) and drifted color with `slow`; the sprite
+          // holds the warm end, and globalAlpha carries the 0.95 intensity.
+          {
+            const prev = ctx.globalAlpha;
+            ctx.globalAlpha = prev * 0.95;
+            ctx.drawImage(warmSprite, k.x - 9, py - 9, 18, 18);
+            ctx.globalAlpha = prev;
+          }
           ctx.restore();
         } else {
           // stilled: the geometry itself — vertical at rest, a long diagonal
@@ -2529,13 +2551,17 @@ export default function RelativityRoom() {
           const pulseUp = reunLive
             ? 1 + 0.45 * Math.sin(clamp01((now - reunionAt) / 900) * Math.PI)
             : 1;
-          const g = ctx.createRadialGradient(bx, by, 0, bx, by, 13 * pulseUp);
-          g.addColorStop(0, `rgba(${rr}, ${gg}, ${bb}, ${a})`);
-          g.addColorStop(1, "rgba(0,0,0,0)");
-          ctx.fillStyle = g;
-          ctx.beginPath();
-          ctx.arc(bx, by, 13 * pulseUp, 0, Math.PI * 2);
-          ctx.fill();
+          // stamp the baked warm/cold sprite by warmth threshold — the
+          // beacon's (rr,gg,bb) drifts from cool white (warmth 0) to
+          // candle warm (warmth 1) as the beacon dilates; two sprites
+          // cover the ramp and globalAlpha stands in for the varying `a`.
+          {
+            const R2 = 13 * pulseUp;
+            const prev = ctx.globalAlpha;
+            ctx.globalAlpha = prev * a;
+            ctx.drawImage(warmth > 0.45 ? warmSprite : coldSprite, bx - R2, by - R2, R2 * 2, R2 * 2);
+            ctx.globalAlpha = prev;
+          }
           // rings of proper time, accreted like tree rings — no numerals;
           // after the journey the traveler simply has fewer of them
           const flash = now - bcn.ringFlashAt < 1200;

@@ -290,6 +290,22 @@ export default function ManifoldFold() {
     // createRadialGradient every mass, every frame (room-runtime contract):
     // the well's shadow (flat solid to 0.2R, fading to 0 by 3.2R — the same
     // shape a nonzero-r0 gradient drew) and the evaporation flash.
+    // ray heads and built-band beads used to allocate a fresh
+    // createRadialGradient per ray and per bead every frame — the exact
+    // Ocean/Fire pattern (a per-object gradient inside a for loop) the
+    // paint test cannot see because the call itself is one static line.
+    // Two hue-tinted variants of the standard 128px alpha halo: cool white
+    // for ray heads, warm candle for built-band beads. Callers stamp with
+    // drawImage and let globalAlpha carry per-object intensity.
+    const rayHeadSprite = makeRadialSprite([
+      [0, "rgba(240, 246, 255, 1)"],
+      [1, "rgba(240, 246, 255, 0)"],
+    ]);
+    const beadBuiltSprite = makeRadialSprite([
+      [0, "rgba(231, 172, 82, 1)"],
+      [0.5, "rgba(200, 130, 60, 0.28)"],
+      [1, "rgba(0,0,0,0)"],
+    ]);
     const shadowSprite = makeRadialSprite([
       [0, "rgba(0,0,0,1)"],
       [0.0625, "rgba(0,0,0,1)"],
@@ -1882,13 +1898,14 @@ export default function ManifoldFold() {
           }
           if (n > 0) {
             const h = foldXY(r.trail[n - 1].x, r.trail[n - 1].y);
-            const glow = ctx.createRadialGradient(h.x, h.y, 0, h.x, h.y, 7);
-            glow.addColorStop(0, "rgba(240, 246, 255, 0.9)");
-            glow.addColorStop(1, "rgba(0,0,0,0)");
-            ctx.fillStyle = glow;
-            ctx.beginPath();
-            ctx.arc(h.x, h.y, 7, 0, Math.PI * 2);
-            ctx.fill();
+            // baked ray-head sprite replaces a per-ray createRadialGradient
+            // (was one gradient per ray, every frame) — the sprite's 1.0
+            // center carries the same rgba(240,246,255) tint, and 0.9 is
+            // folded into globalAlpha for the head glow.
+            const prev = ctx.globalAlpha;
+            ctx.globalAlpha = prev * 0.9;
+            ctx.drawImage(rayHeadSprite, h.x - 7, h.y - 7, 14, 14);
+            ctx.globalAlpha = prev;
           }
         }
         ctx.restore();
@@ -2015,15 +2032,16 @@ export default function ManifoldFold() {
           const breatheR = reduce ? 0 : Math.sin(localT * 0.9 + k * 0.7) * 0.35;
           const R = (built ? 3.4 : 2.4) + breatheR + swell * 4;
           if (built) {
-            // candle-warm: a room that exists, heard from above
-            const g = ctx.createRadialGradient(x, y, 0, x, y, R * (3 + swell * 2));
-            g.addColorStop(0, `rgba(231, 172, 82, ${0.5 + swell * 0.4})`);
-            g.addColorStop(0.5, `rgba(200, 130, 60, ${0.14 + swell * 0.2})`);
-            g.addColorStop(1, "rgba(0,0,0,0)");
-            ctx.fillStyle = g;
-            ctx.beginPath();
-            ctx.arc(x, y, R * (3 + swell * 2), 0, Math.PI * 2);
-            ctx.fill();
+            // candle-warm: a room that exists, heard from above.
+            // Stamp the baked beadBuiltSprite instead of allocating a
+            // per-bead createRadialGradient (was one gradient per bead,
+            // every frame — 12 beads across the axis). The sprite's stops
+            // match the old gradient's ramp; globalAlpha carries the swell.
+            const R2 = R * (3 + swell * 2);
+            const prev = ctx.globalAlpha;
+            ctx.globalAlpha = prev * (0.5 + swell * 0.4);
+            ctx.drawImage(beadBuiltSprite, x - R2, y - R2, R2 * 2, R2 * 2);
+            ctx.globalAlpha = prev;
             ctx.fillStyle = `rgba(255, 232, 190, ${0.85 + swell * 0.15})`;
           } else {
             // ember-dim: a band the album holds open

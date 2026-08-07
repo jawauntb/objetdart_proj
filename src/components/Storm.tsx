@@ -686,6 +686,51 @@ export default function Storm() {
       if (windStreaksRef.current.length > 12) windStreaksRef.current.shift();
     };
 
+    // Wind streaks and lightning hit-glows used to allocate a fresh
+    // create*Gradient inside their per-object per-frame loops — the paint
+    // test cannot see this because the call itself is one static line.
+    // Follow the Stars/Charts sprite-cache pattern: bake once, blit with
+    // drawImage under lighter composition, let globalAlpha carry intensity.
+    //
+    // Wind streak: a horizontal alpha strip, bright at the left edge and
+    // fading to transparent at the right. Each streak translates to its
+    // head, flips if head-is-on-the-right, and draws the strip stretched
+    // to its current length. One sprite serves every streak.
+    const STREAK_SPRITE_W = 128;
+    const STREAK_SPRITE_H = 4;
+    const WIND_STREAK_SPRITE = document.createElement("canvas");
+    WIND_STREAK_SPRITE.width = STREAK_SPRITE_W;
+    WIND_STREAK_SPRITE.height = STREAK_SPRITE_H;
+    {
+      const wctx = WIND_STREAK_SPRITE.getContext("2d");
+      if (wctx) {
+        const grad = wctx.createLinearGradient(0, 0, STREAK_SPRITE_W, 0);
+        grad.addColorStop(0, "rgba(244, 248, 255, 1)");
+        grad.addColorStop(1, "rgba(244, 248, 255, 0)");
+        wctx.fillStyle = grad;
+        wctx.fillRect(0, 0, STREAK_SPRITE_W, STREAK_SPRITE_H);
+      }
+    }
+    // Lightning bolt hit-glow: one radial-alpha sprite tinted the same
+    // pale blue the per-bolt gradient used to build, blitted per bolt.
+    const HIT_SPRITE_R = 64;
+    const LIGHTNING_HIT_SPRITE = document.createElement("canvas");
+    LIGHTNING_HIT_SPRITE.width = HIT_SPRITE_R * 2;
+    LIGHTNING_HIT_SPRITE.height = HIT_SPRITE_R * 2;
+    {
+      const hctx = LIGHTNING_HIT_SPRITE.getContext("2d");
+      if (hctx) {
+        const grad = hctx.createRadialGradient(
+          HIT_SPRITE_R, HIT_SPRITE_R, 0,
+          HIT_SPRITE_R, HIT_SPRITE_R, HIT_SPRITE_R,
+        );
+        grad.addColorStop(0, "rgba(220, 232, 255, 1)");
+        grad.addColorStop(1, "rgba(220, 232, 255, 0)");
+        hctx.fillStyle = grad;
+        hctx.fillRect(0, 0, HIT_SPRITE_R * 2, HIT_SPRITE_R * 2);
+      }
+    }
+
     const toLocal = (clientX: number, clientY: number) => {
       const r = lines.getBoundingClientRect();
       return { x: clientX - r.left, y: clientY - r.top };
@@ -1443,6 +1488,10 @@ export default function Storm() {
       }
 
       if (windStreaksRef.current.length > 0) {
+        // stamp the baked WIND_STREAK_SPRITE (bright at its left edge,
+        // fading right) instead of allocating a fresh linear gradient per
+        // streak per frame; translate/flip so the bright end always sits
+        // at headX regardless of streak direction.
         for (let i = windStreaksRef.current.length - 1; i >= 0; i--) {
           const ws = windStreaksRef.current[i];
           const age = (simNow - ws.t0) / 1000;
@@ -1450,16 +1499,17 @@ export default function Storm() {
           const headX = (ws.vx > 0 ? -ws.len * 0.5 : w + ws.len * 0.5) + ws.vx * age;
           const tailX = headX - Math.sign(ws.vx) * ws.len;
           const a = ws.alpha * Math.max(0, 1 - age / 1.6) * (s < 0.7 ? 1 : 0.7);
-          const grad = lctx.createLinearGradient(headX, ws.y, tailX, ws.y);
-          grad.addColorStop(0, `rgba(244, 248, 255, ${a})`);
-          grad.addColorStop(1, "rgba(244, 248, 255, 0)");
-          lctx.strokeStyle = grad;
-          lctx.lineWidth = 1.2;
-          lctx.lineCap = "round";
-          lctx.beginPath();
-          lctx.moveTo(headX, ws.y);
-          lctx.lineTo(tailX, ws.y);
-          lctx.stroke();
+          const len = Math.abs(headX - tailX);
+          if (len < 1) continue;
+          lctx.save();
+          lctx.globalAlpha = a;
+          lctx.translate(headX, ws.y);
+          // sprite is bright-left, dark-right; for a right-going streak the
+          // head is on the right, so mirror the sprite so bright still lands
+          // at headX and the transparent tail runs leftward to tailX
+          if (ws.vx > 0) lctx.scale(-1, 1);
+          lctx.drawImage(WIND_STREAK_SPRITE, 0, -0.6, len, 1.2);
+          lctx.restore();
         }
       }
 
@@ -1789,14 +1839,16 @@ export default function Storm() {
         }
         lctx.stroke();
 
-        // impact glow on the sea
-        const hitGrad = lctx.createRadialGradient(lb.hitX, lb.hitY, 0, lb.hitX, lb.hitY, 60 + a * 90);
-        hitGrad.addColorStop(0, `rgba(220, 232, 255, ${a * 0.7})`);
-        hitGrad.addColorStop(1, "rgba(220, 232, 255, 0)");
-        lctx.fillStyle = hitGrad;
-        lctx.beginPath();
-        lctx.arc(lb.hitX, lb.hitY, 60 + a * 90, 0, Math.PI * 2);
-        lctx.fill();
+        // impact glow on the sea — stamp the baked LIGHTNING_HIT_SPRITE
+        // instead of allocating a fresh createRadialGradient per bolt per
+        // frame (this ran inside the bolts loop and the paint test cannot
+        // see it textually; the sprite carries the exact rgba(220,232,255)
+        // ramp the gradient used to build).
+        const hitR = 60 + a * 90;
+        const prevA = lctx.globalAlpha;
+        lctx.globalAlpha = prevA * (a * 0.7);
+        lctx.drawImage(LIGHTNING_HIT_SPRITE, lb.hitX - hitR, lb.hitY - hitR, hitR * 2, hitR * 2);
+        lctx.globalAlpha = prevA;
         lctx.restore();
       }
 

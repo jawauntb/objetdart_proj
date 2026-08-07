@@ -93,6 +93,15 @@ const EXCITE_MS = 900;
 const TOUCH_MS = THRESHOLDS.tapMaxMs;
 const DWELL_MS = THRESHOLDS.dwellMs;
 
+// Bond-order strand offsets: the same three literal arrays used to be
+// re-allocated per bond per frame inside drawBonds — hoisted out to
+// module scope and frozen so the hot loop reads a single shared instance
+// instead of building a fresh array literal each time it picks the row
+// matching the bond's order (see kernel's covalentPair).
+const STRAND_OFFS_1 = Object.freeze([0]);
+const STRAND_OFFS_2 = Object.freeze([-1, 1]);
+const STRAND_OFFS_3 = Object.freeze([-1.6, 0, 1.6]);
+
 type AtomEnt = {
   id: string;
   seed: number;
@@ -1835,8 +1844,10 @@ export default function AtomsField() {
         const ux = (pb.sx - pa.sx) / d;
         const uy = (pb.sy - pa.sy) / d;
         // strand offsets: bond order drawn honestly — H–H one strand,
-        // O=O two, N≡N three (the kernel's covalentPair decided b.order)
-        const strandOffs = b.order === 1 ? [0] : b.order === 2 ? [-1, 1] : [-1.6, 0, 1.6];
+        // O=O two, N≡N three (the kernel's covalentPair decided b.order).
+        // The three arrays live at module scope (STRAND_OFFS_*) so the hot
+        // loop reads a shared instance instead of allocating per bond.
+        const strandOffs = b.order === 1 ? STRAND_OFFS_1 : b.order === 2 ? STRAND_OFFS_2 : STRAND_OFFS_3;
         const feltAlpha = 1 - lens;
         // where the shared pair actually sits: the more electronegative atom
         // holds it closer, and an ionic gap holds it outright. This is the
@@ -1849,26 +1860,28 @@ export default function AtomsField() {
         const shareY = midY + uy * d * bias;
         if (feltAlpha > 0.02) {
           // merged lobes: a shared luminous field between the pair, pooled
-          // toward whichever end takes the harder pull
-          const g = ctx.createRadialGradient(shareX, shareY, 2, shareX, shareY, d * 0.55);
-          const fa = ATOM_FAMILIES[(pol > 0 ? pb : pa).morph.family][4];
-          g.addColorStop(0, colorAlpha(fa, 0.14 * cb.gleam * feltAlpha));
-          g.addColorStop(1, "rgba(0,0,0,0)");
-          ctx.fillStyle = g;
-          ctx.save();
-          ctx.translate(shareX, shareY);
-          ctx.rotate(Math.atan2(pb.sy - pa.sy, pb.sx - pa.sx));
+          // toward whichever end takes the harder pull. The per-bond
+          // createRadialGradient became one drawImage against the already-
+          // cached LOBE_SPRITES (indexed by the more-electronegative atom's
+          // family) — the family-colored halo the gradient used to build
+          // was, at the pixel level, the same shape as the LOBE_SPRITE
+          // (fam[4] center, fam[2] mid, transparent edge). Non-uniform
+          // scale under the current rotation stretches the round sprite
+          // into the same ellipse the fill used to trace.
+          const family = (pol > 0 ? pb : pa).morph.family;
           const pulse = reduce ? 1 : 1 + Math.sin(t * 1.7 + cb.tone) * 0.12;
-          ctx.beginPath();
-          ctx.ellipse(
-            0, 0,
-            d * (0.52 - Math.abs(bias) * 0.5) * pulse,
-            Math.min(pa.sr, pb.sr) * 0.5 * pulse,
-            0, 0, Math.PI * 2,
-          );
-          ctx.fillStyle = g;
-          ctx.fill();
-          ctx.restore();
+          const rx = d * (0.52 - Math.abs(bias) * 0.5) * pulse;
+          const ry = Math.min(pa.sr, pb.sr) * 0.5 * pulse;
+          if (rx > 0.5 && ry > 0.5) {
+            ctx.save();
+            ctx.translate(shareX, shareY);
+            ctx.rotate(Math.atan2(pb.sy - pa.sy, pb.sx - pa.sx));
+            const prev = ctx.globalAlpha;
+            ctx.globalAlpha = prev * (cb.gleam * feltAlpha);
+            ctx.drawImage(LOBE_SPRITES[family], -rx, -ry, rx * 2, ry * 2);
+            ctx.globalAlpha = prev;
+            ctx.restore();
+          }
           if (cb.character === "ionic") {
             // a transfer, not a share: the two ends carry opposite signs —
             // one ring bright and closed, the other open and hollow

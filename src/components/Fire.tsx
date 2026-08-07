@@ -379,6 +379,36 @@ export default function Fire() {
     const wells: PressureWell[] = [];
     const strokes: HeatStroke[] = [];
 
+    // Ember halos used to allocate a fresh createRadialGradient per ember
+    // per frame — on a busy bed that is upwards of 90 gradient objects a
+    // frame in a loop the paint test cannot see textually. Follow the
+    // Stars/Charts sprite-cache pattern: bake three tinted 128×128 alpha
+    // halos once, blit with drawImage under lighter composition and let
+    // globalAlpha carry per-ember intensity. `hot` picks the yellow-white
+    // core; older embers desaturate through the amber and dusk variants.
+    const EMBER_SPRITE_R = 64;
+    const bakeEmberHalo = (r: number, g: number, b: number): HTMLCanvasElement => {
+      const c = document.createElement("canvas");
+      const S = EMBER_SPRITE_R * 2;
+      c.width = S;
+      c.height = S;
+      const sctx = c.getContext("2d");
+      if (sctx) {
+        const grad = sctx.createRadialGradient(
+          EMBER_SPRITE_R, EMBER_SPRITE_R, 0,
+          EMBER_SPRITE_R, EMBER_SPRITE_R, EMBER_SPRITE_R,
+        );
+        grad.addColorStop(0, `rgba(${r}, ${g}, ${b}, 1)`);
+        grad.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+        sctx.fillStyle = grad;
+        sctx.fillRect(0, 0, S, S);
+      }
+      return c;
+    };
+    const emberHaloHot = bakeEmberHalo(255, 232, 150);   // hot yellow-white core
+    const emberHaloWarm = bakeEmberHalo(240, 165, 90);   // fading amber
+    const emberHaloAsh = bakeEmberHalo(150, 90, 60);     // cool ashy dusk
+
     // ── the bed's own fuel, a coarse strip along its width ────────────
     // Real combustion, not a decal: every well burns down the fuel under
     // it, starves and dies early where the bed is bare, and a well hot
@@ -1217,13 +1247,15 @@ export default function Fire() {
         const green = hot ? 210 + Math.round(34 * ember.hue) : 62 + Math.round(80 * life);
         const blue = hot ? 120 + Math.round(80 * ember.hue) : 24 + Math.round(30 * life);
         if (ember.radius > 1.25) {
-          const halo = fx.createRadialGradient(ember.x, ember.y, 0, ember.x, ember.y, r * 3.0);
-          halo.addColorStop(0, `rgba(${red}, ${green}, ${blue}, ${(0.11 * alpha).toFixed(3)})`);
-          halo.addColorStop(1, `rgba(${red}, ${green}, ${blue}, 0)`);
-          fx.fillStyle = halo;
-          fx.beginPath();
-          fx.arc(ember.x, ember.y, r * 3.0, 0, Math.PI * 2);
-          fx.fill();
+          // pick the baked halo by age instead of building a fresh gradient:
+          // hot embers wear the yellow-white core, then the amber, then the
+          // ashy dusk as they burn down — the same read as the per-ember
+          // gradient was giving us, at drawImage cost.
+          const halo = hot ? emberHaloHot : life > 0.35 ? emberHaloWarm : emberHaloAsh;
+          const prev = fx.globalAlpha;
+          fx.globalAlpha = prev * (0.11 * alpha);
+          fx.drawImage(halo, ember.x - r * 3, ember.y - r * 3, r * 6, r * 6);
+          fx.globalAlpha = prev;
         }
         fx.fillStyle = `rgba(${red}, ${green}, ${blue}, ${alpha.toFixed(3)})`;
         fx.beginPath();
