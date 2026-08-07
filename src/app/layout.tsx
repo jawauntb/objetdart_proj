@@ -82,7 +82,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <FieldWatch />
         <CandleMark />
         <SoundToggle />
-        {/* The `?` sits one step above the sound toggle in the same corner. It
+        {/* The `?` holds the bottom-right seat of the chrome's baseline row —
+            flush with <LetGo> at bottom-centre, under the sound toggle. It
             is the only surface that explains, it never opens itself, and it
             renders the current route's own field-guide entry — see
             src/components/RoomHelp.tsx and AGENTS.md, "no instructions". */}

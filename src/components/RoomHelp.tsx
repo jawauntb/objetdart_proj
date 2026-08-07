@@ -257,18 +257,17 @@ export default function RoomHelp() {
           __html: `
         .oda-help-button {
           position: fixed;
-          /* The bottom-right corner is a column, and every band of it is spoken
-             for. Measured, from the bottom edge up: the tape 0–40, the sound
-             toggle 56–100, the field watch 112 and up (220 wide, hidden under
-             720px). The candle holds bottom-left, <LetGo> bottom-centre. So this
-             control takes the one free seat in that corner — the sound toggle's
-             own row, immediately left of it, where it reads as the pair it is.
-             161 = the toggle's 16 right offset + its widest measured state
-             (137: the "wake the sea" label before GlobalPretextText re-wraps
-             it, which is what stands if pretext never runs) + 8 of air. The
-             field watch's bottom edge clears this row by 12. */
-          bottom: calc(56px + env(safe-area-inset-bottom, 0px));
-          right: calc(161px + env(safe-area-inset-right, 0px));
+          /* The bottom edge is one row: the candle bottom-left, <LetGo>
+             bottom-centre, and this control bottom-right — all three sharing
+             the same baseline (max(18px, safe-area), <LetGo>'s own line), so
+             the chrome reads as a single shelf instead of a scatter. The
+             sound toggle keeps its seat one step above (56–100, right 16);
+             this sits directly under it in the same column. The tape's band
+             (0–40) runs beneath — like <LetGo>, a control the hand means to
+             press outranks that aria-hidden decoration. On narrow screens
+             the centred <LetGo> pill never reaches this corner. */
+          bottom: max(18px, env(safe-area-inset-bottom, 0px));
+          right: calc(16px + env(safe-area-inset-right, 0px));
           /* above the sound toggle's 35 and the tape's 28; below the header
              panel (60) and the passage film (72), which both outrank chrome. */
           z-index: 36;
