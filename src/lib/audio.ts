@@ -276,8 +276,21 @@ type FieldAudio = {
   buzz: () => void;      // short, low contact feedback
   // pitched single-note triangle oscillator with ADSR. used by /waves
   // PhaseChart so each candle clicks at a pitch picked from the phase scale.
-  playTone: (freq: number, durationSec?: number) => void;
+  // `delaySec` schedules the tone into the future — /zeus uses this so a bolt
+  // at the edge of the sky arrives at the ear a beat after the eye caught it,
+  // and that perceptual latency IS the sky's depth.
+  playTone: (freq: number, durationSec?: number, delaySec?: number) => void;
   playNote: (midi: number, durationMs?: number) => void;
+  /**
+   * A three-layer thunder: a sub-bass thump (the crack near the ear), a
+   * mid-band roll (the discharge), and a filtered-noise rumble tail (echoes
+   * off atmosphere). `energy` scales the sub-bass depth and rumble length —
+   * bigger bolts ring lower and rumble longer. `delaySec` schedules the whole
+   * clap into the future and quiets it with 1 / (1 + delaySec) so a distant
+   * strike sounds distant, not just late. `layers`: 3 = full (default), 2 =
+   * drop the noise tail (medium tier), 1 = sub-bass only (low tier).
+   */
+  playThunder: (energy: number, delaySec?: number, layers?: number) => void;
   // continuous-tone interface for compass drag — call holdConcernTone(id)
   // when dragging starts, set its value while dragging, release when done
   holdConcernTone: (id: string, value: number) => void;
@@ -1317,19 +1330,22 @@ export function getFieldAudio(): FieldAudio {
     });
   };
 
-  const playTone = (freq: number, durationSec = 0.3) => {
+  const playTone = (freq: number, durationSec = 0.3, delaySec = 0) => {
     if (muted) return;
     const c = ensureContext();
     if (!c) return;
     if (c.state === "suspended") { try { void c.resume(); } catch { /* noop */ } }
-    const now = c.currentTime;
+    const delay = Math.max(0, Math.min(1.2, delaySec));
+    const now = c.currentTime + delay;
     const dur = Math.max(0.05, Math.min(2, durationSec));
+    // distance attenuation — a far tone is quieter, not just late.
+    const atten = 1 / (1 + delay * 1.2);
     const osc = c.createOscillator();
     osc.type = "sine";
     osc.frequency.setValueAtTime(Math.max(40, Math.min(8000, freq)), now);
     const g = c.createGain();
     g.gain.setValueAtTime(0.0001, now);
-    g.gain.exponentialRampToValueAtTime(0.05, now + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.05 * atten, now + 0.02);
     g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
     osc.connect(g).connect(outNode(c));
     osc.start(now);
@@ -1337,6 +1353,102 @@ export function getFieldAudio(): FieldAudio {
     osc.onended = () => {
       try { osc.disconnect(); } catch { /* noop */ }
       try { g.disconnect(); } catch { /* noop */ }
+    };
+  };
+
+  // A three-layer thunder. /zeus's discharges and distant flashes route
+  // through here so the sky sounds like a sky, not a sine. Kept in the shared
+  // audio module so every downstream route (analyser, master compressor, mute
+  // bit) applies without a private bus. See FieldAudio.playThunder above for
+  // the shape.
+  const playThunder = (energy: number, delaySec = 0, layers = 3) => {
+    if (muted) return;
+    const c = ensureContext();
+    if (!c) return;
+    if (c.state === "suspended") { try { void c.resume(); } catch { /* noop */ } }
+    const delay = Math.max(0, Math.min(1.2, delaySec));
+    const now = c.currentTime + delay;
+    const e = Math.max(0.05, Math.min(2.5, energy));
+    // 1 / (1 + delay) so a far strike also sounds farther, not merely late.
+    const atten = 1 / (1 + delay * 1.4);
+    // sub-bass drops as energy climbs — the biggest bolts feel like a floor
+    const subHz = Math.max(22, 60 - e * 18);
+    const midHz = Math.max(90, 200 - e * 70);
+    const noiseCenterHz = Math.max(400, 1200 - e * 400);
+    const attack = 0.006;
+    const bodyDur = 0.35 + e * 0.35;
+    const tailDur = 0.6 + e * 1.6;
+
+    // sub-bass sine — the crack near the ear
+    const sub = c.createOscillator();
+    sub.type = "sine";
+    sub.frequency.setValueAtTime(subHz, now);
+    const subG = c.createGain();
+    subG.gain.setValueAtTime(0.0001, now);
+    subG.gain.exponentialRampToValueAtTime(0.09 * atten, now + attack);
+    subG.gain.exponentialRampToValueAtTime(0.0001, now + bodyDur * 2.2);
+    sub.connect(subG).connect(outNode(c));
+    sub.start(now);
+    sub.stop(now + bodyDur * 2.2 + 0.05);
+    sub.onended = () => {
+      try { sub.disconnect(); } catch { /* noop */ }
+      try { subG.disconnect(); } catch { /* noop */ }
+    };
+
+    if (layers < 2) return;
+
+    // mid-band triangle glide — the discharge pop
+    const mid = c.createOscillator();
+    mid.type = "triangle";
+    mid.frequency.setValueAtTime(midHz, now);
+    mid.frequency.exponentialRampToValueAtTime(Math.max(50, midHz * 0.55), now + bodyDur);
+    const midG = c.createGain();
+    midG.gain.setValueAtTime(0.0001, now);
+    midG.gain.exponentialRampToValueAtTime(0.05 * atten, now + attack * 1.6);
+    midG.gain.exponentialRampToValueAtTime(0.0001, now + bodyDur * 1.1);
+    const midLp = c.createBiquadFilter();
+    midLp.type = "lowpass";
+    midLp.frequency.value = Math.max(220, noiseCenterHz * 1.4);
+    midLp.Q.value = 0.6;
+    mid.connect(midG).connect(midLp).connect(outNode(c));
+    mid.start(now);
+    mid.stop(now + bodyDur * 1.1 + 0.05);
+    mid.onended = () => {
+      try { mid.disconnect(); } catch { /* noop */ }
+      try { midG.disconnect(); } catch { /* noop */ }
+      try { midLp.disconnect(); } catch { /* noop */ }
+    };
+
+    if (layers < 3) return;
+
+    // rumble tail — band-passed noise, the atmosphere carrying the discharge
+    const sampleRate = c.sampleRate;
+    const bufLen = Math.max(1, Math.floor(sampleRate * (tailDur + 0.2)));
+    const buf = c.createBuffer(1, bufLen, sampleRate);
+    const data = buf.getChannelData(0);
+    let brown = 0;
+    for (let i = 0; i < bufLen; i++) {
+      const white = Math.random() * 2 - 1;
+      brown = (brown + 0.02 * white) / 1.02;
+      data[i] = brown * 3.2;
+    }
+    const noise = c.createBufferSource();
+    noise.buffer = buf;
+    const noiseBp = c.createBiquadFilter();
+    noiseBp.type = "bandpass";
+    noiseBp.frequency.value = noiseCenterHz;
+    noiseBp.Q.value = 1.2;
+    const noiseG = c.createGain();
+    noiseG.gain.setValueAtTime(0.0001, now);
+    noiseG.gain.exponentialRampToValueAtTime(0.04 * atten, now + 0.05);
+    noiseG.gain.exponentialRampToValueAtTime(0.0001, now + tailDur);
+    noise.connect(noiseBp).connect(noiseG).connect(outNode(c));
+    noise.start(now);
+    noise.stop(now + tailDur + 0.1);
+    noise.onended = () => {
+      try { noise.disconnect(); } catch { /* noop */ }
+      try { noiseBp.disconnect(); } catch { /* noop */ }
+      try { noiseG.disconnect(); } catch { /* noop */ }
     };
   };
 
@@ -2220,6 +2332,7 @@ export function getFieldAudio(): FieldAudio {
     },
     chime, bell, thud, refuse, spark, buzz,
     playTone,
+    playThunder,
     playNote,
     holdConcernTone, releaseConcernTone, releaseAllConcernTones,
     playSigilPhrase,

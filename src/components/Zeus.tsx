@@ -20,7 +20,14 @@ import RoomShell from "@/components/RoomShell";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { tapTrainTier, tapTrainDepth } from "@/lib/gesture/core";
-import { createIdleWriter, detailForTier, onVisibility, createFrameGovernor } from "@/lib/room-runtime";
+import {
+  createFrameGovernor,
+  createIdleWriter,
+  detailForTier,
+  isEmbeddedFrame,
+  onGalleryPause,
+  onVisibility,
+} from "@/lib/room-runtime";
 import { createGLStage, FULLSCREEN_VERT_CLIP } from "@/lib/webgl/stage";
 import { clocksFrom } from "@/lib/webgl/sizing";
 import { createInstanceBuffer } from "@/lib/scene/instances";
@@ -54,11 +61,16 @@ const SKY_TOP = 0.08;
 const SKY_FLOOR = 0.52;
 
 // ——— the field: night over the peak, charge shimmer, sheet flash, the bolt.
+// Naming: the shared breath (`uBreath`) reaches every room whose shader
+// declares it, per `src/lib/webgl/sizing.ts` — same convention as /reef and
+// /root — and the room-quality bar reads the manifest's `life.breath.reads`
+// against that literal. The other room-local uniforms keep the `u_*` dialect
+// this file established.
 const FIELD = `precision mediump float;
 varying vec2 vUv;
 uniform vec2 u_resolution;
 uniform float u_time;
-uniform float u_breath;
+uniform float uBreath;
 uniform float u_turbulence;
 uniform float u_brightness;
 uniform float u_reduced;
@@ -71,6 +83,18 @@ uniform float u_boltSeed;
 uniform float u_night;
 uniform float u_season;
 uniform float u_lens;
+// the ridge's answer to the bolt — 1 at the moment of the strike, decaying
+// to 0 over ~1.5s. u_strikeX is where along the ridge the bolt landed, so
+// the scorch is local, not a curtain over the whole crest.
+uniform float u_ridgeStrike;
+uniform float u_strikeX;
+// the vessel's own lean — gamma / 45 clamped to ±1. Pushes the cloud band and
+// the star field a few percent of the frame laterally, so a tilt actually
+// leans the whole court.
+uniform float u_tiltX;
+// pre-ceremony dimming — 0 at rest, climbs while a one-finger hold approaches
+// the ceremony tier so the sky feels inevitable before the crack lands.
+uniform float u_darken;
 
 float hash(float n) { return fract(sin(n) * 43758.5453123); }
 float noise(float x) {
@@ -126,25 +150,31 @@ void main() {
   vec3 sky = mix(zenith, low, horizon);
 
   // layer: stars — a seeded scatter above the weather, each one a point
-  // with its own falloff inside its cell, breathing faintly.
+  // with its own falloff inside its cell, breathing faintly. The tilt lean
+  // shifts the field a few percent laterally so the phone's own body is felt
+  // in the star scatter, not only in the wind.
+  vec2 starUv = uv + vec2(u_tiltX * 0.02, 0.0);
   vec2 grid = vec2(60.0 * aspect, 60.0);
-  vec2 cell = floor(uv * grid);
+  vec2 cell = floor(starUv * grid);
   float starSeed = hash(cell.x * 127.1 + cell.y * 311.7);
   vec2 starPos = vec2(hash(starSeed * 53.7), hash(starSeed * 97.3));
-  float starD = length(fract(uv * grid) - starPos);
+  float starD = length(fract(starUv * grid) - starPos);
   float star = step(0.93, starSeed) * smoothstep(0.16, 0.0, starD) * smoothstep(0.5, 0.05, uv.y);
-  sky += vec3(0.85, 0.88, 1.0) * star * (0.5 + 0.35 * u_breath) * (0.4 + 0.6 * fract(starSeed * 91.7));
+  sky += vec3(0.85, 0.88, 1.0) * star * (0.5 + 0.35 * uBreath) * (0.4 + 0.6 * fract(starSeed * 91.7));
 
   // layer: cloud drift — slow fbm banks riding the wind, denser with charge.
+  // The cloud band leans farther than the stars — the low sky is closer, so
+  // a tilt reads there first (max ~4% of frame width).
   float drift = u_time * (0.012 + 0.02 * abs(u_wind)) * (1.0 - u_reduced);
-  float bank = noise(uv.x * 5.0 * aspect + drift * 3.0 + uv.y * 4.0)
-             * noise(uv.x * 2.3 * aspect - drift * 2.0 + 7.0);
+  vec2 cloudUv = uv + vec2(u_tiltX * 0.04, 0.0);
+  float bank = noise(cloudUv.x * 5.0 * aspect + drift * 3.0 + cloudUv.y * 4.0)
+             * noise(cloudUv.x * 2.3 * aspect - drift * 2.0 + 7.0);
   float cloudBand = smoothstep(0.55, 0.12, uv.y) * smoothstep(0.02, 0.2, uv.y);
   sky += vec3(0.11, 0.095, 0.16) * bank * cloudBand * (0.9 + 0.8 * u_charge);
 
   // layer: charge shimmer — the whole sky holds its breath, deeper as the
   // court's charge builds; never fully still even over an empty sky.
-  sky += vec3(0.045, 0.038, 0.09) * (0.12 + u_charge) * (0.55 + 0.45 * u_breath) * cloudBand;
+  sky += vec3(0.045, 0.038, 0.09) * (0.12 + u_charge) * (0.55 + 0.45 * uBreath) * cloudBand;
 
   // layer: lens — two fingers turn the sky into its charge chart: isolines
   // of height brighten so the court reads as a field, not a picture.
@@ -164,14 +194,28 @@ void main() {
     vec3 stone = mix(vec3(0.052, 0.052, 0.070), vec3(0.016, 0.016, 0.024), depth);
     float crest = exp(-(uv.y - g) * 34.0);
     // the standing moonlight: the ridge is always readable, breathing
-    stone += vec3(0.22, 0.23, 0.30) * crest * (0.6 + 0.3 * u_breath);
+    stone += vec3(0.22, 0.23, 0.30) * crest * (0.6 + 0.3 * uBreath);
     float snow = smoothstep(0.58, 0.50, g) * crest;
     stone += vec3(0.12, 0.13, 0.17) * snow;
     stone += vec3(0.55, 0.53, 0.6) * crest * (u_flash + b * 0.8);
-    stone += vec3(0.05, 0.05, 0.07) * crest * u_charge * u_breath;
+    stone += vec3(0.05, 0.05, 0.07) * crest * u_charge * uBreath;
+    // layer: ridge scorch — the ridge answers the bolt. u_ridgeStrike
+    // spikes to 1 at the moment of a strike and decays over ~1.5s. A small
+    // region above the bolt's landing X brightens with a hot afterimage that
+    // cools through orange → deep-red → gone, so the ridge visibly RECEIVES
+    // the strike instead of standing indifferent to it.
+    float strikeD = abs(uv.x - u_strikeX);
+    float strikeBand = exp(-strikeD * 46.0) * exp(-(uv.y - g) * 22.0);
+    // hot afterglow cools with the decay: 1 → orange → deep red → dark
+    vec3 hot = mix(vec3(0.32, 0.06, 0.02), vec3(1.0, 0.62, 0.22), u_ridgeStrike);
+    stone += hot * strikeBand * u_ridgeStrike * 1.6;
     c = stone;
   }
 
+  // pre-ceremony dimming: a one-finger hold approaching the ceremony tier
+  // dims the whole sky by up to 30%, so the crack lands into a darker frame
+  // and the moment before feels inevitable.
+  c *= 1.0 - 0.30 * u_darken;
   c *= 1.0 - 0.72 * u_night;
   c *= u_brightness;
   float vig = smoothstep(1.35, 0.45, length(uv - vec2(0.5, 0.48)));
@@ -404,7 +448,8 @@ export default function Zeus() {
     }
     setStanding(population.standing());
 
-    const stage = createGLStage(canvas, { wrap, label: "zeus", reducedMotion: reduced });
+    const embedded = isEmbeddedFrame();
+    const stage = createGLStage(canvas, { wrap, label: "zeus", reducedMotion: reduced, embedded });
     const prog = stage?.program(FULLSCREEN_VERT_CLIP, FIELD) ?? null;
     const quad = stage && prog ? stage.fullscreenQuad(prog) : null;
     const layer = stage
@@ -419,17 +464,69 @@ export default function Zeus() {
     let timeScale = 1;
     let lensAmount = 0;
     let night = 0;
+    // the vessel's own lean — read straight off gamma, pushed to u_tiltX so
+    // the whole court leans and the star field shifts with the hand's grip.
+    let tiltX = 0;
+    // the ceremony hold's build-up — climbs while a one-finger hold is past
+    // ~1500ms and still short of the ceremony act, so the sky visibly dims
+    // toward the strike. Read as u_darken.
+    let ceremonyDarken = 0;
+    let dwellHoldMs = 0;
 
     // the field's strike state — one bolt at a time, decaying in the loop
     let flash = 0;
     let boltAmp = 0;
     let boltX = 0.5;
     let boltSeed = 0;
+    // the ridge's answer — spikes to 1 on any strike, decays over ~1.5s. The
+    // strike x-coordinate stays with it so the scorch stays where the bolt
+    // actually landed even after subsequent frames.
+    let ridgeStrike = 0;
+    let strikeX = 0.5;
+
+    // The idle sky's own speech — after a stretch of no hand, the horizon
+    // flashes softly and a low rumble arrives from beyond the frame. The
+    // manifest declares this cadence (life.glimmer.after_idle_ms = 15000);
+    // the literal 15000 below IS the honoured contract.
+    const IDLE_FLASH_AFTER_MS = 15000;
+    let lastInteractionMs = performance.now();
+    let nextDistantFlashMs = performance.now() + IDLE_FLASH_AFTER_MS;
+    // seed the distant-flash RNG off a small state vector so replays are
+    // deterministic — nothing rolls Math.random() in the room (AGENTS.md §5).
+    const distantRng = mulberry32(0x2eef);
+    // the knock counter — advanced each time the vessel is rapped so the
+    // seeded pick of a struck house is a pure function of the visit's state.
+    let knockCount = 0;
+
+    // On any hand act the sky's own patience resets so the ambient speech
+    // does not clip a real gesture.
+    const noteInteraction = (tMs: number) => {
+      lastInteractionMs = tMs;
+      // wait a fresh full idle window before the sky speaks unprompted
+      nextDistantFlashMs = tMs + IDLE_FLASH_AFTER_MS;
+    };
 
     // the peal — the top rung: houses answer in nearest-first order, one
     // voice per PEAL_STAGGER_MS, driven by the frame clock (never a timer)
     const pealQueue: number[] = [];
     let pealDueMs = 0;
+
+    // Distance from center → audio delay. A bolt at the edge of the sky
+    // arrives at the ear ~200-800ms after the eye caught it, and that
+    // perceptual latency IS the sky's depth. Center strikes ring immediately.
+    const strikeDelaySec = (nx: number): number => {
+      const off = Math.abs(nx - 0.5) * 2; // 0..1
+      return 0.2 * off + 0.6 * off * off; // 0 at center, ~0.8s at rim
+    };
+
+    // Pick the thunder's layer count from the current tier — the low tier
+    // gets the sub-bass alone, medium drops the noise tail, high runs full.
+    const thunderLayers = (): number => {
+      const t = gov.tier();
+      if (t === "low" || t === "sleep") return 1;
+      if (t === "medium") return 2;
+      return 3;
+    };
 
     const discharge = (s: Thunderhead, tMs: number, solo: boolean) => {
       const energy = boltEnergy(s.charge, s.water);
@@ -437,13 +534,39 @@ export default function Zeus() {
       boltAmp = Math.min(1, 0.6 + energy * 0.25);
       boltX = s.nx;
       boltSeed = (s.seed % 1000) / 1000 + s.nx;
-      // the thunder is the ledger: pitch reads the strike, length rides it
-      audio.playTone(thunderHz(energy), Math.min(1.6, 0.5 + energy * 0.5));
+      // the ridge answers: the scorch lands where the bolt actually did, and
+      // decays over ~1.5s. Solo bolts (the ceremony) burn the hottest.
+      ridgeStrike = Math.min(1, solo ? 1 : 0.7 + energy * 0.2);
+      strikeX = s.nx;
+      const delaySec = strikeDelaySec(s.nx);
+      // the thunder is the ledger: pitch reads the strike, length rides it —
+      // and the whole clap layers a sub-bass thump, a mid-band discharge,
+      // and a filtered rumble tail scaled by the bolt's own energy.
+      audio.playThunder(energy, delaySec, thunderLayers());
+      audio.playTone(thunderHz(energy), Math.min(1.6, 0.5 + energy * 0.5), delaySec);
       audio.thud();
       if (solo) haptics.storm();
       else haptics.chop();
       s.charge = 0;
       s.presence = 0.999; // spent — the house leaves the sky it lit
+      writer.schedule();
+    };
+
+    // A small strike — the knock on the vessel's back. Half the flash, half
+    // the ridge scorch, no ceremony, and it does NOT spend the house — the
+    // sky answers the knock as with any storm-god propitiation.
+    const smallStrike = (s: Thunderhead, tMs: number) => {
+      const energy = boltEnergy(s.charge * 0.55, s.water * 0.7);
+      flash = Math.min(1, Math.max(flash, 0.35 + energy * 0.2));
+      boltAmp = Math.min(1, Math.max(boltAmp, 0.45 + energy * 0.2));
+      boltX = s.nx;
+      boltSeed = (s.seed % 1000) / 1000 + s.nx * 0.7;
+      ridgeStrike = Math.min(1, Math.max(ridgeStrike, 0.55));
+      strikeX = s.nx;
+      const delaySec = strikeDelaySec(s.nx);
+      audio.playThunder(energy * 0.6, delaySec, Math.max(1, thunderLayers() - 1));
+      s.flicker = Math.min(1.4, s.flicker + 0.7);
+      s.charge = Math.max(0, s.charge - 0.15);
       writer.schedule();
     };
 
@@ -482,6 +605,7 @@ export default function Zeus() {
       const nx = x / width;
       const ny = y / height;
       const tMs = performance.now();
+      noteInteraction(tMs);
       const tier = tapTrainTier(count);
       const depth = tapTrainDepth(count);
 
@@ -523,7 +647,8 @@ export default function Zeus() {
         b.presence = 0.999;
         spawnWith(m.nx, m.ny, m.charge, m.water, tMs);
         flash = Math.min(1, 0.35 + 0.3 * intensity);
-        audio.playTone(thunderHz(boltEnergy(m.charge, m.water)) * 2, 0.5);
+        const summonsEnergy = boltEnergy(m.charge, m.water);
+        audio.playTone(thunderHz(summonsEnergy) * 2, 0.5, strikeDelaySec(m.nx));
         audio.bell();
         haptics.roll();
         return;
@@ -564,6 +689,11 @@ export default function Zeus() {
       }
     };
 
+    // The ceremony's 120ms silence before the crack: the ceremony verb queues
+    // the discharge and clears the sealed mark; the loop reads this timer and
+    // fires when it passes. Anticipation as a felt beat, not just a shape.
+    let pendingCeremony: { sealed: Thunderhead; readyMs: number } | null = null;
+
     voiceRef.current = populationVoice(population, {
       size: () => ({ width: wrap.clientWidth, height: wrap.clientHeight }),
       now: () => performance.now(),
@@ -575,16 +705,22 @@ export default function Zeus() {
       },
       onAnswered: (e, answered) => {
         if (answered > 0) writer.schedule();
+        // dwell — the hand feels the store deepening under it: a light tap
+        // per acknowledgement, so the third sense lands with each answered
+        // pass rather than only at the ceremony's cliff.
+        if (e.verb === "dwell" && answered > 0) haptics.tap();
         if (e.verb === "ceremony") {
-          // the sealed house is the chosen one — spend it now, at the room
-          // level, where the bolt and the thunder live
+          // the sealed house is the chosen one — queue the strike so the
+          // 120ms silence lands as anticipation, then discharge at the room
+          // level where the bolt and the thunder live.
           for (const s of population.items) {
             if (s.sealedMs !== null && s.presence >= 1) {
               s.sealedMs = null;
-              discharge(s, e.tMs, true);
+              pendingCeremony = { sealed: s as Thunderhead, readyMs: e.tMs + 120 };
+              // brief silence: nothing crackles for 120ms — the pause IS the beat
+              break;
             }
           }
-          setStanding(population.standing());
         }
       },
       world: {
@@ -599,6 +735,10 @@ export default function Zeus() {
         },
         gravity: (_beta, gamma) => {
           gravity = Math.max(-1, Math.min(1, gamma / 45));
+          // tilt lean: the vessel's gamma pushes the whole cloud band and
+          // the star field laterally so a tilt visibly leans the court, not
+          // just the drift. Clamped to ±1 → ~4% of frame width max.
+          tiltX = Math.max(-1, Math.min(1, gamma / 45));
         },
         timeScale: (k) => {
           timeScale = k;
@@ -606,7 +746,8 @@ export default function Zeus() {
       },
     });
     // the ladder replaces the default single-rung tap; the lens dims the
-    // court into its chart while the twist lives
+    // court into its chart while the twist lives; knock and shake land in
+    // the sky as the vessel's own speech.
     const baseVoice = voiceRef.current;
     voiceRef.current = {
       ...baseVoice,
@@ -614,9 +755,52 @@ export default function Zeus() {
         if (t.fingers !== 1) return;
         tapRef.current(t.x, t.y, t.intensity, t.count);
       },
+      tutti: (t) => {
+        // tap3 — sheet lightning in every house at once, felt as a long roll
+        haptics.roll();
+        baseVoice.tutti?.(t);
+      },
+      deepen: (d) => {
+        // one-finger hold: track how long the hand has been resting so the
+        // sky can dim toward the ceremony. The engine's `deepen` fires only
+        // for the finger-material hold — three-finger holds route through
+        // `timeScale`, so there is nothing to gate here.
+        dwellHoldMs = d.elapsed;
+        noteInteraction(performance.now());
+        baseVoice.deepen?.(d);
+      },
       lens: (l) => {
+        // twist raises the chart lens; the two soft clicks are the hand's
+        // receipt that the sky turned.
         lensAmount = Math.max(0, Math.min(1, lensAmount + l.angle * 0.25));
+        haptics.lens();
+        noteInteraction(performance.now());
         baseVoice.lens?.(l);
+      },
+      knock: (k) => {
+        // vessel knock: the sky answers propitiation with a small strike
+        // from one standing house — not a full ceremony bolt, just a bright
+        // flicker and a short thunder. The pick is a pure function of the
+        // knock count and the population's own seeds, so a replay of the
+        // same knocks lands the same houses. Study Fire.tsx's vessel binding
+        // for how the phone's own body becomes the other hand.
+        const alive = population.items.filter((s) => s.presence >= 1);
+        if (alive.length > 0) {
+          knockCount = (knockCount + 1) | 0;
+          const rng = mulberry32((knockCount * 2654435761) ^ (alive[0].seed | 0));
+          const idx = Math.floor(rng() * alive.length) % alive.length;
+          const pick = alive[idx] as Thunderhead;
+          smallStrike(pick, performance.now());
+        }
+        haptics.detent();
+        noteInteraction(performance.now());
+        baseVoice.knock?.(k);
+      },
+      scatter: (s) => {
+        // shake — friction across the sky, felt as a stutter
+        haptics.chop();
+        noteInteraction(performance.now());
+        baseVoice.scatter?.(s);
       },
       night: (n) => {
         night = n.faceDown ? 1 : 0;
@@ -625,9 +809,11 @@ export default function Zeus() {
     };
 
     plantRef.current = (nx, ny) => {
-      spawnWith(nx, Math.min(SKY_FLOOR, Math.max(SKY_TOP, ny)), 0.2, 0.15, performance.now());
+      const tMs = performance.now();
+      spawnWith(nx, Math.min(SKY_FLOOR, Math.max(SKY_TOP, ny)), 0.2, 0.15, tMs);
       audio.chime();
       haptics.ripple(0.5);
+      noteInteraction(tMs);
       setStanding(population.standing());
     };
     glimmerRef.current = () => {
@@ -655,11 +841,22 @@ export default function Zeus() {
       haptics.roll();
     };
 
-    const gov = createFrameGovernor();
+    // Embedded (gallery iframe) starts one tier down: DPR ceiling and detail
+    // are lower before the frame governor's ema has a chance to react.
+    const gov = createFrameGovernor(embedded ? "medium" : "high");
     let hidden = false;
+    let galleryPaused = false;
     const offVisibility = onVisibility((h) => {
       hidden = h;
       if (h) gov.force("sleep");
+    });
+    // Wave-1 gallery pause: when ScrollingGallery scrolls the iframe out of
+    // view the parent posts `{ pause: true }`. Zeus honours that alongside
+    // document.hidden so the RAF sleeps and the sky pays nothing while off
+    // screen — same shape as /aphros and /sea.
+    const offGalleryPause = onGalleryPause((p) => {
+      galleryPaused = p;
+      if (p) gov.force("sleep");
     });
 
     const step: StepContext = {
@@ -680,7 +877,10 @@ export default function Zeus() {
     let lastStanding = population.standing();
     const draw = (t: number) => {
       const tier = gov.beginFrame(t);
-      if (hidden) {
+      // Hidden OR gallery-paused → the RAF still ticks so the mount can
+      // restart cleanly, but no simulation, no shader draw, no audio; the
+      // frame budget for the off-screen room is essentially zero.
+      if (hidden || galleryPaused) {
         last = t;
         raf = requestAnimationFrame(draw);
         return;
@@ -695,6 +895,59 @@ export default function Zeus() {
       lensAmount *= 0.985;
       flash *= 1 - Math.min(1, dt * 5);
       boltAmp *= 1 - Math.min(1, dt * 3.2);
+      // ridge scorch cools over ~1.5s regardless of frame rate
+      ridgeStrike *= 1 - Math.min(1, dt / 1.5);
+      if (ridgeStrike < 0.001) ridgeStrike = 0;
+      // pre-ceremony darken climbs while a one-finger hold is past ~1500ms
+      // and there IS a standing house to spend; it decays fast on release
+      // so a hand that lifts short of ceremony leaves the sky bright again.
+      const inHold = dwellHoldMs > 1500;
+      const darkenTarget = inHold ? Math.min(0.9, (dwellHoldMs - 1500) / 900) : 0;
+      const darkenRate = inHold ? 3 : 6;
+      ceremonyDarken += (darkenTarget - ceremonyDarken) * Math.min(1, dt * darkenRate);
+      // Reset dwellHoldMs when no active hold — the shell's deepen stops
+      // firing, so if the last event is stale by ~250ms we count the hand
+      // as lifted. dwellHoldMs is stamped from d.elapsed on each deepen.
+      if (t - lastInteractionMs > 250) dwellHoldMs = 0;
+
+      // ——— the ceremony's pause becomes the crack. Fire the queued
+      // discharge once the 120ms silence has passed. Anticipation lands as
+      // a felt beat, not a shape drawn in the shader.
+      if (pendingCeremony && t >= pendingCeremony.readyMs) {
+        const chosen = pendingCeremony.sealed;
+        pendingCeremony = null;
+        if (chosen.presence >= 1) discharge(chosen, t, true);
+        setStanding(population.standing());
+        ceremonyDarken = 0;
+        dwellHoldMs = 0;
+      }
+
+      // ——— the sky's own speech at rest. After ~15s of no hand, a distant
+      // sheet flash appears on the horizon and a low delayed rumble arrives
+      // from beyond the frame; the interval reseeds to 6-14s so the sky
+      // reminds the visitor it is there without a clock. Skip on low tier
+      // so the frame budget for the primary material is protected.
+      if (
+        tier !== "low" && tier !== "sleep" &&
+        !reduced &&
+        t >= nextDistantFlashMs &&
+        t - lastInteractionMs > IDLE_FLASH_AFTER_MS
+      ) {
+        const bias = distantRng();
+        // one of two horizons — pick a side; edge, not center
+        const side = distantRng() > 0.5 ? 1 : -1;
+        const fx = 0.5 + side * (0.25 + bias * 0.22);
+        // very soft — 60% of the sitting flash + a small nudge
+        flash = Math.min(1, flash * 0.6 + 0.10 + 0.06 * bias);
+        // and a distant low rumble, delayed so it feels far
+        const distEnergy = 0.05 + 0.12 * bias;
+        audio.playThunder(distEnergy, 0.5 + 0.3 * bias, Math.max(1, thunderLayers() - 1));
+        // reschedule 6-14s ahead
+        nextDistantFlashMs = t + 6000 + Math.floor(distantRng() * 8000);
+        // decorate the horizon x used by the ridge-scorch subtly, but do NOT
+        // set ridgeStrike — the flash is above the horizon, the ridge stays cool
+        strikeX = fx;
+      }
 
       // ——— the court's own politics: induction between every standing pair,
       // and the union of any two whose anvils touch. CELL_CAP is 12, so the
@@ -727,8 +980,12 @@ export default function Zeus() {
             b.presence = 0.999;
             const born = spawnWith(m.nx, Math.min(SKY_FLOOR, Math.max(SKY_TOP, m.ny)), m.charge, m.water, t);
             born.flicker = 1.2;
-            flash = Math.min(1, 0.4 + boltEnergy(m.charge, m.water) * 0.2);
-            audio.playTone(thunderHz(boltEnergy(m.charge, m.water)) * 1.5, 0.7);
+            const energy = boltEnergy(m.charge, m.water);
+            flash = Math.min(1, 0.4 + energy * 0.2);
+            // a merge is a lesser peal — layered thunder, no ridge strike;
+            // the union RINGS but does not spend itself on the ridge.
+            audio.playThunder(energy * 0.5, strikeDelaySec(m.nx), Math.max(1, thunderLayers() - 1));
+            audio.playTone(thunderHz(energy) * 1.5, 0.7, strikeDelaySec(m.nx));
             haptics.roll();
             break; // a is spent — its remaining pairs are moot
           }
@@ -769,6 +1026,10 @@ export default function Zeus() {
         prog?.setFloat("u_night", night);
         prog?.setFloat("u_season", season);
         prog?.setFloat("u_lens", lensAmount);
+        prog?.setFloat("u_ridgeStrike", ridgeStrike);
+        prog?.setFloat("u_strikeX", strikeX);
+        prog?.setFloat("u_tiltX", tiltX);
+        prog?.setFloat("u_darken", ceremonyDarken);
         quad?.draw();
         buffer.reset();
         population.emit(
@@ -797,6 +1058,7 @@ export default function Zeus() {
     return () => {
       cancelAnimationFrame(raf);
       offVisibility();
+      offGalleryPause();
       writer.flush();
       layer?.dispose();
       quad?.dispose();
