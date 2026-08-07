@@ -1569,10 +1569,20 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     frame: "yield",
     chrome: "none",
     keeps: "objetdart:state:v1",
-    creates: null,
+    creates: "a kept reading",
+    interacts:
+      "stated exemption: a kept reading is a saved snapshot of the polygon — the eight weights, " +
+      "the region and the carried object at the moment of the center-hold — kept in the trail for " +
+      "the visitor's own return, not for other readings to act on. It carries no position, no mass, " +
+      "no proximity to another kept reading; the trail is a memory of dial positions in the same " +
+      "family as /signal's kept signals, not a field of bodies. The eight weights themselves act " +
+      "on each other continuously through the span-, scrub-, dyad- and gust-verbs — those live in " +
+      "the material of the whole surface, not in a creatable object.",
     exempt: {},
     rawPointer:
       "the founding vertex drag: each handle takes pointer capture on touchdown and tracks the pointer continuously against its own axis, which is a value scrub the engine classifies no verb for",
+    governor:
+      "the only requestAnimationFrame is the whole-field <LetGo> exhale — a bounded 1200ms one-shot that eases the eight weights back to 50 and then stops. There is no continuous simulation loop to tier under load; the compass otherwise renders through React state.",
   },
   {
     key: "galaxy",

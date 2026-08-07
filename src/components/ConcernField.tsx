@@ -10,7 +10,9 @@ import { attachGestures } from "@/lib/gesture";
 import { THRESHOLDS, tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { buildReading } from "@/lib/reading";
-import { createIdleWriter } from "@/lib/room-runtime";
+import { createIdleWriter, onVisibility } from "@/lib/room-runtime";
+import LetGo from "@/components/LetGo";
+import type { KeptReading } from "@/store/field";
 import type { ConcernKey } from "@/lib/types";
 
 /**
@@ -726,6 +728,86 @@ export default function ConcernField() {
     return () => writer.flush();
   }, [rose]);
 
+  // hidden-tab sleep bit: a mid-exhale animation in a background tab
+  // has no viewer, so the tick loop below reads this ref and lands on
+  // the final state at once rather than burning frames for nobody
+  // (room-runtime.ts, the shared visibility bus).
+  const hiddenRef = useRef(false);
+  useEffect(() => onVisibility((hidden) => { hiddenRef.current = hidden; }), []);
+
+  // ── the exhale (grammar §5) ────────────────────────────────────────
+  // The compass is the site's oldest stateful surface — the eight
+  // weights AND the readings it has stood witness to — and it never
+  // had a whole-field <LetGo> to release either. It does now, the
+  // shared shape reachable from every stateful room. One press softens
+  // the polygon back toward a null reading over a breath and releases
+  // every kept reading, with both storage keys written empty so an
+  // emptied compass stays emptied (AGENTS.md: an emptied room stays
+  // empty). The per-frame setConcerns are folded into a single
+  // useField.setState so the tape does not fill with pulses during
+  // the animation.
+  const letGo = useCallback(() => {
+    const from = { ...useField.getState().concerns };
+    const start = performance.now();
+    const DUR = 1200;
+    // the kept trail is released in full — a single [] the animation's
+    // landing frame and the storage write both draw from
+    const clearedKept: KeptReading[] = [];
+    const land = () => {
+      // land at 50 exactly, release every kept reading, and write the
+      // emptied shape to storage. The store's own persist writer only
+      // picks up setConcern() calls, so the two storage keys are
+      // written directly here — the same shape the store itself
+      // writes (see persist() in src/store/field.ts).
+      const final = { ...from };
+      (Object.keys(from) as ConcernKey[]).forEach((k) => { final[k] = 50; });
+      const st = useField.getState();
+      useField.setState({ concerns: final, preset: null, keptReadings: clearedKept });
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.setItem(
+            "objetdart:state:v1",
+            JSON.stringify({
+              concerns: final,
+              preset: null,
+              region: st.region,
+              carriedObject: st.carriedObject,
+            }),
+          );
+          window.localStorage.setItem("objetdart:kept:v1", JSON.stringify(clearedKept));
+        } catch { /* noop */ }
+      }
+    };
+    const tick = () => {
+      // hidden tab: no viewer means no exhale to draw. Land at once and
+      // stop scheduling frames so a background page keeps costing zero.
+      if (hiddenRef.current) { land(); return; }
+      const t = Math.min(1, (performance.now() - start) / DUR);
+      // easeOutCubic — the exhale slows into rest the way a held
+      // breath actually leaves
+      const eased = 1 - Math.pow(1 - t, 3);
+      const next = { ...from };
+      (Object.keys(from) as ConcernKey[]).forEach((k) => {
+        next[k] = from[k] + (50 - from[k]) * eased;
+      });
+      useField.setState({ concerns: next, preset: null });
+      if (t < 1) {
+        requestAnimationFrame(tick);
+        return;
+      }
+      land();
+    };
+    requestAnimationFrame(tick);
+    try { haptics.roll(); } catch { /* noop */ }
+  }, []);
+
+  // Visibility: anything meaningfully off-centre — the eight-weight null
+  // reading is 50 on every axis, and a couple of points of drift is not
+  // a state the exhale has anything to say to.
+  const anyConcernOffCenter = (Object.values(concerns) as number[]).some(
+    (v) => Math.abs(v - 50) > 3,
+  );
+
   // build the polygon points string
   const polygonPoints = RADIAL_ORDER.map((k, i) => {
     const p = pointAt(i, concerns[k], rose);
@@ -742,6 +824,11 @@ export default function ConcernField() {
 
   return (
     <section id="concern-field" className="rule" data-touch-surface="true" style={{ scrollMarginTop: 72 }}>
+      {/* whole-field clear — the shared <LetGo/>, never a hand-rolled button.
+          The compass keeps the eight weights and every reading it stood
+          witness to; the exhale releases every kept reading and softens
+          the polygon back to a null shape over one breath. */}
+      <LetGo label="let the reading go" onLetGo={letGo} visible={anyConcernOffCenter} />
       <div className="wrap">
         {/* The room says what it is and nothing about how to work it: it was a
             section of a scrolling page once, where a line of instruction was
