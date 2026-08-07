@@ -9,7 +9,7 @@ export default function CityPage() {
     <>
       <SiteHeader />
       <City />
-      <AxisChrome route="/city" />
+      <AxisChrome route="/city" travel={false} />
     </>
   );
 }

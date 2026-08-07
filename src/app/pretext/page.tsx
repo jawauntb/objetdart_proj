@@ -15,7 +15,7 @@ export default function PretextPage() {
       <main>
         <PretextWave />
       </main>
-      <AxisChrome route="/pretext" />
+      <AxisChrome route="/pretext" travel={false} />
     </>
   );
 }

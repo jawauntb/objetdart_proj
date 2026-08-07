@@ -27,6 +27,8 @@ import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { useField } from "@/store/field";
 import LetGo from "@/components/LetGo";
+import { useBandEdgeTravel } from "@/components/ScaleTravel";
+import type { RoomZoomSpec } from "@/lib/scale";
 import {
   BLOOM_PEAK,
   GOLDEN_ANGLE,
@@ -58,6 +60,20 @@ const MAX_PLANTS = 28;
 const MAX_VOLUNTEERS = 6;
 const GEO_EPS = 0.004;
 const WILT_MS = 1700;
+
+// /flowers lives in the flowers band and owns its own pinch-zoom (AxisChrome
+// travel={false}). It joins the manifold via the adapter: the garden's zoom
+// is 1:1 the zoom parameter, with the widest view (0.75) as the band ceiling
+// (larger scales beyond toward birds) and the tightest (1.5) as the band
+// floor (smaller scales beyond toward drop). Residual pinch at either
+// extreme becomes wall pressure the same physics as everywhere else.
+const FLOWERS_ZOOM_MIN = 0.75;
+const FLOWERS_ZOOM_MAX = 1.5;
+export const FLOWERS_ZOOM_SPEC: RoomZoomSpec = {
+  band: "flowers",
+  zoomMin: FLOWERS_ZOOM_MIN,   // widest view → band ceiling
+  zoomMax: FLOWERS_ZOOM_MAX,   // tightest view → band floor
+};
 const WILT_MS_REDUCED = 650;
 
 type Plant = {
@@ -288,6 +304,22 @@ export default function FlowersGarden() {
   const letGoRef = useRef<() => void>(() => {});
   // how many planted (persisted) flowers stand — gates the letting-go affordance
   const [plantedAlive, setPlantedAlive] = useState(0);
+
+  // The scale manifold at the garden's zoom extremes. A pinch inside the
+  // garden's own range moves its zoom as always; only pinch held past the
+  // widest (0.75) or tightest (1.5) view presses toward the neighboring
+  // band — the same physics as every other axis room.
+  const {
+    report: reportScaleEdge,
+    release: releaseScaleEdge,
+    overlay: scaleEdgeOverlay,
+  } = useBandEdgeTravel("/flowers", FLOWERS_ZOOM_SPEC);
+  // Held in refs so the useEffect closure — mounted once — always reads
+  // the current callback identity that useBandEdgeTravel returns each render.
+  const reportScaleEdgeRef = useRef(reportScaleEdge);
+  const releaseScaleEdgeRef = useRef(releaseScaleEdge);
+  reportScaleEdgeRef.current = reportScaleEdge;
+  releaseScaleEdgeRef.current = releaseScaleEdge;
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -1114,8 +1146,17 @@ export default function FlowersGarden() {
       },
       pinch: (e) => {
         lastInteractionAt = performance.now();
-        // zoom within the band; travel across bands arrives with W1
-        if (e.phase !== "end") zoom = clamp(zoom * e.scale, 0.75, 1.5);
+        // zoom within the band; the manifold at either extreme is reached
+        // via the residual-pinch adapter (useBandEdgeTravel) below
+        if (e.phase === "end") { releaseScaleEdgeRef.current(); return; }
+        if (e.phase !== "move") return;
+        zoom = clamp(zoom * e.scale, FLOWERS_ZOOM_MIN, FLOWERS_ZOOM_MAX);
+        // Report the attempted pinch velocity to the adapter. Inside the
+        // garden's zoom range residualScaleInput answers inactive, so the
+        // report is inert; only at the widest (0.75) or tightest (1.5)
+        // extreme does continued pinch press become manifold wall pressure
+        // and, past TRAVEL_INTENT_MS, travel to the neighboring band.
+        reportScaleEdgeRef.current(zoom, e.velocity);
       },
       scrub: (e) => {
         lastInteractionAt = performance.now();
@@ -2064,6 +2105,7 @@ export default function FlowersGarden() {
         <canvas ref={canvasRef} className="flowers-canvas" aria-hidden="true" />
       </div>
 
+      {scaleEdgeOverlay}
       <LetGo label="let the garden go" onLetGo={() => letGoRef.current()} visible={plantedAlive > 0} />
 
       <style
