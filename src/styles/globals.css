@@ -41,6 +41,19 @@ html, body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   font-feature-settings: "kern", "liga", "calt", "onum";
+  /* Kill the iOS/Android rubber-band on the root — immersive rooms (ocean,
+     stars, city, atlas) draw edge-to-edge with `viewport-fit=cover`, and
+     without this a two-finger drag would rubber-band the whole page and
+     reveal the paper edge under the shell. -y is redundant with the general
+     rule but explicit for iOS Safari, which honors the axis form earlier. */
+  overscroll-behavior: none;
+  overscroll-behavior-y: none;
+  /* iOS Safari draws a translucent blue tap-highlight over every anchor and
+     button by default; nothing in the album asks for it, and Link anchors
+     inside the header used to flash it. Suppress it on the body so a room's
+     own hover/active styles stand alone. */
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
 }
 
 a { color: inherit; text-decoration: none; }

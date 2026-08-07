@@ -49,6 +49,15 @@ export const metadata: Metadata = {
     "interactive poem",
     "objet d'art",
   ],
+  // iOS auto-linkifies bare digit runs as `tel:` links — the poem's numerals
+  // (dates, page numbers, breath counts) get an underline and turn blue. Turn
+  // that off site-wide so text keeps its material.
+  formatDetection: { telephone: false },
+  // Android Chrome's standalone hint. `apple-mobile-web-app-capable` covers
+  // iOS via `appleWebApp.capable` in siteMetadata(); mirror it here so a
+  // Chrome-on-Android install behaves the same. Next 14's `other` passes
+  // through unchanged.
+  other: { "mobile-web-app-capable": "yes" },
 };
 
 export const viewport: Viewport = {
@@ -58,7 +67,9 @@ export const viewport: Viewport = {
   // like /ocean fill the screen edge-to-edge; chrome opts back in with
   // env(safe-area-inset-*) so nothing important hides under device bezels.
   viewportFit: "cover",
-  themeColor: "#F2EEE6",
+  // themeColor is set per-room from `siteMetadata()` (visual.bg), so moving
+  // between rooms retints the iOS Safari chrome instead of flashing the
+  // paper default between every navigation.
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
