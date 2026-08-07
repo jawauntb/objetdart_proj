@@ -34,6 +34,9 @@ import cabinet from "@/rooms/cabinet/room.config";
 import compass from "@/rooms/compass/room.config";
 import galaxy from "@/rooms/galaxy/room.config";
 import geyser from "@/rooms/geyser/room.config";
+import insects from "@/rooms/insects/room.config";
+import land from "@/rooms/land/room.config";
+import localgroup from "@/rooms/localgroup/room.config";
 import marsh from "@/rooms/marsh/room.config";
 import orb from "@/rooms/orb/room.config";
 import pebble from "@/rooms/pebble/room.config";
@@ -47,6 +50,8 @@ import soil from "@/rooms/soil/room.config";
 import solar from "@/rooms/solar/room.config";
 import spring from "@/rooms/spring/room.config";
 import tidepool from "@/rooms/tidepool/room.config";
+import viruses from "@/rooms/viruses/room.config";
+import voids from "@/rooms/voids/room.config";
 
 export const ROOM_MANIFESTS = [
   atmosphere,
@@ -55,6 +60,9 @@ export const ROOM_MANIFESTS = [
   compass,
   galaxy,
   geyser,
+  insects,
+  land,
+  localgroup,
   marsh,
   orb,
   pebble,
@@ -68,6 +76,8 @@ export const ROOM_MANIFESTS = [
   solar,
   spring,
   tidepool,
+  viruses,
+  voids,
 ] as const;
 
 /** Literal union of every manifest-declared room key. */

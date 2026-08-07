@@ -156,6 +156,9 @@ const expectedKeys = [
   "cabinet",
   "compass",
   "geyser",
+  "insects",
+  "land",
+  "localgroup",
   "marsh",
   "orb",
   "pebble",
@@ -164,6 +167,8 @@ const expectedKeys = [
   "root",
   "spring",
   "tidepool",
+  "viruses",
+  "voids",
 ];
 const validClusters = new Set(["field", "water", "nature", "mechanism"]);
 const validIcons = new Set(
