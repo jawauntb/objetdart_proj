@@ -29,6 +29,7 @@ import { useField } from "@/store/field";
 import LetGo from "@/components/LetGo";
 import { useBandEdgeTravel } from "@/components/ScaleTravel";
 import type { RoomZoomSpec } from "@/lib/scale";
+import { clocksFrom } from "@/lib/webgl/sizing";
 import {
   BLOOM_PEAK,
   GOLDEN_ANGLE,
@@ -1667,9 +1668,14 @@ export default function FlowersGarden() {
       season += (seasonTarget - season) * Math.min(1, dt * 3);
       nightAmt += ((night ? 1 : 0) - nightAmt) * Math.min(1, dt * 1.4);
 
-      // shared breath: the audio swell clock when audible, RAF when not
+      // shared breath: sourced through clocksFrom so the garden phase-locks
+      // to the album's 7s exhale (PR #373's shader rooms + PR #382's canvas-2d
+      // fields all read the same clock). Audio time still preferred when
+      // audible so plant sway stays musically legible; performance.now is the
+      // fallback and matches every other room's time source.
       const audioT = readAudioTime();
       const bt = audioT != null ? audioT : now / 1000;
+      const { breath: albumBreath } = clocksFrom({ time: bt, reducedMotion: reduce });
       const breath = bt * Math.PI * 2 * 0.14;
 
       // the entrained pulse: while the hand's tempo lasts, every bed leans
@@ -1874,8 +1880,12 @@ export default function FlowersGarden() {
       ctx.fillRect(0, 0, width, height);
       ctx.save();
       ctx.translate(panX * 0.3, panY * 0.3);
+      // album breath: ±10% on the ambient sky glow, phase-locked to every other
+      // room via clocksFrom — the garden inhales with the sea and the peak.
+      ctx.globalAlpha = 0.9 + 0.2 * albumBreath;
       ctx.fillStyle = glowGrad ?? "rgba(231,172,82,0.1)";
       ctx.fillRect(-panX, -panY, width + Math.abs(panX) * 2, height + Math.abs(panY) * 2);
+      ctx.globalAlpha = 1;
       ctx.restore();
       // drifting parchment motes — count scaled by the governed detail tier
       ctx.save();
