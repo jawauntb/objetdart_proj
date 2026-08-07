@@ -48,7 +48,14 @@ import { getAllNaturals } from "@/lib/world";
 import { spectralRegisterFor, entryScaleFor } from "@/lib/scale";
 import { clocksFrom } from "@/lib/webgl/sizing";
 import { createGLStage, FULLSCREEN_VERT_UNIT, type GLProgram, type GLStage } from "@/lib/webgl/stage";
-import { createIdleWriter } from "@/lib/room-runtime";
+import {
+  createFrameGovernor,
+  createIdleWriter,
+  detailForTier,
+  isEmbeddedFrame,
+  onGalleryPause,
+  onVisibility,
+} from "@/lib/room-runtime";
 import type { RoomVoice } from "@/lib/gesture/defaults";
 import { tapTrainDepth, tapTrainTier } from "@/lib/gesture/core";
 import {
@@ -628,6 +635,10 @@ export default function SoilGround() {
       wrap,
       label: "soil",
       overlay,
+      quality: isEmbeddedFrame() ? "medium" : "high",
+      embedded: isEmbeddedFrame(),
+      reducedMotion: reduced,
+      maxDpr: 1.5,
       contextAttributes: { alpha: false, antialias: true },
       onContextRestored: () => {
         buildPrograms();
@@ -1264,11 +1275,21 @@ export default function SoilGround() {
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
 
-    const onHide = () => {
-      if (document.visibilityState === "hidden") save(true);
-    };
-    document.addEventListener("visibilitychange", onHide);
+    const onHide = () => save(true);
     window.addEventListener("pagehide", onHide);
+
+    // ——— performance contract (src/lib/room-runtime) ———
+    // Governor + visibility + gallery-pause: the ground stops turning
+    // whenever the tab is hidden or the gallery iframe is paused, and the
+    // same visibility bit also flushes the shared idle writer.
+    const gov = createFrameGovernor(isEmbeddedFrame() ? "medium" : "high");
+    let sleeping = false;
+    let galleryPaused = false;
+    const offVis = onVisibility((hidden) => {
+      sleeping = hidden;
+      if (hidden) save(true);
+    });
+    const offGal = onGalleryPause((paused) => { galleryPaused = paused; });
 
     const register = spectralRegisterFor(entryScaleFor("/soil") ?? -2.5);
     // Reused every frame rather than a fresh literal — clocksFrom only reads
@@ -1278,6 +1299,9 @@ export default function SoilGround() {
     // ——— the loop: O(visible), one rAF, never O(history) ———
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
+      const tier = gov.beginFrame(now);
+      if (sleeping || galleryPaused) return;
+      const detail = detailForTier(tier);
       const delta = Math.min(64, now - last);
       last = now;
       const dt = delta / 1000;
@@ -1337,7 +1361,12 @@ export default function SoilGround() {
         ground.setFloat("uNight", night);
         ground.setFloat("uPress", press);
         ground.setVec2("uPressAt", pressX, pressY);
-        const n = Math.min(MAX_ORGANISMS, orgs.length);
+        // Root/mycorrhiza upload count rides the tier — the shader's per-org
+        // reach loop is a real per-fragment cost, so a struggling frame reads
+        // fewer lives, not slower ones. Every kept life still lives in orgs;
+        // the ledger is untouched.
+        const orgCap = Math.max(4, Math.min(MAX_ORGANISMS, Math.round(MAX_ORGANISMS * detail.particles)));
+        const n = Math.min(orgCap, orgs.length);
         for (let i = 0; i < n; i++) {
           orgUniform[i * 4] = orgs[i].nx;
           orgUniform[i * 4 + 1] = orgs[i].ny;
@@ -1493,11 +1522,12 @@ export default function SoilGround() {
     return () => {
       writer.flush();
       cancelAnimationFrame(raf);
+      offVis();
+      offGal();
       apiRef.current = null;
       reducedRef.current = null;
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
-      document.removeEventListener("visibilitychange", onHide);
       window.removeEventListener("pagehide", onHide);
       if (stage) {
         quad?.dispose();

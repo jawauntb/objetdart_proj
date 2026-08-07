@@ -58,7 +58,15 @@ import { spectralRegisterFor } from "@/lib/scale";
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { getTurbulence, stirTurbulence } from "@/lib/turbulence";
-import { createIdleWriter } from "@/lib/room-runtime";
+import {
+  createFrameGovernor,
+  createIdleWriter,
+  detailForTier,
+  isEmbeddedFrame,
+  onGalleryPause,
+  onVisibility,
+  resolveDpr,
+} from "@/lib/room-runtime";
 import {
   ARM_M,
   AZ_FACTOR,
@@ -900,6 +908,17 @@ export default function GalaxyArms() {
       keptDirty = true;
     };
 
+    // ——— performance contract (src/lib/room-runtime) ———
+    // Governor tiers real frame time; sleeping/galleryPaused stop draws
+    // whenever the tab is hidden or the enclosing gallery iframe posts a
+    // pause. The disc used to keep painting inside a paused iframe on
+    // mobile — a bug this bus exists to end.
+    const gov = createFrameGovernor(isEmbeddedFrame() ? "medium" : "high");
+    let sleeping = false;
+    let galleryPaused = false;
+    const offVis = onVisibility((hidden) => { sleeping = hidden; });
+    const offGal = onGalleryPause((paused) => { galleryPaused = paused; });
+
     // ——— geometry and the GPU, both from the shared stage ———
     // `createGLStage` owns the context cascade, DPR through the quality
     // tiers, shader errors with source context, the lockstep 2D overlay,
@@ -909,7 +928,10 @@ export default function GalaxyArms() {
       wrap,
       label: "galaxy",
       overlay,
+      quality: isEmbeddedFrame() ? "medium" : "high",
+      embedded: isEmbeddedFrame(),
       reducedMotion: reduced,
+      maxDpr: 1.5,
       contextAttributes: { alpha: false, antialias: false, depth: false },
     });
 
@@ -922,7 +944,11 @@ export default function GalaxyArms() {
       rectTop = r.top;
       aspect = width / height;
       if (!stage) {
-        const ratio = Math.min(1.5, window.devicePixelRatio || 1);
+        const ratio = resolveDpr(gov.tier(), {
+          embedded: isEmbeddedFrame(),
+          reducedMotion: reduced,
+          maxDpr: 1.5,
+        });
         overlay.width = Math.round(width * ratio);
         overlay.height = Math.round(height * ratio);
         ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
@@ -1447,6 +1473,9 @@ export default function GalaxyArms() {
     const regionVec = new Float32Array(REGION_MAX * 4);
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
+      const tier = gov.beginFrame(now);
+      if (sleeping || galleryPaused) return;
+      const detail = detailForTier(tier);
       const delta = Math.min(64, now - last);
       last = now;
       const dt = delta / 1000;
@@ -1530,6 +1559,8 @@ export default function GalaxyArms() {
         }
       }
       // upload the regions the shaders read: x, z, strength, shell radius
+      // The strength rides the tier — the same standing crowd reads at a
+      // dimmer amplitude when the frame is under strain, per detailForTier.
       for (let i = 0; i < REGION_MAX; i++) {
         const reg = regionsRef.current[i];
         if (!reg) {
@@ -1542,7 +1573,7 @@ export default function GalaxyArms() {
         const rp = regionAt(reg, tau);
         regionVec[i * 4] = rp.x;
         regionVec[i * 4 + 1] = rp.y;
-        regionVec[i * 4 + 2] = reg.strength * regionLife(reg, tau);
+        regionVec[i * 4 + 2] = reg.strength * regionLife(reg, tau) * detail.particles;
         regionVec[i * 4 + 3] = reg.ignited >= 0 ? shellRadius(tau - reg.ignited) : 0;
       }
 
@@ -1851,6 +1882,8 @@ export default function GalaxyArms() {
       observer.disconnect();
       mq.removeEventListener?.("change", onMq);
       cancelAnimationFrame(raf);
+      offVis();
+      offGal();
       writer.flush();
       discQuad?.dispose();
       starDraw?.dispose();
