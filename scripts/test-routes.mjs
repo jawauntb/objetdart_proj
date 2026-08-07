@@ -160,6 +160,7 @@ const expectedKeys = [
   "land",
   "localgroup",
   "marsh",
+  "observe",
   "orb",
   "pebble",
   "plank",

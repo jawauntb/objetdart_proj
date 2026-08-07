@@ -38,6 +38,7 @@ import insects from "@/rooms/insects/room.config";
 import land from "@/rooms/land/room.config";
 import localgroup from "@/rooms/localgroup/room.config";
 import marsh from "@/rooms/marsh/room.config";
+import observe from "@/rooms/observe/room.config";
 import orb from "@/rooms/orb/room.config";
 import pebble from "@/rooms/pebble/room.config";
 import planets from "@/rooms/planets/room.config";
@@ -64,6 +65,7 @@ export const ROOM_MANIFESTS = [
   land,
   localgroup,
   marsh,
+  observe,
   orb,
   pebble,
   planets,
