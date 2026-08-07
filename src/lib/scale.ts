@@ -949,6 +949,7 @@ export const LATERAL_ROUTE_BANDS: { prefix: string; band: ScaleBandId }[] = [
   // peak weather
   { prefix: "/clouds", band: "olympus" },
   { prefix: "/storm", band: "olympus" },
+  { prefix: "/zeus", band: "olympus" },
   // meadow under the flock
   { prefix: "/growth", band: "flowers" },
   // hearth — the ground and what people made on it
