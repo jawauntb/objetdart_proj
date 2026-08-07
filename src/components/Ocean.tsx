@@ -493,6 +493,44 @@ export default function Ocean() {
       if (sparks.length > 24) sparks.shift();
     };
 
+    // Mote and spark glows both used to allocate a fresh createRadialGradient
+    // inside the per-object loops that draw them — up to 84 motes × 1 gradient
+    // per frame in the abyss, which the paint test cannot see because the
+    // gradient call itself is one static line of source. Follow the
+    // Charts/Pulse/TimeManifold sprite-cache pattern: bake three teal→cyan
+    // alpha halos once (indexed by the mote's hue bucket), plus one shared
+    // sprite for the cold spark bloom, and stamp them with drawImage under
+    // lighter composition. Alpha carries the per-object intensity.
+    const MOTE_SPRITE_R = 64;
+    const bakeGlowSprite = (r: number, g: number, b: number): HTMLCanvasElement => {
+      const c = document.createElement("canvas");
+      const S = MOTE_SPRITE_R * 2;
+      c.width = S;
+      c.height = S;
+      const g2 = c.getContext("2d");
+      if (g2) {
+        const grad = g2.createRadialGradient(
+          MOTE_SPRITE_R, MOTE_SPRITE_R, 0,
+          MOTE_SPRITE_R, MOTE_SPRITE_R, MOTE_SPRITE_R,
+        );
+        grad.addColorStop(0, `rgba(${r}, ${g}, ${b}, 1)`);
+        grad.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+        g2.fillStyle = grad;
+        g2.fillRect(0, 0, S, S);
+      }
+      return c;
+    };
+    // three variants for the mote hue: 0 teal, 1 mid, 2 green — picked by
+    // Math.round(m.hue * 2). Colors match the old per-mote gradient's
+    // center stop, so the ramp reads the same at the pixel level.
+    const MOTE_SPRITES: HTMLCanvasElement[] = [
+      bakeGlowSprite(90, 210, 210),   // teal
+      bakeGlowSprite(125, 230, 175),  // mid
+      bakeGlowSprite(160, 250, 140),  // green
+    ];
+    // spark: teal→cyan center, matched to the old rgba(150, 255, 224) stop
+    const SPARK_SPRITE = bakeGlowSprite(150, 255, 224);
+
     // ── persistent naturals (from the shared world) ───────────────
     // Naturals live in a single pool across all pages (see src/lib/world.ts).
     // /ocean only renders things whose zone is "ocean", but the underlying
@@ -1644,14 +1682,14 @@ export default function Ocean() {
         if (age > 1.7) { sparks.splice(i, 1); continue; }
         const life = 1 - age / 1.7;
         const rad = 14 + age * 150;
-        const g = sctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, rad);
-        g.addColorStop(0, `rgba(150, 255, 224, ${0.30 * life * s.strength})`);
-        g.addColorStop(0.5, `rgba(70, 200, 230, ${0.14 * life * s.strength})`);
-        g.addColorStop(1, "rgba(40, 120, 200, 0)");
-        sctx.fillStyle = g;
-        sctx.beginPath();
-        sctx.arc(s.x, s.y, rad, 0, 7);
-        sctx.fill();
+        // baked sprite instead of a per-spark createRadialGradient — the
+        // multi-stop teal→cyan→prussian ramp collapses to a single teal
+        // sprite tinted by globalAlpha, which reads the same under
+        // "lighter" as the additive layers compose the way the stops did.
+        const prev = sctx.globalAlpha;
+        sctx.globalAlpha = prev * (0.30 * life * s.strength);
+        sctx.drawImage(SPARK_SPRITE, s.x - rad, s.y - rad, rad * 2, rad * 2);
+        sctx.globalAlpha = prev;
       }
       sctx.restore();
 
@@ -1682,16 +1720,14 @@ export default function Ocean() {
           glow = Math.min(1.5, glow);
           const rad = m.r * (1.6 + glow * 3.2);
           // teal → green by the mote's own hue, brighter cores when flaring.
-          const cr = Math.round(90 + m.hue * 70);
-          const cg = Math.round(210 + m.hue * 40);
-          const cb = Math.round(210 - m.hue * 70);
-          const g = sctx.createRadialGradient(mx, my, 0, mx, my, rad);
-          g.addColorStop(0, `rgba(${cr}, ${cg}, ${cb}, ${Math.min(0.9, glow * 0.8) * bioVis})`);
-          g.addColorStop(1, `rgba(${cr}, ${cg}, ${cb}, 0)`);
-          sctx.fillStyle = g;
-          sctx.beginPath();
-          sctx.arc(mx, my, rad, 0, 7);
-          sctx.fill();
+          // Baked sprite lookup replaces the per-mote gradient — three hue
+          // buckets cover the range the old gradient's center stop wandered
+          // through, and globalAlpha carries the flare intensity.
+          const sprite = MOTE_SPRITES[Math.round(m.hue * 2)];
+          const prev = sctx.globalAlpha;
+          sctx.globalAlpha = prev * Math.min(0.9, glow * 0.8) * bioVis;
+          sctx.drawImage(sprite, mx - rad, my - rad, rad * 2, rad * 2);
+          sctx.globalAlpha = prev;
         }
         sctx.restore();
       }
