@@ -56,10 +56,18 @@ const beam = {
   // change moved to a shared idle writer from room-runtime. The
   // objetdart:beam:memory blob (`{ tempo, night, sep }`) is unchanged.
   life: {
+    // The manifest used to describe the meteor-glimmer without a single line
+    // of source ever driving it. The wiring landed with this manifest's
+    // update: every classified gesture and every vessel event bumps
+    // `lastGestureRef`; after 20s of quiet the render loop chooses one petal
+    // through the seeded PRNG and drives `uMeteorIdx`/`uMeteorT` into the
+    // PETAL_VERT shader, which brightens that petal's trail for 1.4s. The
+    // literal `20000` lives in Beam.tsx (GLIMMER_IDLE_MS) so a future drift
+    // between manifest and source is a grep away.
     glimmer: {
       after_idle_ms: 20000,
       visual:
-        "one petal breaks formation and streaks across the sky as a meteor, and the two suns' bokeh softens by a hair — the eye of heaven blinks the way a quiet sky does.",
+        "one petal breaks formation and streaks across the sky as a meteor (its trail brightened for 1.4s via uMeteorIdx / uMeteorT), and the two suns' bokeh softens by a hair — the eye of heaven blinks the way a quiet sky does.",
     },
     // make_unmake is intentionally omitted: beam wires its whole-field
     // clear as a `letGo` callback passed to <LetGo>, not through a

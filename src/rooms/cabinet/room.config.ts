@@ -88,10 +88,18 @@ const cabinet = {
         },
       ],
     },
+    // The manifest used to describe the cluster-glow + ember pulse glimmer
+    // without a single line of source driving it. The wiring landed with
+    // this manifest's update: every classified gesture and every vessel
+    // event bumps `lastInteractionRef`; after 20s of quiet, and no more
+    // than once every 11s, the render loop bumps `activeClusterGlowRef`
+    // and `emberPulseRef`, and both decay together on a ~1600ms curve.
+    // The literal `20000` lives in HomeCabinet.tsx (CABINET_GLIMMER_IDLE_MS)
+    // so a future drift between manifest and source is a grep away.
     glimmer: {
       after_idle_ms: 20000,
       visual:
-        "the case's active-cluster glow brightens for a beat and the standing embers each catch a small, silent pulse — the raking lamp's own answer to the room having gone quiet.",
+        "the case's active-cluster glow brightens for a beat (activeClusterGlowRef read by the gems' emissiveIntensity) and the standing embers each catch a small, silent pulse (emberPulseRef read by every ember's heat) — the raking lamp's own answer to the room having gone quiet.",
     },
     // make_unmake is intentionally omitted: the cabinet's ceremony (a hold
     // on an ember that reaches the ceremony tier lets that ember go) lives

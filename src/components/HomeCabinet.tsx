@@ -203,6 +203,16 @@ export default function HomeCabinet() {
   // the patina is what survives the visit; `standing` is only what <LetGo> needs.
   const emberRef = useRef<Ember[]>([]);
   const growingRef = useRef<Ember | null>(null);
+  // The idle-glimmer's memory. lastInteractionRef is bumped by every
+  // classified gesture and every vessel event (the two useEffects below
+  // both write it, so it must live at the component scope). The two
+  // pulse refs are what the render loop's gems + embers read while the
+  // glimmer decays; they carry NO persistence — the manifest's glimmer
+  // is a physical hint, not a stored event.
+  const lastInteractionRef = useRef<number>(0);
+  const lastCabinetGlimmerAtRef = useRef<number>(0);
+  const activeClusterGlowRef = useRef<number>(0);
+  const emberPulseRef = useRef<number>(0);
   const [standing, setStanding] = useState(0);
   const [night, setNight] = useState(false);
 
@@ -372,8 +382,12 @@ export default function HomeCabinet() {
     let holdOnFurniture = false;
     const trainTimers = new Set<ReturnType<typeof setTimeout>>();
     let lastStirNoteAt = 0;
+    // Every classified gesture bumps this — the render loop's idle-glimmer
+    // reads it to decide when the room has gone quiet enough to answer.
+    const bumpIdle = () => { lastInteractionRef.current = performance.now(); };
     const detach = attachGestures(section, {
       tap: (e) => {
+        bumpIdle();
         if (document.elementFromPoint(e.x, e.y)?.closest("a, button")) return;
         if (e.fingers === 1) {
           // the rapid-tap ladder (tiers 1/3/5/n): each rung a deeper answer
@@ -448,6 +462,7 @@ export default function HomeCabinet() {
         }
       },
       twist: (e) => {
+        bumpIdle();
         if (e.phase !== "move") return;
         if (e.fingers === 3) {
           // the case's season: the light walks from warm to cold and back,
@@ -467,6 +482,7 @@ export default function HomeCabinet() {
         }
       },
       pan2: (e) => {
+        bumpIdle();
         if (e.phase === "end") return;
         panRef.current = {
           x: Math.max(-1, Math.min(1, panRef.current.x + e.dx * 0.0025)),
@@ -474,10 +490,12 @@ export default function HomeCabinet() {
         };
       },
       drag: (e) => {
+        bumpIdle();
         if (e.fingers !== 3) return;
         gustRef.current = Math.max(-1, Math.min(1, gustRef.current + e.dx * 0.01));
       },
       scrub: (e) => {
+        bumpIdle();
         // a circling hand stirs the dust: the drift follows the circle's own
         // speed and direction, and the motes brighten while they are stirred
         gustRef.current = Math.max(-3, Math.min(3, gustRef.current + Math.max(-6, Math.min(6, e.angularVelocity)) * 0.16));
@@ -495,6 +513,7 @@ export default function HomeCabinet() {
         }
       },
       span: (e) => {
+        bumpIdle();
         // two still fingers hold the case's chord open: the glass and the
         // core brighten for as long as the interval is sustained — deeper at
         // 2400ms than at 900ms, always — and the spread tunes its voice
@@ -522,6 +541,7 @@ export default function HomeCabinet() {
         spanRef.current = 0;
       },
       hold: (e) => {
+        bumpIdle();
         if (e.fingers >= 3) {
           if (e.phase === "release") { timeScaleRef.current = 1; return; }
           timeScaleRef.current = e.phase === "enter"
@@ -647,16 +667,19 @@ export default function HomeCabinet() {
     // night — the lights ease down until the phone turns back over.
     const detachVessel = onVessel({
       tilt: ({ beta, gamma }) => {
+        lastInteractionRef.current = performance.now();
         tiltRef.current = {
           x: Math.max(-1, Math.min(1, gamma / 45)),
           y: Math.max(-1, Math.min(1, beta / 45)),
         };
       },
       shake: ({ intensity }) => {
+        lastInteractionRef.current = performance.now();
         agitationRef.current = Math.min(1, agitationRef.current + intensity);
         try { haptics.chop(); } catch { /* noop */ }
       },
       knock: ({ intensity }) => {
+        lastInteractionRef.current = performance.now();
         // a rap on the case rings it by exactly how hard the case was struck
         tuttiRef.current = 0.6 + Math.min(1, intensity) * 0.4;
         try { getFieldAudio().bell(); } catch { /* noop */ }
@@ -665,6 +688,7 @@ export default function HomeCabinet() {
         tuttiTimer = setTimeout(() => { tuttiRef.current = 0; }, 700);
       },
       flip: ({ faceDown }) => {
+        lastInteractionRef.current = performance.now();
         nightRef.current = faceDown ? 1 : 0;
         setNight(faceDown);
       },
@@ -892,6 +916,15 @@ export default function HomeCabinet() {
     let panY = 0;
     let simTime = 0;
     let lastTier = gov.tier();
+    // Idle-glimmer: after 20s with no gesture and no more than once every
+    // 11s, the standing cluster's glow catches a small pulse and every
+    // ember answers with a matching bump. Both refs decay together at
+    // ~1600ms so the pulse is a quiet swell, not a switch. Bumps carry
+    // NO persistence — a glimmer is a physical hint, not a stored event.
+    lastInteractionRef.current = performance.now();
+    const CABINET_GLIMMER_IDLE_MS = 20000;
+    const CABINET_GLIMMER_COOLDOWN_MS = 11000;
+    const CABINET_GLIMMER_DECAY_MS = 1600;
     const tick = (now: number) => {
       const tier = gov.beginFrame(now);
       if (tier !== lastTier) { lastTier = tier; resize(); }
@@ -923,6 +956,28 @@ export default function HomeCabinet() {
       const nightLevel = nightRef.current;
       glowEase += (patinaRef.current.glow - glowEase) * 0.035;
       const level = 1 - Math.exp(-glowEase * 0.055);
+
+      // Idle glimmer: fires once every 11s once 20s of quiet have passed,
+      // bumping the standing cluster's glow and every ember's pulse. Read
+      // as `cabinetGlow` and `emberPulse` below so the eye sees the case
+      // remember the visitor without a single haptic or persistence write.
+      if (now - lastInteractionRef.current > CABINET_GLIMMER_IDLE_MS
+          && now - lastCabinetGlimmerAtRef.current > CABINET_GLIMMER_COOLDOWN_MS) {
+        activeClusterGlowRef.current = Math.min(1, activeClusterGlowRef.current + 0.35);
+        // The pulse is a scalar every ember reads uniformly — the visual is
+        // identical to bumping a per-ember brightness field and the write is
+        // O(1) rather than O(EMBER_CAP), which matters when the case is full.
+        // The one ember under the finger (growingRef) already has its own
+        // brightness boost in the heat calc below, so this pulse layers on
+        // top rather than replacing anything.
+        emberPulseRef.current = Math.min(1, emberPulseRef.current + 0.15);
+        lastCabinetGlimmerAtRef.current = now;
+      }
+      const glimmerDecay = Math.exp(-(dtReal * 1000) / CABINET_GLIMMER_DECAY_MS);
+      activeClusterGlowRef.current *= glimmerDecay;
+      emberPulseRef.current *= glimmerDecay;
+      const cabinetGlow = activeClusterGlowRef.current;
+      const emberPulse = emberPulseRef.current;
 
       // pan2 eases the whole assembly off-center, then springs back —
       // a grabbed pan, not a permanent camera move.
@@ -963,7 +1018,7 @@ export default function HomeCabinet() {
         mesh.rotation.y += dt * 0.8 * motion;
         mesh.position.z = (route.homePriority ? 0.34 : -0.12) + Math.sin(t * 0.9 + angle * 3) * 0.08 * motion + (isActive ? 0.26 : 0);
         material.emissiveIntensity =
-          ((isActive ? 0.84 : isCluster ? 0.34 : 0.08) + pointer.pulse * 0.12 + level * 0.18 + tutti * 0.4 + (isCluster ? ring * 0.5 : 0))
+          ((isActive ? 0.84 : isCluster ? 0.34 : 0.08) + pointer.pulse * 0.12 + level * 0.18 + tutti * 0.4 + (isCluster ? ring * 0.5 + cabinetGlow * 0.45 : 0))
           * (1 - nightLevel * 0.6);
       }
       // three-finger drag = wind: a gust speeds or reverses the dust
@@ -991,7 +1046,7 @@ export default function HomeCabinet() {
         // the one under the finger burns brightest, so a plant is legible
         // from the instant the dwell tier is crossed
         const heat =
-          (0.32 + e.weight * 0.85 + tutti * 0.5 + kindle * 0.8 + (e === growingNow ? 0.7 : 0)) *
+          (0.32 + e.weight * 0.85 + tutti * 0.5 + kindle * 0.8 + emberPulse * 0.55 + (e === growingNow ? 0.7 : 0)) *
           (1 - nightLevel * 0.65);
         emberColors[i * 3] = emberTint.r * heat;
         emberColors[i * 3 + 1] = emberTint.g * heat;
