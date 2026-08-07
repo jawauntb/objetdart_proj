@@ -804,6 +804,9 @@ export async function enableMotion(on: GestureHandlers): Promise<boolean> {
   let lastShakeAt = 0;
   let faceDown = false;
   let lastTiltAt = 0;
+  // See lib/vessel.ts for the story: |beta| hysteresis, not gravity sign.
+  const FLIP_ENTER_DEG = 150;
+  const FLIP_EXIT_DEG = 120;
 
   const onMotion = (ev: DeviceMotionEvent) => {
     const now = performance.now();
@@ -822,22 +825,26 @@ export async function enableMotion(on: GestureHandlers): Promise<boolean> {
         lastShakeAt = now;
       }
     }
-    const g = ev.accelerationIncludingGravity;
-    if (g && g.z !== null) {
-      // Device frame: face-up gravity reads z ≈ +9.8; face-down ≈ -9.8.
-      const down = g.z < -7;
-      if (down !== faceDown) {
-        faceDown = down;
-        on.flip?.({ faceDown });
-      }
-    }
+    // Face-down handling moved to onOrient: accelerationIncludingGravity.z
+    // has a cross-browser sign inconsistency that misfired night mode on
+    // a flat face-up iPad. Beta is W3C-standardized.
   };
 
   const onOrient = (ev: DeviceOrientationEvent) => {
     const now = performance.now();
     if (now - lastTiltAt < 50) return; // ~20Hz is plenty for gravity
     lastTiltAt = now;
-    if (ev.beta !== null && ev.gamma !== null) on.tilt?.({ beta: ev.beta, gamma: ev.gamma });
+    if (ev.beta !== null && ev.gamma !== null) {
+      on.tilt?.({ beta: ev.beta, gamma: ev.gamma });
+      const absBeta = Math.abs(ev.beta);
+      if (!faceDown && absBeta > FLIP_ENTER_DEG) {
+        faceDown = true;
+        on.flip?.({ faceDown });
+      } else if (faceDown && absBeta < FLIP_EXIT_DEG) {
+        faceDown = false;
+        on.flip?.({ faceDown });
+      }
+    }
   };
 
   window.addEventListener("devicemotion", onMotion);
