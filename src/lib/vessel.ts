@@ -51,6 +51,10 @@ const samples: MotionSample[] = [];
 let lastShakeAt = 0;
 let faceDown = false;
 let lastTiltAt = 0;
+// Hysteresis for face-down: enter at |beta| > FLIP_ENTER, exit under
+// FLIP_EXIT. The wide gap means an ordinary hand tilt cannot cross it.
+const FLIP_ENTER_DEG = 150;
+const FLIP_EXIT_DEG = 120;
 
 function storedGrant(): Grant | null {
   if (!isBrowser) return null;
@@ -116,15 +120,11 @@ const onMotion = (ev: DeviceMotionEvent) => {
       for (const h of handlers) h.knock?.(knock);
     }
   }
-  const g = ev.accelerationIncludingGravity;
-  if (g && g.z !== null) {
-    // Device frame: face-up gravity reads z ≈ +9.8; face-down ≈ -9.8.
-    const down = g.z < -7;
-    if (down !== faceDown) {
-      faceDown = down;
-      for (const h of handlers) h.flip?.({ faceDown });
-    }
-  }
+  // Face-down detection moved to onOrient below: DeviceOrientationEvent.beta
+  // is the W3C-standardized rotation around x (0 = face-up, ±180 = face-down),
+  // while accelerationIncludingGravity.z has a cross-browser sign inconsistency
+  // that made a flat *face-up* iPad read as face-down and dim the room — a
+  // gyroscope answer to a question the hand never asked.
 };
 
 const onOrient = (ev: DeviceOrientationEvent) => {
@@ -134,6 +134,17 @@ const onOrient = (ev: DeviceOrientationEvent) => {
   if (ev.beta !== null && ev.gamma !== null) {
     const tilt = { beta: ev.beta, gamma: ev.gamma };
     for (const h of handlers) h.tilt?.(tilt);
+    // Face-down / face-up as an act of the hand, not a resting bias. Hysteresis
+    // on |beta| so an ordinary tilt cannot skate across the threshold and the
+    // room never turns to night just because the device was set down.
+    const absBeta = Math.abs(ev.beta);
+    if (!faceDown && absBeta > FLIP_ENTER_DEG) {
+      faceDown = true;
+      for (const h of handlers) h.flip?.({ faceDown });
+    } else if (faceDown && absBeta < FLIP_EXIT_DEG) {
+      faceDown = false;
+      for (const h of handlers) h.flip?.({ faceDown });
+    }
   }
 };
 
