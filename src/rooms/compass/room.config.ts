@@ -75,12 +75,20 @@ const compass = {
       visual:
         "the rose walks one vertex on the quiet clock — each of the eight concerns sounds its own voice in turn, so a long idle shows the hand that all eight are the same kind of thing.",
     },
-    // make_unmake is intentionally omitted: the compass's whole-field
-    // clear is the shared `<LetGo>` reachable from the axis chrome, and
-    // its ceremony act (the center-hold that keeps a reading) is wired
-    // in a raw `hold:` handler inside attachGestures rather than a
-    // `useMemo<RoomVoice>` literal — the mechanical make_unmake_ceremony
-    // check would need the memo shape it does not have.
+    // The compass keeps the eight weights and every reading it stood
+    // witness to. The whole-field exhale (grammar §5) is the shared
+    // `<LetGo>` mounted in ConcernField.tsx: it softens the polygon
+    // back toward the null reading and releases every kept reading,
+    // with both storage keys written empty so an emptied compass
+    // stays emptied. The ceremony (center-hold that keeps a reading)
+    // is wired as an `e.tier >= 3` branch in the same attachGestures
+    // hold handler — the older idiom the quality check accepts
+    // alongside a `ceremony:` slot.
+    make_unmake: {
+      letgo_clears_population: true,
+      ceremony_is:
+        "the reading kept — a hold at the polygon's centre until the ring closes seals the eight weights into a permanent trail",
+    },
   },
 } as const satisfies RoomManifest;
 
