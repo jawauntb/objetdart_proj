@@ -79,6 +79,15 @@ const soil = {
   // idle writer from room-runtime. The payload at objetdart:soil:v2 is
   // byte-for-byte the same as before — only the WRITER is different.
   life: {
+    breath: {
+      period_seconds: 7,
+      reads: [
+        "uBreath uniform (fragment shader — hanging dust visibility `0.5 + uBreath * 0.5`)",
+        "uBreath uniform (mineral grain glint brightness `0.35 + 0.65 * uBreath`)",
+        "uBreath uniform (fungus-around-a-life feed glow `0.6 + uBreath * 0.4`)",
+      ],
+      behavior_at_rest: "three visible registers ride the 7s clock: dust hanging in the light pulses ±50%, the mineral glint down in the horizon rides ±65%, and the pale ring a fungus draws around itself in the soil it is eating swells ±40% — the ground is never still even between taps, and its exhale lines up with /reef and /root because clocksFrom is the site's one respiration",
+    },
     glimmer: {
       after_idle_ms: 20000,
       visual:

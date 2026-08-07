@@ -17,6 +17,7 @@ import {
   isEmbeddedFrame,
   detailForTier,
 } from "@/lib/room-runtime";
+import { clocksFrom } from "@/lib/webgl/sizing";
 
 /**
  * /storm — a PRESSURE + ELECTRICITY instrument.
@@ -137,6 +138,7 @@ export default function Storm() {
     let uLensLoc: WebGLUniformLocation | null = null;
     let uSeasonLoc: WebGLUniformLocation | null = null;
     let uPanLoc: WebGLUniformLocation | null = null;
+    let uBreathLoc: WebGLUniformLocation | null = null;
 
     const setupProgram = () => {
       if (!gl) return;
@@ -151,6 +153,7 @@ export default function Storm() {
       const frag = `
         precision highp float;
         uniform float uTime;
+        uniform float uBreath;
         uniform vec2 uRes;
         uniform float uStorm;
         uniform float uMaelstrom;
@@ -272,6 +275,9 @@ export default function Storm() {
           color = mix(color, vec3(0.20, 0.22, 0.26), seam * 0.18);
 
           color += vec3(uFlash);
+          // shared 7s album breath: the whole sky/sea ambient rides ±10% on
+          // the site's respiration, so /storm inhales in step with /reef.
+          color *= 1.0 + 0.10 * (uBreath - 0.5);
           color = clamp(color, 0.0, 1.5);
 
           // the lens: read the same field as pressure/temperature, not felt
@@ -317,6 +323,7 @@ export default function Storm() {
             uLensLoc = gl.getUniformLocation(p, "uLens");
             uSeasonLoc = gl.getUniformLocation(p, "uSeason");
             uPanLoc = gl.getUniformLocation(p, "uPan");
+            uBreathLoc = gl.getUniformLocation(p, "uBreath");
 
             const buf = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -1385,6 +1392,9 @@ export default function Storm() {
       // ── WebGL pass ─────────────────────────────────────────────
       if (gl && glProg) {
         gl.useProgram(glProg);
+        // shared album clocks: /storm rides the same 7s breath as /reef and
+        // /root, so walking between them feels like one site inhaling.
+        const { breath } = clocksFrom({ time: now / 1000, turbulence: s, reducedMotion: reduce });
         if (uTimeLoc) gl.uniform1f(uTimeLoc, t);
         if (uResLoc) gl.uniform2f(uResLoc, water.width, water.height);
         if (uStormLoc) gl.uniform1f(uStormLoc, s);
@@ -1394,6 +1404,7 @@ export default function Storm() {
         if (uLensLoc) gl.uniform1f(uLensLoc, lens);
         if (uSeasonLoc) gl.uniform1f(uSeasonLoc, season);
         if (uPanLoc) gl.uniform2f(uPanLoc, panX, panY);
+        if (uBreathLoc) gl.uniform1f(uBreathLoc, breath);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       } else {
         const wctx = water.getContext("2d");

@@ -112,7 +112,7 @@ import {
   windVoice,
   type SkyPalette,
 } from "@/lib/heightfield";
-import { formatShaderError } from "@/lib/webgl/sizing";
+import { formatShaderError, clocksFrom } from "@/lib/webgl/sizing";
 import {
   onVisibility,
   onGalleryPause,
@@ -208,6 +208,7 @@ uniform float uSnowKm;
 uniform vec2 uWind;
 uniform float uLens;
 uniform float uTutti;
+uniform float uBreath;  // shared album 7s respiration, 0..1
 uniform int uSteps;
 uniform int uRefine;
 uniform int uShadowSteps;
@@ -345,6 +346,10 @@ void main() {
 
   // one pulse of everything alive: the range states itself
   col += col * uTutti * 0.2;
+
+  // shared 7s album breath: the range's ambient rides ±10% on the site's
+  // respiration so /mountain inhales in step with /reef and /root.
+  col *= 1.0 + 0.10 * (uBreath - 0.5);
 
   gl_FragColor = vec4(col, 1.0);
 }
@@ -1388,6 +1393,11 @@ export default function MountainPeak() {
           gl.uniform2f(u("uWind"), wind[0], wind[1]);
           gl.uniform1f(u("uLens"), lens);
           gl.uniform1f(u("uTutti"), tutti);
+          // shared album clocks: the range inhales in step with /reef, /root.
+          gl.uniform1f(
+            u("uBreath"),
+            clocksFrom({ time: now / 1000, turbulence: 0, reducedMotion: reduced }).breath,
+          );
           // the budget the frame can afford, never past the loop's own bound
           gl.uniform1i(u("uSteps"), Math.max(18, Math.round(MARCH_STEPS * detail.samples)));
           gl.uniform1i(u("uRefine"), Math.max(4, Math.round(MARCH_REFINE * detail.samples)));

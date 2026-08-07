@@ -17,6 +17,7 @@ import {
   type WorldNatural,
 } from "@/lib/world";
 import { resolveDpr, onGalleryPause, onVisibility, isEmbeddedFrame, createFrameGovernor, detailForTier } from "@/lib/room-runtime";
+import { clocksFrom } from "@/lib/webgl/sizing";
 import LetGo from "@/components/LetGo";
 
 /**
@@ -101,6 +102,7 @@ export default function Ocean() {
     let uSeasonLoc: WebGLUniformLocation | null = null;
     let uRipplesLoc: WebGLUniformLocation | null = null;
     let uRippleCountLoc: WebGLUniformLocation | null = null;
+    let uBreathLoc: WebGLUniformLocation | null = null;
     let waterBuf: WebGLBuffer | null = null;
     // Cache for the 2D fallback context on the water canvas (used only when
     // WebGL is unavailable, or transiently during a context-loss/restore
@@ -134,6 +136,7 @@ export default function Ocean() {
       const frag = `
         precision highp float;
         uniform float uTime;
+        uniform float uBreath;  // shared album 7s respiration, 0..1
         uniform vec2 uRes;
         uniform float uSwell;   // audio swell LFO, ~-1..1
         uniform float uTurb;    // storm axis 0..~1 (shake / hard press)
@@ -351,6 +354,10 @@ export default function Ocean() {
           float vig = 1.0 - dot(vc, vc) * 0.35;
           outc *= vig;
 
+          // shared 7s album breath: ambient brightness rides ±10% on the
+          // site's respiration so /ocean inhales in step with /reef.
+          outc *= 1.0 + 0.10 * (uBreath - 0.5);
+
           gl_FragColor = vec4(clamp(outc, 0.0, 1.0), 1.0);
         }
       `;
@@ -385,6 +392,7 @@ export default function Ocean() {
             uSeasonLoc = gl.getUniformLocation(p, "uSeason");
             uRipplesLoc = gl.getUniformLocation(p, "uRipples");
             uRippleCountLoc = gl.getUniformLocation(p, "uRippleCount");
+            uBreathLoc = gl.getUniformLocation(p, "uBreath");
 
             waterBuf = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, waterBuf);
@@ -1443,12 +1451,16 @@ export default function Ocean() {
       // ── WebGL water ─────────────────────────────────────────────
       if (gl && glProg) {
         gl.useProgram(glProg);
+        // shared album clocks: the 7s breath is the same in /ocean as in
+        // /reef and /root, so the site inhales as one.
+        const { breath } = clocksFrom({ time: now / 1000, turbulence: turb, reducedMotion: reduce });
         if (uTimeLoc) gl.uniform1f(uTimeLoc, t);
         if (uResLoc) gl.uniform2f(uResLoc, water.width, water.height);
         if (uSwellLoc) gl.uniform1f(uSwellLoc, swellLfo + turb * 0.6);
         if (uTurbLoc) gl.uniform1f(uTurbLoc, Math.min(1, turb));
         if (uDepthLoc) gl.uniform1f(uDepthLoc, depth);
         if (uSeasonLoc) gl.uniform1f(uSeasonLoc, season);
+        if (uBreathLoc) gl.uniform1f(uBreathLoc, breath);
         // wind leans the whole sea the way the three fingers pushed it
         if (uTiltLoc) gl.uniform2f(uTiltLoc, tiltSmoothed.x * 0.028 + windX * 0.02, tiltSmoothed.y * 0.022);
 
