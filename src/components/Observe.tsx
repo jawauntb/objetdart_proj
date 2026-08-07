@@ -61,6 +61,7 @@ import {
   ALTITUDE_BOUNDS,
   BAND_N,
   BAND_PI,
+  CHROMOPHORE_RING_Y,
   CRYSTAL_CAP,
   MOLECULE_CAP,
   OBSERVE_STORAGE_KEY,
@@ -68,6 +69,7 @@ import {
   REFERENCE_CONCENTRATION,
   SPECTRUM_BINS,
   SPECTRUM_MAX,
+  absorbChromophorePhotonsAtRing,
   altitudeFromZoom,
   altitudeWeights,
   bornCrystalFlake,
@@ -81,7 +83,6 @@ import {
   moTransitionEnergy,
   moleculeRadius,
   photonHit,
-  resonant,
   rotateMolecule,
   sampleAbsorbance,
   serializeSpectrum,
@@ -92,6 +93,7 @@ import {
   stepCrystal,
   stepMolecule,
   stepMolecules,
+  walkBackFromZoom,
   wavelengthAtBin,
   wavelengthToRgb,
   wavelengthToX,
@@ -622,6 +624,13 @@ export default function Observe() {
     // room lands where Phase 1 landed). Pinching moves it, and altitude
     // dispatch reads it every tick.
     let zoom = 64;
+    // Pinch base — captured on pinch start, consulted on each pinch event and
+    // resynced whenever the room's own camera changes (stepBack, ceremonies).
+    // Hoisted so the stepBack handler can keep it in sync with the room's own
+    // altitude jumps; the pinch attachGestures block below is the only other
+    // writer.
+    let pinchLastAt = 0;
+    let pinchLastZoom = zoom;
     // Smoothed altitude weights, eased toward altitudeWeights(zoom) so the
     // crossfade is always continuous even when a hard pinch punches through.
     const altWeights = { crystal: 0, solution: 1, molecule: 0, chromophore: 0 };
@@ -652,14 +661,28 @@ export default function Observe() {
     let chromophorePhotons: ChromophorePhoton[] = [];
     // The particle-in-a-box state — span (two still fingers) sets L, twist
     // picks n1→n2. Kept in state so the corner MO diagram can read it.
+    // Initial L ≈ 0.5 nm so ΔE for n=1→2 lands near the π→π* band's
+    // wavelength (~260 nm); the first tap at the chromophore altitude fires
+    // a resonant photon in the room's visible palette, before any span.
+    const INITIAL_L = 0.5e-9;
     const box = {
-      L: 1.2e-9, // metres
+      L: INITIAL_L,
       n1: 1,
       n2: 2,
-      lastDE: moTransitionEnergy(1, 2, 1.2e-9), // eV
+      lastDE: moTransitionEnergy(1, 2, INITIAL_L),
       selectedBondIdx: -1, // for the molecule altitude — a tapped bond
       selectedBondUntil: 0,
     };
+    // Ring excitation pulse: rises to 1 the moment a resonant photon is
+    // absorbed at the ring, decays exponentially. Drives the ring glow and
+    // the HOMO→LUMO arrow at the chromophore altitude — the visible half of
+    // the resonance law.
+    let ringPulse = 0;
+    // Accumulator for two-finger twist deltas. voice.lens fires per-frame
+    // with `d.rotate` (a delta), not a total; a slow deliberate wrist turn
+    // is many small deltas. Accumulating here lets a real hand cross the
+    // commit threshold at any speed. Reset on twist-end (velocity === 0).
+    let lensTwistAcc = 0;
 
     // ——— visibility / gallery pause ———
     let hidden = document.hidden;
@@ -847,25 +870,19 @@ export default function Observe() {
 
     // Two-finger tap steps back one altitude jump. Since the room owns pinch,
     // the shell has no way to send the visitor's zoom back — it does it
-    // itself, walking down a small table of altitude landmarks.
+    // itself. walkBackFromZoom (lib/observe) is the pure landing table: from
+    // anywhere in one hard altitude (or its incoming transition band) the
+    // step lands at the widest edge of the previous hard altitude. The zoom
+    // variable snaps, but the eased altWeights carry the visitor across on a
+    // real crossfade — the "felt animation" is the shader's mix, not the
+    // camera's slide.
     const stepBackAltitude = () => {
-      const anchors = [
-        ALTITUDE_BOUNDS.chromophore.lo, // 2048
-        ALTITUDE_BOUNDS.molecule.lo,    // 1024
-        ALTITUDE_BOUNDS.solution.lo,    // 16
-        ALTITUDE_BOUNDS.crystal.lo,     // 1
-      ];
-      for (const a of anchors) {
-        if (zoom > a * 1.5) {
-          zoom = a;
-          try { reportRef.current(zoom, 0); } catch { /* noop */ }
-          try { releaseRef.current(); } catch { /* noop */ }
-          return;
-        }
-      }
-      // already at the widest — the manifold catches it if we press harder
-      zoom = OBSERVE_ZOOM_SPEC.zoomMin;
+      const next = walkBackFromZoom(zoom);
+      zoom = next;
+      // Sync the pinch base so a subsequent pinch begins from the new anchor.
+      pinchLastZoom = next;
       try { reportRef.current(zoom, 0); } catch { /* noop */ }
+      try { releaseRef.current(); } catch { /* noop */ }
     };
 
     // ——— the voice: RoomShell speaks these; every meaningful verb lands
@@ -1113,25 +1130,45 @@ export default function Observe() {
       },
       lens: (l) => {
         const alt = currentAltitude();
+        // voice.lens receives frame-wise delta angles (`d.rotate`, from
+        // gesture/index.ts) — a slow, deliberate twist is many small deltas
+        // and needs an accumulator. `velocity === 0` marks the twist's end;
+        // reset the accumulator so a fresh turn starts from zero.
+        if (l.velocity === 0) {
+          lensTwistAcc = 0;
+        } else {
+          lensTwistAcc += l.angle;
+        }
         // ——— molecule altitude: two-finger twist flips chirality ——
-        // A firm turn past ±0.6 rad is a commit; small quivers ignore.
+        // ~60° of accumulated turn commits the mirror. Reset on commit so a
+        // sustained twist rings the flip a second time only after another
+        // 60° of intent, not on every frame.
         if (alt === "molecule") {
-          if (Math.abs(l.angle) > 0.6) {
+          const CHIRALITY_COMMIT = 1.05; // ≈ 60°
+          if (Math.abs(lensTwistAcc) >= CHIRALITY_COMMIT) {
             molecule3D = flipChirality(molecule3D);
+            lensTwistAcc = 0;
             try { haptics.bloom(); } catch { /* noop */ }
             try { audio.bell?.(); } catch { /* noop */ }
           }
           return;
         }
-        // ——— chromophore altitude: twist picks n (1→2, 2→3, ...) ——
+        // ——— chromophore altitude: twist detents pick n (1→2, 2→3, ...) ——
+        // A quarter-turn per detent — the wrist walks the excited state up
+        // and down the ladder, one rung at a time. Multiple detents inside a
+        // single fast twist all commit (the `while` loop).
         if (alt === "chromophore") {
-          if (l.angle > 0.4) {
+          const N_DETENT = Math.PI / 4; // 45° per rung
+          while (lensTwistAcc >= N_DETENT) {
             box.n2 = Math.min(6, box.n2 + 1);
             box.lastDE = moTransitionEnergy(box.n1, box.n2, box.L);
+            lensTwistAcc -= N_DETENT;
             try { haptics.detent(); } catch { /* noop */ }
-          } else if (l.angle < -0.4) {
+          }
+          while (lensTwistAcc <= -N_DETENT) {
             box.n2 = Math.max(box.n1 + 1, box.n2 - 1);
             box.lastDE = moTransitionEnergy(box.n1, box.n2, box.L);
+            lensTwistAcc += N_DETENT;
             try { haptics.detent(); } catch { /* noop */ }
           }
           return;
@@ -1140,6 +1177,7 @@ export default function Observe() {
         world.lensTarget = clamp(world.lensTarget + l.angle * 0.5, 0, 2);
         if (Math.abs(l.velocity) < 0.01) {
           world.lensTarget = Math.round(world.lensTarget);
+          lensTwistAcc = 0;
         }
         try { haptics.lens(); } catch { /* noop */ }
       },
@@ -1183,8 +1221,6 @@ export default function Observe() {
     // manifold — inside the range that residual is zero and the internal
     // camera is the room's alone; at the extremes the residual becomes the
     // /drop band's wall pressure, exactly as if ScaleTravel owned pinch.
-    let pinchLastAt = 0;
-    let pinchLastZoom = zoom;
     const detachPinch = attachGestures(wrap, {
       pinch: (e) => {
         if (e.phase === "start") {
@@ -1238,10 +1274,17 @@ export default function Observe() {
       writer.cancel();
       // crystal altitude: retire every flake so the heap returns to nothing
       flakes.length = 0;
-      // chromophore altitude: retire every descending photon
+      // chromophore altitude: retire every descending photon and clear the
+      // ring pulse so the arrow doesn't hang after the room lets go
       chromophorePhotons = [];
-      // molecule altitude: back to the room's canonical enantiomer, no rotation
+      ringPulse = 0;
+      box.L = INITIAL_L;
+      box.n2 = 2;
+      box.lastDE = moTransitionEnergy(box.n1, box.n2, box.L);
+      // molecule altitude: back to the room's canonical enantiomer at the
+      // rest pose (see bornMolecule3D)
       molecule3D = bornMolecule3D();
+      lensTwistAcc = 0;
       setStanding(0);
       try { audio.thud?.(); } catch { /* noop */ }
       try { haptics.roll(); } catch { /* noop */ }
@@ -1324,7 +1367,23 @@ export default function Observe() {
       }
       if (chromophorePhotons.length > 0) {
         chromophorePhotons = stepChromophorePhotons(chromophorePhotons, dt);
+        // Absorption at the ring: any resonant photon in the crossing window
+        // is retired; a pulse rises on the ring for each absorbed photon.
+        const { survivors, absorbed } = absorbChromophorePhotonsAtRing(
+          chromophorePhotons,
+          box.lastDE,
+          0.35,
+        );
+        chromophorePhotons = survivors;
+        if (absorbed.length > 0) {
+          ringPulse = Math.min(1, ringPulse + 0.9 * absorbed.length);
+          try { haptics.bloom(); } catch { /* noop */ }
+          try { audio.bell?.(); } catch { /* noop */ }
+        }
       }
+      // ring pulse decays exponentially — ~700ms half-life so the visitor
+      // sees a legible flash for each swallowed photon
+      ringPulse *= Math.exp(-dt * 1.4);
 
       // advance the sample
       const field: FieldInput = {
@@ -1597,9 +1656,11 @@ export default function Observe() {
         // ——— chromophore altitude overlay: HOMO/LUMO + photons ——
         if (altWeights.chromophore > 0.02) {
           const a = altWeights.chromophore;
-          // aromatic ring plane, drawn as a hex
+          // aromatic ring plane, drawn as a hex — cy tracks the physics
+          // constant so the ring on screen and the ring the absorption law
+          // sees can never drift.
           const cx = w * 0.5;
-          const cy = h * 0.5;
+          const cy = h * CHROMOPHORE_RING_Y;
           const rr = Math.min(w, h) * 0.18;
           ctx2.strokeStyle = `rgba(180, 200, 235, ${a * 0.55})`;
           ctx2.lineWidth = 2;
@@ -1656,25 +1717,35 @@ export default function Observe() {
             ctx2.beginPath();
             ctx2.arc(px, py, 5, 0, Math.PI * 2);
             ctx2.fill();
-            // resonance check: when a photon reaches the ring plane, flash
-            // an arrow between HOMO and LUMO if resonant
-            if (Math.abs(py - cy) < 12) {
-              if (resonant(p.lambda, box.lastDE, 0.35)) {
-                ctx2.strokeStyle = `rgba(240, 236, 210, ${a})`;
-                ctx2.lineWidth = 2;
-                ctx2.beginPath();
-                ctx2.moveTo(dx + dw * 0.6, homoY);
-                ctx2.lineTo(dx + dw * 0.6, lumoY);
-                ctx2.stroke();
-                // arrowhead
-                ctx2.beginPath();
-                ctx2.moveTo(dx + dw * 0.6, lumoY);
-                ctx2.lineTo(dx + dw * 0.6 - 4, lumoY + 6);
-                ctx2.lineTo(dx + dw * 0.6 + 4, lumoY + 6);
-                ctx2.closePath();
-                ctx2.fill();
-              }
-            }
+          }
+
+          // Ring excitation: when a resonant photon is absorbed the pulse
+          // rises and decays. Two visible signals ride it: a soft glow on
+          // the aromatic ring's plane, and a HOMO→LUMO arrow in the corner
+          // MO diagram. Absent the pulse, both are silent — off-resonance
+          // photons pass through the ring unmarked.
+          if (ringPulse > 0.02) {
+            const pulseA = Math.min(1, ringPulse) * a;
+            // ring glow: an oval flash on the ring plane
+            ctx2.fillStyle = `rgba(240, 236, 210, ${pulseA * 0.35})`;
+            ctx2.beginPath();
+            ctx2.ellipse(cx, cy, rr * 1.15, rr * 0.5, 0, 0, Math.PI * 2);
+            ctx2.fill();
+            // HOMO → LUMO arrow, alpha rides the pulse
+            const arrowX = dx + dw * 0.6;
+            ctx2.strokeStyle = `rgba(240, 236, 210, ${pulseA})`;
+            ctx2.lineWidth = 2;
+            ctx2.beginPath();
+            ctx2.moveTo(arrowX, homoY);
+            ctx2.lineTo(arrowX, lumoY);
+            ctx2.stroke();
+            ctx2.fillStyle = `rgba(240, 236, 210, ${pulseA})`;
+            ctx2.beginPath();
+            ctx2.moveTo(arrowX, lumoY);
+            ctx2.lineTo(arrowX - 4, lumoY + 6);
+            ctx2.lineTo(arrowX + 4, lumoY + 6);
+            ctx2.closePath();
+            ctx2.fill();
           }
         }
       }
