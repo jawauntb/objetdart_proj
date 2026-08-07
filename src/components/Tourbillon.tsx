@@ -13,6 +13,8 @@ import { onVessel } from "@/lib/vessel";
 import { relaxTurbulence, stirTurbulence } from "@/lib/turbulence";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 import LetGo from "@/components/LetGo";
+import { useBandEdgeTravel } from "@/components/ScaleTravel";
+import type { RoomZoomSpec } from "@/lib/scale";
 import {
   createFrameGovernor,
   isEmbeddedFrame,
@@ -20,6 +22,22 @@ import {
   resolveDpr,
   type QualityTier,
 } from "@/lib/room-runtime";
+
+// /tourbillon lives in the drop band and owns its own OrbitControls camera
+// (AxisChrome travel={false}). It joins the manifold via the adapter: as
+// zoom parameter it uses MAX_CAM_DISTANCE / distance, so the widest OrbitControls
+// view (distance = MAX_CAM_DISTANCE = 70) maps to zoomMin = 1 (band ceiling —
+// larger scales beyond, toward flowers), and the tightest view (distance =
+// MIN_CAM_DISTANCE = 8) maps to zoomMax = MAX_CAM_DISTANCE/MIN_CAM_DISTANCE
+// (band floor — smaller scales beyond, toward tissue). Residual pinch at
+// either extreme becomes wall pressure the same physics as everywhere else.
+const MIN_CAM_DISTANCE = 8;
+const MAX_CAM_DISTANCE = 70;
+export const TOURBILLON_ZOOM_SPEC: RoomZoomSpec = {
+  band: "drop",
+  zoomMin: 1,
+  zoomMax: MAX_CAM_DISTANCE / MIN_CAM_DISTANCE,
+};
 
 /**
  * /tourbillon — a real(ish) mechanical watch movement in Three.js, built
@@ -412,6 +430,22 @@ export default function Tourbillon() {
   const [face, setFace] = useState("genève");
   const [dialOn, setDialOn] = useState(true);
 
+  // The scale manifold at the OrbitControls extremes. A pinch inside the
+  // tourbillon's own zoom range moves the camera as always; only pinch
+  // held past the widest or tightest view presses toward the neighboring
+  // band — the same physics as every other axis room.
+  const {
+    report: reportScaleEdge,
+    release: releaseScaleEdge,
+    overlay: scaleEdgeOverlay,
+  } = useBandEdgeTravel("/tourbillon", TOURBILLON_ZOOM_SPEC);
+  // Held in a ref so the useEffect closure — mounted once — always reads the
+  // current callback identity that useBandEdgeTravel returns each render.
+  const reportScaleEdgeRef = useRef(reportScaleEdge);
+  const releaseScaleEdgeRef = useRef(releaseScaleEdge);
+  reportScaleEdgeRef.current = reportScaleEdge;
+  releaseScaleEdgeRef.current = releaseScaleEdge;
+
   const toggleDial = () => {
     const next = !dialOn;
     if (dialRef.current) dialRef.current.visible = next;
@@ -479,8 +513,8 @@ export default function Tourbillon() {
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.06;
-    controls.minDistance = 8;
-    controls.maxDistance = 70;
+    controls.minDistance = MIN_CAM_DISTANCE;
+    controls.maxDistance = MAX_CAM_DISTANCE;
     controls.target.set(0, 0, 0);
     controls.autoRotate = spin;
     controls.autoRotateSpeed = 0.7;
@@ -1159,6 +1193,12 @@ export default function Tourbillon() {
       try { haptics.tap(); } catch { /* noop */ }
       try { getFieldAudio().playNote(50, 140); } catch { /* noop */ }
     };
+    // Current OrbitControls distance re-expressed in the RoomZoomSpec's
+    // domain: zoom = MAX_CAM_DISTANCE / distance, so distance=MAX gives
+    // zoomMin (widest — band ceiling) and distance=MIN gives zoomMax
+    // (tightest — band floor). scaleForRoomZoom does the log map.
+    const zoomFromCamera = () =>
+      MAX_CAM_DISTANCE / Math.max(1e-4, camera.position.distanceTo(controls.target));
     const tutti = (intensity = 0.5) => {
       // one synchronized pulse of everything alive — scaled by how hard
       // the chord landed: the balance swings wider, the ratchet surges more
@@ -1350,7 +1390,27 @@ export default function Tourbillon() {
           useField.getState().recordTape("object", 0.45, "tourbillon/hack");
         }
       },
+      pinch: (e) => {
+        // OrbitControls owns the visible zoom; this handler only reports the
+        // attempted pinch velocity to the scale adapter. Inside the room's
+        // own range the adapter answers inactive (residualScaleInput), so
+        // the report is inert. Only at the widest or tightest camera does
+        // continued pinch press become manifold wall pressure and, past
+        // TRAVEL_INTENT_MS, travel to the neighboring band.
+        if (e.phase === "end") { releaseScaleEdgeRef.current(); return; }
+        reportScaleEdgeRef.current(zoomFromCamera(), e.velocity);
+      },
     }, { wheelZoom: false, noCapture: true, manageStyle: false });
+
+    // Desktop wheel goes to OrbitControls (wheelZoom: false above); mirror it
+    // at capture phase so the adapter sees the same attempted velocity — a
+    // wheel-scrub at the deepest/widest orbit reaches the manifold the same
+    // way the touch pinch does. Passive so OrbitControls' handler still runs.
+    const onWheelReport = (event: WheelEvent) => {
+      const attemptedVel = -event.deltaY * 0.0018 * 60;
+      reportScaleEdgeRef.current(zoomFromCamera(), attemptedVel);
+    };
+    renderer.domElement.addEventListener("wheel", onWheelReport, { capture: true, passive: true });
 
     // ── camera presets (framed from the assembly's bounding sphere) ──
     const box = new THREE.Box3().setFromObject(root);
@@ -1582,6 +1642,7 @@ export default function Tourbillon() {
       detachGestures();
       detachVessel();
       renderer.domElement.removeEventListener("pointermove", onHoverMove);
+      renderer.domElement.removeEventListener("wheel", onWheelReport, { capture: true } as EventListenerOptions);
       controls.dispose();
       renderer.dispose();
       pmrem.dispose();
@@ -1636,6 +1697,7 @@ export default function Tourbillon() {
         <div className="tb-hint" aria-hidden="true">drag to orbit · tap parts to play · pinch to zoom</div>
       </div>
       <div className="tb-sundial-wrap"><SundialChip /></div>
+      {scaleEdgeOverlay}
       <style dangerouslySetInnerHTML={{ __html: `
         .tb-hud {
           position: absolute; left: 0; top: 0;

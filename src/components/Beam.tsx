@@ -31,6 +31,8 @@ import LetGo from "@/components/LetGo";
 import { attachGestures } from "@/lib/gesture";
 import { tapTrainTier } from "@/lib/gesture/core";
 import { onVessel, requestVessel, vesselAvailable, vesselGranted } from "@/lib/vessel";
+import { useBandEdgeTravel } from "@/components/ScaleTravel";
+import type { RoomZoomSpec } from "@/lib/scale";
 import {
   createFrameGovernor,
   createIdleWriter,
@@ -40,6 +42,21 @@ import {
   onVisibility,
   resolveDpr,
 } from "@/lib/room-runtime";
+
+// /beam lives in the stars band and owns its own separation zoom (the pinch
+// pulls the two suns apart or merges them; AxisChrome travel={false}). It
+// joins the manifold via the adapter: sepTarget is 1:1 the zoom parameter,
+// with the merged extreme (0.04) as the widest view (band ceiling, larger
+// scales beyond toward galaxy) and the fully spread extreme (0.9) as the
+// tightest (band floor, smaller scales toward solar). Pinch inside the range
+// stays local; residual pinch at either extreme becomes wall pressure.
+const SEP_MIN = 0.04;
+const SEP_MAX = 0.9;
+export const BEAM_ZOOM_SPEC: RoomZoomSpec = {
+  band: "stars",
+  zoomMin: SEP_MIN,
+  zoomMax: SEP_MAX,
+};
 
 // the room remembers you — tempo, night, and how far apart you left the
 // suns all survive a reload, the way stars keeps its constellations
@@ -536,6 +553,20 @@ export default function Beam() {
   const shakeRef = useRef({ pending: 0 });
   const knockRef = useRef({ pending: 0 });
   const reduceRef = useRef(false);
+
+  // The scale manifold at the separation extremes. sepTarget inside its
+  // range is beam's own business; only sustained pinch at the merged (0.04)
+  // or fully-spread (0.9) extreme becomes wall pressure — the same physics
+  // as every other axis room, so iPad pinch is no longer a dead end.
+  const {
+    report: reportScaleEdge,
+    release: releaseScaleEdge,
+    overlay: scaleEdgeOverlay,
+  } = useBandEdgeTravel("/beam", BEAM_ZOOM_SPEC);
+  const reportScaleEdgeRef = useRef(reportScaleEdge);
+  const releaseScaleEdgeRef = useRef(releaseScaleEdge);
+  reportScaleEdgeRef.current = reportScaleEdge;
+  releaseScaleEdgeRef.current = releaseScaleEdge;
   // The idle-glimmer's memory of when the room was last touched. Every
   // classified gesture and every vessel event bumps it; the render loop
   // reads it and triggers a lone-petal meteor once the interval passes.
@@ -621,11 +652,13 @@ export default function Beam() {
         lastGestureRef.current = performance.now();
       },
       flip: ({ faceDown }) => {
+        // Two-way: flipping face-down draws night on, flipping face-up
+        // restores day. A one-way binding was a private dialect — the
+        // grammar's flip is a symmetric orientation swap, not an on-switch.
         lastGestureRef.current = performance.now();
-        if (!faceDown) return;
-        nightWantRef.current = true;
-        setIsNight(true);
-        memRef.current.night = true;
+        nightWantRef.current = faceDown;
+        setIsNight(faceDown);
+        memRef.current.night = faceDown;
         schedulePersist();
         setHasKept(true);
       },
@@ -858,7 +891,7 @@ export default function Beam() {
     let rotExtra = 0;
     let focusTarget = 0.35;
     let focusBreathing = true;
-    const sep0 = clamp(memRef.current.sep ?? 0.66, 0.04, 0.9);
+    const sep0 = clamp(memRef.current.sep ?? 0.66, SEP_MIN, SEP_MAX);
     let sep = sep0, sepTarget = sep0;
     // meteorNext is scheduling only — how long until the next loose petal —
     // and stays real entropy (declared in the registry); the meteor's own
@@ -917,7 +950,11 @@ export default function Beam() {
     // twist turns the formation, pan carries the whole system across the
     // sky. Three fingers touch the law: drag is wind, hold dilates time,
     // twist turns the season, tap is tutti. Beam owns pinch/pan2/twist
-    // itself — ScaleTravel is not mounted here (AxisChrome travel={false}).
+    // itself — ScaleTravel is not mounted here (AxisChrome travel={false}) —
+    // and the pinch handler below reports residual velocity through
+    // useBandEdgeTravel so a pinch held past the sep extreme still reaches
+    // the neighboring band (pinch closed at merged = out toward galaxy,
+    // pinch open at fully spread = in toward the solar system).
     let holdTicked = false;
     let ceremonyFired = false;
     let timeScaleTarget = 1;
@@ -1159,11 +1196,18 @@ export default function Beam() {
           memRef.current.sep = sepTarget;
           schedulePersist();
           setHasKept(true);
+          releaseScaleEdgeRef.current();
           return;
         }
         if (e.phase !== "move") return;
         // spreading fingers pulls the suns apart; closing merges them
-        sepTarget = clamp(sepTarget * e.scale, 0.04, 0.9);
+        sepTarget = clamp(sepTarget * e.scale, SEP_MIN, SEP_MAX);
+        // Report the attempted pinch velocity to the adapter. Inside sep's
+        // clamped range the adapter answers inactive; only at the merged or
+        // fully-spread extreme does continued pinch press become manifold
+        // wall pressure and, past TRAVEL_INTENT_MS, travel to the neighbor
+        // band (galaxy at the widest end, solar at the tightest).
+        reportScaleEdgeRef.current(sepTarget, e.velocity);
       },
       twist: (e) => {
         bumpIdle();
@@ -1448,6 +1492,7 @@ export default function Beam() {
           <div className="beam-fallback-eye" />
         </div>
       )}
+      {scaleEdgeOverlay}
       <LetGo label="let the beam rest" onLetGo={letGo} visible={hasKept} />
       <div className="beam-title" aria-hidden="true">
         <span>the eye of heaven</span>
