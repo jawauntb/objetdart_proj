@@ -47,14 +47,9 @@ const relativity = {
     ],
   },
   // ——— the room quality bar, structured ————————————————————————————————
-  // AGENTS.md §"The room quality bar" items 3 and 6, declared per
+  // AGENTS.md §"The room quality bar" items 3, 5 and 6, declared per
   // RelativityRoom.tsx as it is today. Round-trip-derived from the
-  // component. This room persists nothing (registry.keeps=null,
-  // creates=null), so `glimmer` is deliberately absent — the code makes no
-  // createIdleWriter call and adding a glimmer cadence would document a
-  // fiction. `breath` is also absent: there is no shader uniform to read;
-  // the field breathes only in a 2D pass at `sin(localT * 2π * 0.14) * ...`
-  // that no other frame reads back. Two honest notes:
+  // component. One honest note:
   //   • the room uses raw `attachGestures` with a per-tier branch inside
   //     the `hold` handler rather than a `useMemo<RoomVoice>` with a
   //     discrete `ceremony:` method — so the ceremony act (evaporating a
@@ -70,13 +65,33 @@ const relativity = {
           max_count: 4, // MAX_MASSES
           state_shape: "id, nx, ny, m, growth (0..1), settled, charge (0..1), evapAt, plantedAt",
           lifecycle:
-            "born under dwell (placeMass while held past tier 2) → grows and settles (settleMass fires haptics.bloom) → keeps deepening while held past settle → evaporated at ceremony (tier-3 hold on the mass) or oldest-first when the population exceeds MAX_MASSES; not persisted between visits",
+            "born under dwell (placeMass while held past tier 2) → grows and settles (settleMass fires haptics.bloom) → keeps deepening while held past settle → evaporated at ceremony (tier-3 hold on the mass) or oldest-first when the population exceeds MAX_MASSES; not persisted between visits (a law keeps no belongings the visitor planted)",
           persistence: "ephemeral",
           creates_via_verb: "dwell",
           retires_via: ["ceremony", "LetGo", "MAX_MASSES overflow"],
           implementation_hint: "inline array (masses[])",
         },
       ],
+    },
+    // The covenant's own bodies — the light clocks, the twin beacons, the
+    // flung comets — carry positions/velocities/proper-time between visits.
+    // createIdleWriter under `objetdart:relativity:v1` matches the Solar /
+    // Galaxy pattern for orbital-element persistence: on mount the room
+    // finds itself already mid-motion instead of always at seed. The masses
+    // above stay ephemeral (a law keeps no belongings the visitor planted);
+    // only the room's own instruments ride the writer.
+    breath: {
+      period_seconds: 7,
+      reads: [
+        "clocksFrom({ time: localT, reducedMotion: reduce }).breath — the ambient star-field halo brightness rides the album's shared 7s exhale (0.14 Hz), so two rooms opened side by side inhale together",
+      ],
+      behavior_at_rest:
+        "the cold star-field halo behind the covenant brightens/dims by ±3% on the shared 7s clock — the room is never still between taps, and the beat is the same one Reef/Root/Geyser/Spring/Tidepool/Marsh already ride",
+    },
+    glimmer: {
+      after_idle_ms: 20000,
+      visual:
+        "after ~20s idle a warm ring appears where a dwell would land — deterministic (seeded by `Math.floor(now / 9000)`), never text",
     },
     haptics_grammar: {
       tap: "ripple", // firePulse tap path → haptics.ripple(0.3 + intensity * 0.4)

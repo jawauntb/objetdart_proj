@@ -88,10 +88,29 @@ import {
   onVisibility,
   isEmbeddedFrame,
   createFrameGovernor,
+  createIdleWriter,
   detailForTier,
 } from "@/lib/room-runtime";
+import { clocksFrom } from "@/lib/webgl/sizing";
 import { createGravityFieldRenderer, type GravityFieldRenderer } from "@/components/SpacetimeShader";
 import LetGo from "@/components/LetGo";
+
+const STORAGE_KEY = "objetdart:relativity:v1";
+
+/**
+ * The small state vector persisted between visits — the Solar/Galaxy pattern
+ * for orbital-element persistence carried over to the covenant's own bodies.
+ * The room's masses stay ephemeral (a law keeps no belongings the visitor
+ * planted), but the light clocks, the twin beacons, and the flung comets
+ * carry positions/velocities/proper-time so a return finds the room already
+ * mid-motion instead of always at seed.
+ */
+type RelativityKeep = {
+  v: 1;
+  clocks: Array<{ x: number; y: number; vx: number; vy: number; phase: number; dir: 1 | -1 }>;
+  beacons: Array<{ x: number; y: number; tau: number; beta: number }>;
+  comets: Array<{ x: number; y: number; vx: number; vy: number; heat: number }>;
+};
 
 const MAX_MASSES = 4;
 const RAY_COUNT = 5;
@@ -542,6 +561,99 @@ export default function RelativityRoom() {
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(wrap);
+
+    // ————— persistence (Solar/Galaxy pattern, one bus) —————
+    // A law keeps no belongings — the masses stay ephemeral — but the covenant's
+    // own bodies (light clocks, twin beacons, flung comets) carry positions,
+    // velocities and proper-time so a return finds the room already mid-motion
+    // instead of always at seed. Idle writer coalesces rapid saves and flushes
+    // on hide/unmount, matching Solar and Galaxy's orbital-element persistence.
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<RelativityKeep>;
+        if (Array.isArray(parsed.clocks) && parsed.clocks.length === 2) {
+          const targets = [clockA, clockB] as const;
+          for (let i = 0; i < 2; i++) {
+            const p = parsed.clocks[i];
+            const k = targets[i];
+            if (!p || typeof p !== "object") continue;
+            if (typeof p.x === "number") k.x = clamp(p.x, clockHalfW, width - clockHalfW);
+            if (typeof p.y === "number") k.y = clamp(p.y, clockGap / 2 + 24, height - clockGap / 2 - 24);
+            if (typeof p.vx === "number") k.vx = clamp(p.vx, -CLOCK_V_CAP * c, CLOCK_V_CAP * c);
+            if (typeof p.vy === "number") k.vy = clamp(p.vy, -CLOCK_V_CAP * c, CLOCK_V_CAP * c);
+            if (typeof p.phase === "number") k.phase = clamp01(p.phase);
+            if (p.dir === 1 || p.dir === -1) k.dir = p.dir;
+            k.targetX = k.x;
+            k.targetY = k.y;
+          }
+        }
+        if (Array.isArray(parsed.beacons) && parsed.beacons.length === 2) {
+          const bts = [beaconA, beaconB] as const;
+          for (let i = 0; i < 2; i++) {
+            const p = parsed.beacons[i];
+            const b = bts[i];
+            if (!p || typeof p !== "object") continue;
+            if (typeof p.x === "number") b.x = clamp(p.x, 0, width);
+            if (typeof p.y === "number") b.y = clamp(p.y, 0, height);
+            if (typeof p.tau === "number" && p.tau >= 0) {
+              b.tau = p.tau;
+              b.nextTdot = Math.floor(p.tau / TDOT_TAU) * TDOT_TAU + TDOT_TAU;
+            }
+            if (typeof p.beta === "number") b.beta = clamp(p.beta, 0, MATTER_CAP);
+          }
+        }
+        if (Array.isArray(parsed.comets)) {
+          for (const p of parsed.comets.slice(0, MAX_COMETS)) {
+            if (!p || typeof p !== "object") continue;
+            if (typeof p.x !== "number" || typeof p.y !== "number") continue;
+            if (typeof p.vx !== "number" || typeof p.vy !== "number") continue;
+            const heat = typeof p.heat === "number" ? clamp01(p.heat) : 0;
+            const matterCap = MATTER_CAP * c;
+            let vx = p.vx;
+            let vy = p.vy;
+            const sp = Math.hypot(vx, vy);
+            if (sp > matterCap) { vx *= matterCap / sp; vy *= matterCap / sp; }
+            comets.push({
+              x: clamp(p.x, -50, width + 50),
+              y: clamp(p.y, -50, height + 50),
+              vx,
+              vy,
+              heat,
+              born: performance.now(),
+              trail: [],
+              hist: [],
+            });
+          }
+        }
+      }
+    } catch {
+      /* a fresh covenant */
+    }
+
+    const save = () => {
+      try {
+        const keep: RelativityKeep = {
+          v: 1,
+          clocks: [clockA, clockB].map((k) => ({
+            x: k.x, y: k.y, vx: k.vx, vy: k.vy, phase: k.phase, dir: k.dir,
+          })),
+          beacons: [beaconA, beaconB].map((b) => ({
+            x: b.x, y: b.y, tau: b.tau, beta: b.beta,
+          })),
+          comets: comets.map((q) => ({
+            x: q.x, y: q.y, vx: q.vx, vy: q.vy, heat: q.heat,
+          })),
+        };
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(keep));
+      } catch {
+        /* quota / private mode */
+      }
+    };
+    const writer = createIdleWriter(save);
+    const scheduleSave = () => writer.schedule();
+    const onHide = () => writer.flush();
+    window.addEventListener("pagehide", onHide);
 
     const toLocal = (clientX: number, clientY: number) => ({
       x: clamp(clientX - rectLeft, 0, width),
@@ -1810,6 +1922,11 @@ export default function RelativityRoom() {
     let meshVX = new Float32Array(0);
     let meshVY = new Float32Array(0);
 
+    // save cadence — schedule at most every ~2s so the debounced writer
+    // coalesces the covenant's continuous drift into a bounded write rate
+    let lastSaveAt = 0;
+    const SAVE_EVERY_MS = 2000;
+
     // ————— the loop —————
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
@@ -1894,6 +2011,11 @@ export default function RelativityRoom() {
       stepCar(dt);
       stepBeacons(dt, now, pts);
 
+      if (now - lastSaveAt > SAVE_EVERY_MS) {
+        lastSaveAt = now;
+        scheduleSave();
+      }
+
       // the span's photon: it bounces between the fingertips at exactly c on
       // the light clock, so the tick period is the spread itself — and the
       // three-finger law slows this photon like every other light
@@ -1919,7 +2041,13 @@ export default function RelativityRoom() {
       bg.addColorStop(1, "#070810");
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, width, height);
-      const breathA = reduce ? 0.05 : 0.04 + Math.sin(localT * Math.PI * 2 * 0.14) * 0.015;
+      // Share the album's 7s exhale: instead of a private 0.14 Hz LFO on
+      // localT, read the same clocksFrom({}).breath Reef / Root / Geyser /
+      // Spring / Tidepool / Marsh already ride, so two rooms opened side by
+      // side inhale together. Reduced motion holds it at midpoint (0.5) —
+      // stillness quiets the dimension, it never deletes it.
+      const clocks = clocksFrom({ time: localT, reducedMotion: reduce });
+      const breathA = 0.04 + (clocks.breath - 0.5) * 0.03;
       const halo = ctx.createRadialGradient(width * 0.5, height * 0.36, 20, width * 0.5, height * 0.36, Math.max(width, height) * 0.8);
       halo.addColorStop(0, `rgba(130, 160, 220, ${breathA})`);
       halo.addColorStop(1, "rgba(0,0,0,0)");
@@ -2806,9 +2934,11 @@ export default function RelativityRoom() {
       }
     };
     raf = requestAnimationFrame(draw);
-    // no draw while hidden or paused inside a gallery iframe
+    // no draw while hidden or paused inside a gallery iframe — hiding also
+    // flushes any pending write so a tab closed mid-drift doesn't lose it
     const offVis = onVisibility((hiddenNow) => {
       sleeping = hiddenNow;
+      if (hiddenNow) writer.flush();
       if (!hiddenNow && !galleryPaused && !raf) raf = requestAnimationFrame(draw);
     });
     const offGallery = onGalleryPause((pausedNow) => {
@@ -2826,8 +2956,10 @@ export default function RelativityRoom() {
       wrap.removeEventListener("focus", onFocus);
       wrap.removeEventListener("blur", onBlur);
       mq.removeEventListener?.("change", onMq);
+      window.removeEventListener("pagehide", onHide);
       offVis();
       offGallery();
+      writer.flush();
       trainTimers.forEach((t) => clearTimeout(t));
       field?.dispose();
       try { getFieldAudio().releaseConcernTone("love"); } catch { /* noop */ }
