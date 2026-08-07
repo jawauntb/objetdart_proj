@@ -10,9 +10,13 @@
  * one bolt to the ridge. The thunder is the ledger — thunderHz inverts, so a
  * listener reads the size of every strike off its pitch alone.
  *
- * The material is a fragment shader (sky, ridge, bolt); the population is
- * one instanced draw; every law the room claims lives in src/lib/zeussky.ts
- * and is pinned by scripts/test-zeussky.mjs.
+ * The material is a fragment shader (sky, ridge, flash, ridge-scorch) plus
+ * a 2D overlay for the bolt itself — every strike is a set of segments
+ * returned by src/lib/lightning.ts's buildBolt, drawn on the overlay with
+ * the same glow + branch + main-channel grammar /storm uses, so a visitor
+ * moving between the two rooms sees the same lightning anatomy. The
+ * population is one instanced draw; every law the room claims lives in
+ * src/lib/zeussky.ts and is pinned by scripts/test-zeussky.mjs.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -52,6 +56,12 @@ import {
   pealOrder,
   thunderHz,
 } from "@/lib/zeussky";
+import {
+  DEFAULT_BOLT_CFG,
+  buildBolt,
+  hashSeed as boltHashSeed,
+  type BoltSeg,
+} from "@/lib/lightning";
 
 const STORAGE_KEY = "objetdart:zeus:v1";
 
@@ -77,9 +87,6 @@ uniform float u_reduced;
 uniform float u_wind;
 uniform float u_charge;
 uniform float u_flash;
-uniform float u_boltX;
-uniform float u_boltAmp;
-uniform float u_boltSeed;
 uniform float u_night;
 uniform float u_season;
 uniform float u_lens;
@@ -114,27 +121,11 @@ float ridge(float x) {
   return y;
 }
 
-// layer: bolt — one jagged column from the cloud base to the ridge,
-// displaced by seeded noise so every strike draws its own path.
-float bolt(vec2 uv) {
-  if (u_boltAmp <= 0.001) return 0.0;
-  float top = 0.26;
-  float ground = ridge(u_boltX);
-  if (uv.y < top || uv.y > ground) return 0.0;
-  float t = (uv.y - top) / max(0.001, ground - top);
-  float jag = (noise(uv.y * 26.0 + u_boltSeed * 61.0) - 0.5) * 0.09
-            + (noise(uv.y * 90.0 + u_boltSeed * 13.0) - 0.5) * 0.03;
-  jag *= smoothstep(0.0, 0.15, t) * smoothstep(1.0, 0.75, t);
-  float d = abs(uv.x - (u_boltX + jag));
-  float core = exp(-d * 620.0) * 1.4;
-  float halo = exp(-d * 60.0) * 0.35;
-  // a fork that leaves the trunk two-thirds of the way down
-  float fjag = jag + (t - 0.6) * (noise(u_boltSeed * 7.0) - 0.5) * 0.5;
-  float fd = abs(uv.x - (u_boltX + fjag));
-  float forkOn = step(0.6, t) * step(0.4, noise(u_boltSeed * 3.7));
-  float fork = exp(-fd * 480.0) * 0.7 * forkOn;
-  return (core + halo + fork) * u_boltAmp;
-}
+// The bolt itself is no longer drawn in the shader — /storm and /zeus now
+// share the fractal in src/lib/lightning.ts and render the segments on a
+// 2D overlay on top of this pass. The shader still owns the ridge scorch
+// (u_ridgeStrike / u_strikeX) so the mountain visibly RECEIVES the strike,
+// and the sky-wide u_flash still lights the cloud band from within.
 
 void main() {
   vec2 uv = vUv * 0.5 + 0.5;
@@ -184,10 +175,13 @@ void main() {
   // layer: sheet flash — the inside of the nearest cloud, lit for a frame.
   sky += vec3(0.85, 0.82, 0.95) * u_flash * cloudBand;
 
-  // layer: the bolt and the stone it strikes.
+  // layer: the ridge the bolts land on. The bolt itself is drawn on a 2D
+  // overlay above this pass (src/lib/lightning.ts + linesRef canvas below),
+  // so the shader carries the SKY-WIDE flash (u_flash) plus the ridge's own
+  // scorch answer (u_ridgeStrike / u_strikeX further down) — the ridge sees
+  // the strike even though the strike itself is a set of overlaid lines.
   float g = ridge(uv.x);
-  float b = bolt(uv);
-  vec3 c = sky + vec3(1.0, 0.97, 0.88) * b;
+  vec3 c = sky;
   if (uv.y > g) {
     // the mountain: dark stone under a moonlit crest, caught by every strike
     float depth = smoothstep(g, 1.0, uv.y);
@@ -197,7 +191,7 @@ void main() {
     stone += vec3(0.22, 0.23, 0.30) * crest * (0.6 + 0.3 * uBreath);
     float snow = smoothstep(0.58, 0.50, g) * crest;
     stone += vec3(0.12, 0.13, 0.17) * snow;
-    stone += vec3(0.55, 0.53, 0.6) * crest * (u_flash + b * 0.8);
+    stone += vec3(0.55, 0.53, 0.6) * crest * u_flash;
     stone += vec3(0.05, 0.05, 0.07) * crest * u_charge * uBreath;
     // layer: ridge scorch — the ridge answers the bolt. u_ridgeStrike
     // spikes to 1 at the moment of a strike and decays over ~1.5s. A small
@@ -391,6 +385,10 @@ const thunderhead: SceneObjectSpec<Thunderhead> = {
 export default function Zeus() {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // A second canvas on top of the shader — the bolt itself is drawn here as
+  // stroked segments returned by buildBolt (src/lib/lightning.ts). Same
+  // shape /storm uses; keeps the bolt anatomically branched.
+  const linesRef = useRef<HTMLCanvasElement | null>(null);
   const [standing, setStanding] = useState(0);
   const letGoRef = useRef<() => void>(() => {});
   const plantRef = useRef<(nx: number, ny: number) => void>(() => {});
@@ -401,7 +399,10 @@ export default function Zeus() {
   useEffect(() => {
     const wrap = wrapRef.current;
     const canvas = canvasRef.current;
-    if (!wrap || !canvas) return;
+    const lines = linesRef.current;
+    if (!wrap || !canvas || !lines) return;
+    const lctx = lines.getContext("2d");
+    if (!lctx) return;
 
     const audio = getFieldAudio();
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -473,11 +474,20 @@ export default function Zeus() {
     let ceremonyDarken = 0;
     let dwellHoldMs = 0;
 
-    // the field's strike state — one bolt at a time, decaying in the loop
+    // the field's strike state — one bolt at a time, decaying in the loop.
+    // The bolt is a set of overlaid line segments returned by buildBolt
+    // (src/lib/lightning.ts); `lightning` holds the current strike's
+    // segments + a lifetime + intensity. When null, the sky is between
+    // strikes and the overlay renders nothing.
     let flash = 0;
-    let boltAmp = 0;
-    let boltX = 0.5;
-    let boltSeed = 0;
+    let lightning: {
+      t0: number;
+      life: number;
+      segments: BoltSeg[];
+      intensity: number;
+      main: boolean; // true for a ceremony bolt, false for a knock's small strike
+    } | null = null;
+    let strikeSeedCounter = 0;
     // the ridge's answer — spikes to 1 on any strike, decays over ~1.5s. The
     // strike x-coordinate stays with it so the scorch stays where the bolt
     // actually landed even after subsequent frames.
@@ -531,13 +541,11 @@ export default function Zeus() {
     const discharge = (s: Thunderhead, tMs: number, solo: boolean) => {
       const energy = boltEnergy(s.charge, s.water);
       flash = Math.min(1, 0.5 + energy * 0.3);
-      boltAmp = Math.min(1, 0.6 + energy * 0.25);
-      boltX = s.nx;
-      boltSeed = (s.seed % 1000) / 1000 + s.nx;
       // the ridge answers: the scorch lands where the bolt actually did, and
       // decays over ~1.5s. Solo bolts (the ceremony) burn the hottest.
       ridgeStrike = Math.min(1, solo ? 1 : 0.7 + energy * 0.2);
       strikeX = s.nx;
+      fireBolt(s, energy, tMs, solo);
       const delaySec = strikeDelaySec(s.nx);
       // the thunder is the ledger: pitch reads the strike, length rides it —
       // and the whole clap layers a sub-bass thump, a mid-band discharge,
@@ -558,16 +566,57 @@ export default function Zeus() {
     const smallStrike = (s: Thunderhead, tMs: number) => {
       const energy = boltEnergy(s.charge * 0.55, s.water * 0.7);
       flash = Math.min(1, Math.max(flash, 0.35 + energy * 0.2));
-      boltAmp = Math.min(1, Math.max(boltAmp, 0.45 + energy * 0.2));
-      boltX = s.nx;
-      boltSeed = (s.seed % 1000) / 1000 + s.nx * 0.7;
       ridgeStrike = Math.min(1, Math.max(ridgeStrike, 0.55));
       strikeX = s.nx;
+      fireBolt(s, energy, tMs, false);
       const delaySec = strikeDelaySec(s.nx);
       audio.playThunder(energy * 0.6, delaySec, Math.max(1, thunderLayers() - 1));
       s.flicker = Math.min(1.4, s.flicker + 0.7);
       s.charge = Math.max(0, s.charge - 0.15);
       writer.schedule();
+    };
+
+    // Populate the lightning overlay for one strike. Called by discharge()
+    // and smallStrike() so every visible bolt goes through the shared
+    // fractal — no shader-drawn jag alongside a 2D-drawn tree, always one
+    // consistent geometry. Solo (ceremony) bolts are bigger and drawn from
+    // a slightly higher origin so the fall to the ridge reads as longer.
+    const fireBolt = (s: Thunderhead, energy: number, tMs: number, solo: boolean) => {
+      const rect = lines.getBoundingClientRect();
+      const w = rect.width;
+      const h = rect.height;
+      if (!w || !h) return;
+      strikeSeedCounter = (strikeSeedCounter + 1) | 0;
+      const seed = boltHashSeed(
+        Math.floor(s.seed) | 0,
+        strikeSeedCounter,
+        Math.floor(s.nx * 10000),
+      );
+      // origin: high in the cloud band, close to the house's x. A ceremony
+      // bolt drops from the sky top so the fall reads as tall; a small
+      // strike drops from just above the house so it reads as local.
+      const x0 = s.nx * w;
+      const y0 = h * (solo ? SKY_TOP : Math.max(SKY_TOP + 0.02, s.ny - 0.04));
+      // terminus: the ridge line. The shader's `ridge(x)` is a closed-form
+      // skyline; SKY_FLOOR is the flat mean the ridge modulates around, so
+      // this lands the bolt at the ridge's meeting-line with a small jitter
+      // that varies by house so nearby bolts don't stack their impacts.
+      const hitX = x0;
+      const hitY = h * SKY_FLOOR;
+      const segments = buildBolt(x0, y0, hitX, hitY, {
+        ...DEFAULT_BOLT_CFG,
+        // one more generation than storm — zeus's bolts are the room's
+        // solemn act, so give them more visible fractal detail
+        generations: solo ? 7 : 5,
+        displacement: w * DEFAULT_BOLT_CFG.displacement,
+      }, seed);
+      lightning = {
+        t0: tMs,
+        life: solo ? 0.42 : 0.28, // ceremony bolts linger a beat longer
+        segments,
+        intensity: 0.55 + energy * 0.5,
+        main: solo,
+      };
     };
 
     const nearestStanding = (nx: number, ny: number): Thunderhead | null => {
@@ -894,7 +943,9 @@ export default function Zeus() {
       agitation *= 0.96;
       lensAmount *= 0.985;
       flash *= 1 - Math.min(1, dt * 5);
-      boltAmp *= 1 - Math.min(1, dt * 3.2);
+      // Bolt lifetime is stored on the `lightning` state itself now (t0 +
+      // life), not a decayed amplitude — the overlay pass reads age vs life
+      // and fades naturally.
       // ridge scorch cools over ~1.5s regardless of frame rate
       ridgeStrike *= 1 - Math.min(1, dt / 1.5);
       if (ridgeStrike < 0.001) ridgeStrike = 0;
@@ -1020,9 +1071,6 @@ export default function Zeus() {
         prog?.setFloat("u_wind", wind);
         prog?.setFloat("u_charge", totalCharge);
         prog?.setFloat("u_flash", flash);
-        prog?.setFloat("u_boltX", boltX);
-        prog?.setFloat("u_boltAmp", boltAmp);
-        prog?.setFloat("u_boltSeed", boltSeed);
         prog?.setFloat("u_night", night);
         prog?.setFloat("u_season", season);
         prog?.setFloat("u_lens", lensAmount);
@@ -1044,6 +1092,76 @@ export default function Zeus() {
           buffer,
         );
         layer?.draw(buffer);
+      }
+
+      // ——— the bolt overlay: the shared fractal on top of the shader pass.
+      // The shader owns the sky, the ridge, the flash and the ridge scorch
+      // (u_ridgeStrike / u_strikeX are already pushed above); the bolt
+      // itself is a set of stroked segments layered on top of everything,
+      // additive-blended so it reads as light on top of the world. Same
+      // stroke grammar /storm uses — glow underlay, branches, main channel
+      // — so a visitor moving between the two rooms sees the same anatomy.
+      {
+        const w = lines.clientWidth;
+        const h = lines.clientHeight;
+        if (w > 0 && h > 0) {
+          const dpr = Math.min(2, window.devicePixelRatio || 1);
+          const pxW = Math.round(w * dpr);
+          const pxH = Math.round(h * dpr);
+          if (lines.width !== pxW || lines.height !== pxH) {
+            lines.width = pxW;
+            lines.height = pxH;
+            lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          }
+          lctx.clearRect(0, 0, w, h);
+          if (lightning) {
+            const age = (t - lightning.t0) / 1000;
+            if (age >= lightning.life) {
+              lightning = null;
+            } else {
+              const k = Math.max(0, 1 - age / lightning.life);
+              // deterministic flicker via a sine on t — no Math.random in
+              // the render loop (AGENTS.md §5). Two out-of-phase sines
+              // combine so the flicker doesn't repeat cleanly.
+              const flick = 0.55 + 0.25 * Math.sin(t * 0.041) + 0.20 * Math.sin(t * 0.089 + 1.2);
+              const a = Math.pow(k, 1.3) * flick * lightning.intensity;
+              lctx.save();
+              lctx.globalCompositeOperation = "screen";
+              lctx.lineCap = "round";
+              lctx.lineJoin = "round";
+              // soft glow underlay — the whole bolt lit from within
+              lctx.strokeStyle = `rgba(159, 132, 255, ${a * 0.34})`;
+              lctx.lineWidth = 9;
+              lctx.beginPath();
+              for (const sg of lightning.segments) {
+                lctx.moveTo(sg.x0, sg.y0);
+                lctx.lineTo(sg.x1, sg.y1);
+              }
+              lctx.stroke();
+              // branches — thinner and slightly amber for the storm-god palette
+              lctx.strokeStyle = `rgba(227, 198, 107, ${Math.min(1, a * 0.9)})`;
+              lctx.lineWidth = 1.1;
+              lctx.beginPath();
+              for (const sg of lightning.segments) {
+                if (sg.main) continue;
+                lctx.moveTo(sg.x0, sg.y0);
+                lctx.lineTo(sg.x1, sg.y1);
+              }
+              lctx.stroke();
+              // bright main channel — the bolt itself, hottest at the core
+              lctx.strokeStyle = `rgba(245, 236, 201, ${Math.min(1, a * 1.3)})`;
+              lctx.lineWidth = lightning.main ? 2.6 : 1.9;
+              lctx.beginPath();
+              for (const sg of lightning.segments) {
+                if (!sg.main) continue;
+                lctx.moveTo(sg.x0, sg.y0);
+                lctx.lineTo(sg.x1, sg.y1);
+              }
+              lctx.stroke();
+              lctx.restore();
+            }
+          }
+        }
       }
 
       const n = population.standing();
@@ -1089,6 +1207,15 @@ export default function Zeus() {
           tabIndex={0}
           aria-label="a charged sky above the peak — rest a finger and a thunderhead gathers, hold to the ceremony and it spends itself in one bolt to the ridge"
           style={{ position: "absolute", inset: 0, width: "100%", height: "100%", touchAction: "none" }}
+        />
+        {/* the bolt overlay — every strike's fractal segments live here on
+            top of the shader. Pointer-events off so the shader canvas keeps
+            catching the hand; aria-hidden because the bolt speaks through
+            sound + the ridge scorch below it, not through this layer. */}
+        <canvas
+          ref={linesRef}
+          aria-hidden
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
         />
       </div>
     </RoomShell>
