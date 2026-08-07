@@ -1336,12 +1336,19 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     source: "src/components/Tourbillon.tsx",
     page: "src/app/tourbillon/page.tsx",
     address: { band: "drop" },
-    frame: "yield",
+    // The tourbillon owns its own perspective camera (OrbitControls) and joins
+    // the manifold via useBandEdgeTravel: residual pinch past OrbitControls'
+    // widest or tightest orbit reaches the neighboring band the same way
+    // /stars and /atlas do. Pinch is bound in attachGestures to feed that
+    // adapter — declaring `frame: "own"` keeps the room-contract's one-owner
+    // rule true, and the exemption below explains why pan2 is not wired.
+    frame: "own",
     chrome: "axis",
     keeps: null,
     creates: null,
     exempt: {
       dwell: "a tourbillon's dwell is its continuous escapement pressure, not a place where a new object can be planted",
+      pan: "OrbitControls owns two-finger pan on the movement itself; the assembly is centered on its target and has no scene-edge for a room-wired pan2 to reveal, so a second pan binding would only fight the one the camera already answers",
     },
   },
   {
