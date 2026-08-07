@@ -1712,7 +1712,17 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     source: "src/components/Observe.tsx",
     page: "src/app/observe/page.tsx",
     address: { band: "drop" },
-    frame: "yield",
+    // The room owns pinch. /observe is a five-altitude pinch-through of one
+    // substance from the crystalline solid on a matte-black bench-top (zoom 1)
+    // down to a single chromophore's π-cloud (zoom 4096) — every altitude
+    // renders a different material of the same o-chlorophenyl cyclohexanone
+    // family. useBandEdgeTravel (OBSERVE_ZOOM_SPEC in lib/observe) maps the
+    // internal 1..4096 zoom onto the /drop band's manifold position, so
+    // residual pinch at the room's zoom extremes still presses the /drop band
+    // walls exactly as any yielded-frame room does — the detent, the
+    // vignette, the 320ms of intent all feel identical, but between the
+    // walls the camera is entirely the room's own to compose.
+    frame: "own",
     chrome: "axis",
     keeps: "objetdart:observe:v1",
     creates: "a molecule",
@@ -1729,7 +1739,13 @@ export const ROOM_REGISTRY: RoomEntry[] = [
       + "sends every excited molecule to ground at once — a real coupling across the whole "
       + "population, not a per-object timer. Concentration (three-finger twist) scales the whole "
       + "Beer-Lambert wall-paint linearly, and temperature (shake) widens both bands together — "
-      + "the shared field, not each molecule's own copy.",
+      + "the shared field, not each molecule's own copy. At the molecule altitude a twist flips "
+      + "chirality (flipChirality in lib/observe — a real mirror across the xy-plane, preserving "
+      + "connectivity, inverting one coordinate per atom, an involution), and at the chromophore "
+      + "altitude a span opens particle-in-a-box: the interval sets L (chromophoreBoxLength), "
+      + "ΔE recomputes as (n2²−n1²)·h²/(8mL²) (moTransitionEnergy), and the finger's wavelength "
+      + "lights the transition when the beam's photon energy matches ΔE within tolerance "
+      + "(resonant + photonEnergyFromWavelength).",
     exempt: {},
   },
   {

@@ -6,27 +6,7 @@
 // hue anchors sit where the room's copy promises.
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import * as ts from "typescript";
-
-const rootUrl = new URL("../", import.meta.url);
-
-function loadTsModule(path) {
-  const filename = fileURLToPath(new URL(path, rootUrl));
-  const source = readFileSync(filename, "utf8");
-  const code = ts.transpileModule(source, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2020,
-      esModuleInterop: true,
-    },
-    fileName: filename,
-  }).outputText;
-  const module = { exports: {} };
-  new Function("module", "exports", code)(module, module.exports);
-  return module.exports;
-}
+import { loadTsModule } from "./lib/load-ts.mjs";
 
 const O = loadTsModule("src/lib/observe.ts");
 
@@ -279,6 +259,244 @@ const O = loadTsModule("src/lib/observe.ts");
   assert.ok(Math.abs(back.bins[b260] - acc.bins[b260]) < 0.05, "the strong peak returns to shape");
   assert.deepEqual(O.loadSpectrum("garbage", 0).bins.length, O.SPECTRUM_BINS, "a corrupt keep is a fresh accumulator");
   assert.deepEqual(O.loadSpectrum(null, 0).bins.length, O.SPECTRUM_BINS, "null keep loads clean");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PHASE 2 — altitude sweep laws
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ——— altitudeFromZoom: buckets + monotone blend in transitions ————————
+// Catches: a swapped bucket order, a bucket boundary an off-by-one apart, a
+// blend that runs backward or non-monotonically inside a transition band.
+{
+  assert.equal(O.altitudeFromZoom(1).current, "crystal", "zoom 1 sits at the crystal altitude");
+  assert.equal(O.altitudeFromZoom(64).current, "solution", "zoom 64 is inside the solution range");
+  assert.equal(O.altitudeFromZoom(4000).current, "chromophore", "zoom 4000 lands at the chromophore");
+  assert.equal(O.altitudeFromZoom(1.5).current, "crystal", "still crystal below zoom 2");
+  assert.equal(O.altitudeFromZoom(500).current, "moleculeZoom", "500 is inside the molecule-zoom transition");
+  assert.equal(O.altitudeFromZoom(1500).current, "molecule", "1500 is inside the hard molecule altitude");
+
+  // Blends: monotone across the dissolve band.
+  const dz = [3, 5, 10, 14];
+  const dbs = dz.map((z) => O.altitudeFromZoom(z).blend);
+  for (let i = 1; i < dbs.length; i++) {
+    assert.ok(
+      dbs[i] > dbs[i - 1],
+      `dissolve blend must increase with zoom (${dz[i - 1]}→${dz[i]}: ${dbs[i - 1]} → ${dbs[i]})`,
+    );
+  }
+  for (const b of dbs) assert.ok(b >= 0 && b <= 1, "dissolve blend stays in [0,1]");
+  assert.equal(O.altitudeFromZoom(1).blend, 0, "at a hard altitude the blend is zero");
+
+  // moleculeZoom transition too.
+  const mz = [300, 512, 800, 1000];
+  const mbs = mz.map((z) => O.altitudeFromZoom(z).blend);
+  for (let i = 1; i < mbs.length; i++) {
+    assert.ok(mbs[i] > mbs[i - 1], "molecule-zoom blend must increase with zoom");
+  }
+
+  // Incoming altitude names the RISING neighbour.
+  assert.equal(O.altitudeFromZoom(8).incoming, "solution", "dissolve fades UP into solution");
+  assert.equal(O.altitudeFromZoom(500).incoming, "molecule", "moleculeZoom fades UP into molecule");
+  assert.equal(O.altitudeFromZoom(64).incoming, null, "no incoming at a hard altitude");
+}
+
+// ——— altitudeWeights: sum to ~1 across the whole zoom range —————————
+// Catches: a bucket whose weights don't cover the frame (a hole in the
+// crossfade), an over-shoot that would brighten the material past its cap.
+{
+  for (const z of [1, 4, 16, 100, 800, 1500, 3000, 4096]) {
+    const w = O.altitudeWeights(z);
+    const total = w.crystal + w.solution + w.molecule + w.chromophore;
+    assert.ok(Math.abs(total - 1) < 1e-9, `altitude weights sum to 1 at zoom=${z}, got ${total}`);
+    for (const [name, v] of Object.entries(w)) {
+      assert.ok(v >= 0 && v <= 1, `weight ${name} in [0,1] at zoom=${z}, got ${v}`);
+    }
+  }
+  // In a dissolve transition (zoom 4) the crystal weight decays as zoom rises
+  // and the solution weight climbs — the room actually crossfades.
+  const lo = O.altitudeWeights(3);
+  const hi = O.altitudeWeights(12);
+  assert.ok(lo.crystal > hi.crystal, "crystal fades out through the dissolve band");
+  assert.ok(hi.solution > lo.solution, "solution fades in through the dissolve band");
+}
+
+// ——— OBSERVE_ZOOM_SPEC: names the /drop band, the two extremes ————————
+{
+  assert.equal(O.OBSERVE_ZOOM_SPEC.band, "drop", "the room lives on the /drop band");
+  assert.equal(O.OBSERVE_ZOOM_SPEC.zoomMin, 1, "widest view is 1x");
+  assert.equal(O.OBSERVE_ZOOM_SPEC.zoomMax, 4096, "tightest view is 4096x");
+}
+
+// ——— crystal flakes: determinism + gravity + walls ————————————————
+// Catches: a Math.random leak into birth, a gravity that never lands, a
+// wall that doesn't hold.
+{
+  const a = O.bornCrystalFlake(1, 0xa1b2, 0.5, 0.2);
+  const b = O.bornCrystalFlake(1, 0xa1b2, 0.5, 0.2);
+  assert.deepEqual(a, b, "the same seed births the same flake");
+  const c = O.bornCrystalFlake(1, 0xa1b2 + 1, 0.5, 0.2);
+  assert.ok(c.rot !== a.rot || c.omega !== a.omega, "a different seed spins differently");
+
+  // Gravity actually lands.
+  const falling = O.bornCrystalFlake(2, 3, 0.5, 0.2);
+  for (let i = 0; i < 60; i++) O.stepCrystal([falling], 0.033);
+  assert.ok(falling.y >= 0.85, "the flake reaches the bench-top under gravity");
+  assert.ok(falling.settled || falling.y >= 0.85, "and comes to rest, doesn't fall through");
+
+  // A tilt biases lateral drift on unsettled flakes.
+  const left = O.bornCrystalFlake(3, 4, 0.5, 0.2);
+  const right = O.bornCrystalFlake(3, 4, 0.5, 0.2);
+  for (let i = 0; i < 20; i++) O.stepCrystal([left], 0.033, { x: -0.6, y: 0 });
+  for (let i = 0; i < 20; i++) O.stepCrystal([right], 0.033, { x: 0.6, y: 0 });
+  assert.ok(right.x > left.x, "a rightward tilt slides the heap toward positive x");
+}
+
+// ——— crystalCaustics: bounded, deterministic in (x, y, tSec, seed) ——
+// Catches: a caustic that leaks NaN, drifts past 1, or reads the wall clock.
+{
+  for (let i = 0; i < 32; i++) {
+    const x = (i * 0.11) % 1;
+    const y = (i * 0.07) % 1;
+    const t = i * 0.13;
+    const seed = 0xbeef * (i + 1);
+    const v = O.crystalCaustics(x, y, t, seed);
+    assert.ok(v >= 0 && v <= 1, `caustic in [0,1] at (${x},${y},${t},${seed}) got ${v}`);
+  }
+  const a = O.crystalCaustics(0.3, 0.4, 1.5, 0xcafe);
+  const b = O.crystalCaustics(0.3, 0.4, 1.5, 0xcafe);
+  assert.equal(a, b, "crystalCaustics is a pure function");
+  const c = O.crystalCaustics(0.3, 0.4, 1.5, 0xcafe + 1);
+  assert.ok(a !== c, "a different seed shifts the caustic — no lockstep flakes");
+}
+
+// ——— flipChirality: involution, connectivity invariant, z inversion ——
+// Catches: a mirror that mutates bonds (would change what molecule the room
+// is drawing), a flip that fails to be its own inverse (an accumulating
+// drift each time the visitor twists), a mirror that only touches labels
+// but not geometry.
+{
+  const m = O.bornMolecule3D();
+  const flipped = O.flipChirality(m);
+  assert.notEqual(flipped.chirality, m.chirality, "flip toggles the enantiomer label");
+  // z inverted on every atom
+  for (let i = 0; i < m.atoms.length; i++) {
+    assert.ok(
+      Math.abs(flipped.atoms[i].z + m.atoms[i].z) < 1e-12,
+      `atom ${i} z inverted under the mirror`,
+    );
+    assert.equal(flipped.atoms[i].el, m.atoms[i].el, "elements never change under a mirror");
+    assert.equal(flipped.atoms[i].x, m.atoms[i].x, "x preserved");
+    assert.equal(flipped.atoms[i].y, m.atoms[i].y, "y preserved");
+  }
+  // connectivity — the bond list, atom-index pairs and orders — is invariant
+  assert.equal(flipped.bonds.length, m.bonds.length, "flip does not add or drop bonds");
+  for (let i = 0; i < m.bonds.length; i++) {
+    assert.equal(flipped.bonds[i].a, m.bonds[i].a, `bond ${i} a preserved`);
+    assert.equal(flipped.bonds[i].b, m.bonds[i].b, `bond ${i} b preserved`);
+    assert.equal(flipped.bonds[i].order, m.bonds[i].order, `bond ${i} order preserved`);
+  }
+  // involution
+  const twice = O.flipChirality(flipped);
+  assert.equal(twice.chirality, m.chirality, "flip twice returns the enantiomer label");
+  for (let i = 0; i < m.atoms.length; i++) {
+    assert.ok(
+      Math.abs(twice.atoms[i].z - m.atoms[i].z) < 1e-12,
+      `atom ${i} z returns to origin after two flips`,
+    );
+  }
+}
+
+// ——— rotateMolecule: additive on the euler angles ————————————————
+{
+  const m = O.bornMolecule3D();
+  const r1 = O.rotateMolecule(m, 0.5, 0.2);
+  assert.equal(r1.rotation[1], m.rotation[1] + 0.5, "dqx adds to ry");
+  assert.equal(r1.rotation[0], m.rotation[0] + 0.2, "dqy adds to rx");
+  // and returns a new object — no mutation of the input state
+  assert.equal(m.rotation[1], 0, "rotateMolecule does not mutate its input");
+}
+
+// ——— stepMolecule: chair flip on breath, rotation damps ————————————
+{
+  const m0 = O.bornMolecule3D();
+  const rot = O.rotateMolecule(m0, 1.5, 0);
+  const stepped = O.stepMolecule(rot, 0.5, 0.5);
+  assert.ok(
+    Math.abs(stepped.rotation[1]) < Math.abs(rot.rotation[1]),
+    "rotation velocity damps toward rest",
+  );
+  // A breath at phase 0 vs 0.5 lands the chair phase at different places.
+  const a = O.stepMolecule(m0, 0.5, 0);
+  const b = O.stepMolecule(m0, 0.5, 0.5);
+  assert.ok(a.chairFlipPhase !== b.chairFlipPhase, "chair phase reads the breath");
+}
+
+// ——— moTransitionEnergy: 1/L² scaling ————————————————————————————————
+// Catches: a Planck constant swap, an m→h mix-up, an L in nm treated as
+// metres (would be off by 10^18).
+{
+  const L1 = 1e-9; // 1 nm
+  const L2 = 2e-9; // 2 nm
+  const dE1 = O.moTransitionEnergy(1, 2, L1);
+  const dE2 = O.moTransitionEnergy(1, 2, L2);
+  assert.ok(Math.abs(dE2 * 4 - dE1) / dE1 < 1e-9, "double L, quarter ΔE — the 1/L² law");
+  // A larger transition (n=1→3 vs 1→2) has larger ΔE.
+  const dE12 = O.moTransitionEnergy(1, 2, L1);
+  const dE13 = O.moTransitionEnergy(1, 3, L1);
+  assert.ok(dE13 > dE12, "n=1→3 is a higher-energy transition than 1→2");
+  // A 1 nm box's 1→2 transition sits in the deep UV — several eV.
+  assert.ok(dE12 > 0.1 && dE12 < 100, `1 nm box 1→2 lands at a physical energy: ${dE12} eV`);
+}
+
+// ——— photonEnergyFromWavelength: hc/λ, and the visible check ————————
+// Catches: a wavelength taken in metres or angstroms, an inverse-of-inverse
+// bug that lets red light out-energize blue.
+{
+  const eBlue = O.photonEnergyFromWavelength(450);
+  const eRed = O.photonEnergyFromWavelength(650);
+  assert.ok(eBlue > eRed, "shorter wavelength → higher energy (E = hc/λ)");
+  // 500 nm sits around 2.48 eV in reality.
+  const e500 = O.photonEnergyFromWavelength(500);
+  assert.ok(Math.abs(e500 - 2.48) < 0.05, `500 nm ≈ 2.48 eV, got ${e500}`);
+}
+
+// ——— resonant: fires when hc/λ ≈ ΔE, silent otherwise ————————————
+// Catches: a tolerance whose sign got flipped, or a resonance test that
+// compares energies in different units.
+{
+  const L = 1e-9;
+  const dE = O.moTransitionEnergy(1, 2, L);
+  // Solve for the resonant wavelength: λ = hc/ΔE, in nm.
+  const lambdaOnResonance =
+    (O.PLANCK_H * O.SPEED_OF_LIGHT) / (dE * O.EV_IN_JOULES) * 1e9;
+  assert.ok(O.resonant(lambdaOnResonance, dE, 0.01), "resonant fires at the on-resonance wavelength");
+  assert.ok(!O.resonant(lambdaOnResonance * 2, dE, 0.01), "resonant is silent at twice the wavelength");
+  // A wide tolerance catches near-neighbors.
+  assert.ok(O.resonant(lambdaOnResonance * 1.05, dE, 5), "wide tolerance catches a slight detune");
+}
+
+// ——— chromophore photons: fall, then exit the frame ————————————
+{
+  const photons = [
+    { lambda: 260, y: 0.1, born: 0 },
+    { lambda: 285, y: 0.98, born: 0 },
+  ];
+  const next = O.stepChromophorePhotons(photons, 0.05);
+  assert.ok(next.length >= 1, "the photon that hasn't fallen keeps going");
+  const survivor = next.find((p) => p.lambda === 260);
+  assert.ok(survivor && survivor.y > 0.1, "the surviving photon has fallen");
+  // A large dt still drops the below-bottom photon.
+  const drop = O.stepChromophorePhotons([{ lambda: 400, y: 1.02, born: 0 }], 0.05);
+  assert.equal(drop.length, 0, "a photon past y=1 is retired");
+}
+
+// ——— chromophoreBoxLength: monotone in spread ————————————————
+{
+  const short = O.chromophoreBoxLength(0, 800);
+  const long = O.chromophoreBoxLength(600, 800);
+  assert.ok(long > short, "a longer span opens a wider box");
+  assert.ok(short > 0, "even a pinch to zero gives a positive box length");
 }
 
 console.log("observe: ok");

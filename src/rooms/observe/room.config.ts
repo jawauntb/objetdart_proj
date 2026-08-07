@@ -47,34 +47,39 @@ const observe = {
     accent2: "#d84a3c", // red — the far end
     ink: "#f0edd8",
   },
+  // The room owns pinch: the internal zoom sweeps through five altitudes of
+  // the same substance (crystal → dissolve → cuvette → molecule → chromophore)
+  // and useBandEdgeTravel presses the /drop band walls only at the two
+  // extremes. AxisChrome must not mount ScaleTravel on top of that camera.
+  chrome: { travel: false },
   guide: {
-    title: "the sample · the beam finds its band",
+    title: "the sample · one substance, five altitudes",
     scale:
-      "the drop band — cabinet peer beside the coin and the jewel: a shallow bath from above, dissolved with an aromatic cyclohexanone family (an o-chlorophenyl derivative). the room's horizontal axis is a hidden wavelength axis, 200 nm at one edge to 800 nm at the other; the finger picks the wavelength, the beam finds its band.",
+      "the drop band — cabinet peer beside the coin and the jewel: one substance the maker knows (an aromatic cyclohexanone family, an o-chlorophenyl derivative), rendered in five altitudes the visitor pinches through. widest — a small heap of crystalline solid on a matte-black bench-top. tighter — the crystal falls into a beaker of solvent. tighter — a shallow cuvette from above, its horizontal axis a hidden wavelength axis 200–800 nm. tighter — one molecule swells to fill the frame, ball-and-stick, its ring's chair flipping on the room breath. tightest — the aromatic chromophore's π-cloud alone, with a HOMO/LUMO diagram in the corner and a photon of the finger's wavelength descending toward the ring.",
     essence:
-      "molecules drifting in Brownian motion, and a beam of coherent light the hand aims through them by wavelength. on-band the beam is swallowed — the molecule shudders, its outer cloud brightens the color of the emission, then it relaxes and the wall behind it darkens. off-band the beam passes through and paints the far wall bright. a sweep of the finger builds the sample's own absorbance curve along the top of the cuvette from felt experience, not from a chart.",
+      "the room OWNS pinch. a two-finger squeeze sweeps the internal zoom from 1 (crystal) to 4096 (chromophore); at the extremes the residual pressure crosses out through the /drop band walls exactly as any yielded-frame room does. between the walls each altitude is a different material, but the SUBJECT is the same — the crystalline solid, the solvated molecules, the ball-and-stick model, the ring's electron cloud are the same compound seen at four scales, and the transitions BETWEEN them are legible crossfades the visitor sees, not cuts. every verb dispatches per altitude: a tap on a crystal facet tumbles one flake; a tap on the cuvette fires a photon at the finger's wavelength; a tap on a bond at the molecule altitude highlights it; a tap at the chromophore altitude fires a photon toward the ring.",
     moves: [
-      "tap → fire one photon at that wavelength toward the nearest molecule; it either resonates and ignites, or passes",
-      "rapid taps (1 / 3 / 5 / n) → a photon → a burst at that wavelength → a mid-band diode-array snapshot → the whole white beam and every resonant molecule alight",
-      "hold → a droplet of substance falls at that position; molecules gather and multiply as long as the finger stays down",
-      "hold to the ceremony tier → seals the current spectrum as a kept sigil; the curve returns whenever the room does",
-      "drag → sweeps the beam across the bath; the ghost spectrum along the top edge accumulates as it goes",
-      "flick → whips the beam across; a bright streak paints the wall, molecules along the path shake once",
-      "twist → cycles the lens: raw beam and molecules → normalized absorbance versus wavelength → an orbital diagram with the ground and excited states drawn faintly",
-      "twist3 → concentration up or down; deeper concentration means more molecules and deeper wells in the accumulated spectrum",
+      "pinch → travel between the five altitudes; a residual squeeze at either extreme crosses through the /drop band walls",
+      "two-finger tap → step back one altitude jump (molecule → solution → crystal); the room's own camera answers, not ScaleTravel",
+      "at CRYSTAL altitude · tap a facet → the flake tumbles; a tap-train drops new flakes onto the pile; tilt slides the heap; ceremony hold seals the room",
+      "at SOLUTION altitude (Phase 1's cuvette) · tap → fire one photon at that wavelength; rapid taps (1 / 3 / 5 / n) escalate through a burst, a diode-array snapshot, and the whole white beam; drag → sweeps the beam; the ghost spectrum along the top edge accumulates the sample's fingerprint",
+      "at MOLECULE altitude · drag → rotate the model in space; twist (two-finger) → flip chirality, (S) ↔ (R), a real mirror across the plane preserving connectivity; tap on a bond → highlights it and prints its order (single / double / triple)",
+      "at CHROMOPHORE altitude · tap → fire a photon of the finger's wavelength toward the ring; if resonant with the current ΔE it kicks an electron across the gap; span (two still fingers) → particle-in-a-box: the interval sets L, ΔE recomputes as (n2²−n1²)·h²/(8mL²); twist → cycles n (2, 3, 4, ...)",
+      "hold → a droplet of substance falls (solution altitude); molecules gather and multiply as long as the finger stays down",
+      "ceremony hold → seals the current spectrum as a kept sigil; the curve returns whenever the room does",
       "three-finger drag → wind through the solvent; the population churns and drift velocities rise",
       "three-finger hold → time dilation; the absorb → relax cycle slows so the electron jump and the return can be seen",
       "three-finger tap → the diode array fires: every wavelength at once, every resonant molecule briefly lit, the ghost spectrum flashes complete",
-      "two-finger tap → step back through the lens tiers",
-      "two still fingers held apart → a sustained beam at the midpoint wavelength; molecules resonant with that λ keep re-exciting for as long as it is held",
+      "three-finger twist → concentration up or down; deeper concentration means more molecules and deeper wells in the accumulated spectrum",
       "scrub (a winding path) → stirs the solvent; a vortex briefly forms",
-      "tap a steady beat → the beam's intensity rides your tempo",
       "tilt / shake / knock / flip (once invited) → the solvent leans, the sample fizzes with thermal broadening, a knock is the chopper (every excited molecule falls to ground at once), face-down dims everything but the two absorption bands the sample lives at",
     ],
     finds: [
       "the two bands the sample lives at are its fingerprint: the strong one near true violet and the shallow, broader shoulder to its right — the shape of the ghost curve is the whole identity of the compound",
+      "the chair flip at the molecule altitude runs on the album's 7s breath — patience shows the ring inverting through its transition state and back",
+      "the chirality flip at the molecule altitude preserves EVERY bond; only the geometry inverts — the same atoms in the same connectivity, arranged as their mirror image",
+      "at the chromophore altitude, a photon whose energy hc/λ equals ΔE arrives and disappears; one whose energy misses passes through unabsorbed. widen the box (a longer span) and ΔE drops as 1/L² — the on-resonance wavelength walks toward the red",
       "shaken (or held under a knock's thermal loading) the bands widen and shallow at once — a real sample is not a cold spectrum, and the room reads that",
-      "a wavelength between the bands paints the wall almost as bright as pure water — this sample is transparent through most of the visible",
       "the beam intensity breathes with the album's 7s candle — a patient hand feels the room breathe with the site",
     ],
     keeps:
