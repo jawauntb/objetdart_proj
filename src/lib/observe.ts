@@ -634,6 +634,41 @@ export function altitudeFromZoom(zoom: number): {
 }
 
 /**
+ * The four HARD altitudes, in widest-to-tightest order. Transition bands
+ * ("dissolve", "moleculeZoom") are handled implicitly by walkBackFromZoom.
+ */
+export const OBSERVE_HARD_ALTITUDES: Altitude[] = [
+  "crystal",
+  "solution",
+  "molecule",
+  "chromophore",
+];
+
+/**
+ * The zoom the visitor lands on when they two-finger-tap (stepBack) from the
+ * given zoom. Always the widest edge of the PREVIOUS hard altitude, so the
+ * walk is one full altitude per tap — never a partial retreat inside the
+ * current one. At the widest altitude (crystal) it clamps to the /drop band
+ * wall, and the residual pinch lifts the visitor out of the room.
+ */
+export function walkBackFromZoom(zoom: number): number {
+  const cur = altitudeFromZoom(zoom).current;
+  // Transition bands land at the OUTGOING hard altitude — the one the
+  // visitor came from. dissolve came from crystal; moleculeZoom came from
+  // solution. This is one step back (into the room the visitor was in
+  // before the transition), not two.
+  if (cur === "dissolve") return ALTITUDE_BOUNDS.crystal.lo;
+  if (cur === "moleculeZoom") return ALTITUDE_BOUNDS.solution.lo;
+  const idx = OBSERVE_HARD_ALTITUDES.indexOf(cur);
+  if (idx <= 0) {
+    // widest hard altitude — the manifold catches this on a harder press
+    return OBSERVE_ZOOM_SPEC.zoomMin;
+  }
+  const target = OBSERVE_HARD_ALTITUDES[idx - 1];
+  return ALTITUDE_BOUNDS[target].lo;
+}
+
+/**
  * Per-altitude render weights — the four terminal altitudes each get a 0..1
  * weight and the caller mixes their materials. Inside a transition band the
  * two neighbouring weights sum to 1; at a hard altitude one weight is 1 and
@@ -834,6 +869,16 @@ export type MoleculeState = {
 };
 
 /**
+ * The rest pose of the molecule — a slight tilt that puts the ring in a
+ * three-quarter view. This matters for the chirality flip: at (rx=0, ry=0)
+ * the ring is drawn edge-on and z-inversion is invisible, because z projects
+ * to depth only. At the rest pose the z axis has a real projection onto
+ * screen x/y, so a flipChirality reads as a legible mirror.
+ */
+export const MOLECULE_REST_RX = 0.32;
+export const MOLECULE_REST_RY = 0.55;
+
+/**
  * A representative six-carbon ring with one carbonyl (=O), one chlorine on
  * an ortho carbon, and hydrogens filling out the valences — enough atoms and
  * bonds that a chirality flip is visually distinct without cluttering the
@@ -894,7 +939,10 @@ export function bornMolecule3D(): MoleculeState {
   ];
   return {
     chirality: "S",
-    rotation: [0, 0, 0],
+    // Initial pose is the rest pose, so the ring is already in the three-
+    // quarter view where a chirality flip reads as a mirror (see the note
+    // on MOLECULE_REST_RX / MOLECULE_REST_RY).
+    rotation: [MOLECULE_REST_RX, MOLECULE_REST_RY, 0],
     chairFlipPhase: 0,
     atoms,
     bonds,
@@ -946,11 +994,16 @@ export function stepMolecule(state: MoleculeState, dt: number, breath: number): 
   // Chair flip: a slow phase that oscillates 0↔1 with the breath.
   const targetPhase = 0.5 - 0.5 * Math.cos(b * Math.PI * 2);
   const phase = state.chairFlipPhase + (targetPhase - state.chairFlipPhase) * Math.min(1, d * 1.2);
-  // Gentle rotation damping — the model rests after a drag.
+  // Gentle rotation damping toward the rest pose — after a drag, the model
+  // eases back to the three-quarter view where the ring reads best.
   const damp = Math.exp(-1.4 * d);
   return {
     ...state,
-    rotation: [rx * damp + 0.001 * b, ry * damp, rz],
+    rotation: [
+      MOLECULE_REST_RX + (rx - MOLECULE_REST_RX) * damp + 0.001 * b,
+      MOLECULE_REST_RY + (ry - MOLECULE_REST_RY) * damp,
+      rz,
+    ],
     chairFlipPhase: phase,
   };
 }
@@ -1036,6 +1089,42 @@ export function stepChromophorePhotons(
     out.push({ ...p, y });
   }
   return out;
+}
+
+/** Normalized y of the aromatic ring plane at the chromophore altitude. */
+export const CHROMOPHORE_RING_Y = 0.5;
+/**
+ * Absorption window around the ring plane, in normalized y. Wide enough to
+ * catch a photon in one step at 60 Hz (Δy per frame ≈ 0.023), narrow enough
+ * that the "crossing" reads as an event, not a corridor.
+ */
+export const CHROMOPHORE_ABSORB_WINDOW = 0.05;
+
+/**
+ * Partition a set of photons into { absorbed, survivors } based on whether
+ * they crossed the aromatic ring plane in resonance with the current ΔE.
+ * A photon is absorbed once — it does not stay absorbable while it falls
+ * past — and non-resonant photons pass through the ring unchanged. This
+ * pure partition is the whole reason a hand can FEEL the resonance: the
+ * photon disappears at the ring when hc/λ ≈ ΔE, and only then.
+ */
+export function absorbChromophorePhotonsAtRing(
+  photons: ChromophorePhoton[],
+  deltaE_eV: number,
+  tol_eV: number,
+): { survivors: ChromophorePhoton[]; absorbed: ChromophorePhoton[] } {
+  const survivors: ChromophorePhoton[] = [];
+  const absorbed: ChromophorePhoton[] = [];
+  for (const p of photons) {
+    const dy = p.y - CHROMOPHORE_RING_Y;
+    const atRing = dy >= 0 && dy <= CHROMOPHORE_ABSORB_WINDOW;
+    if (atRing && resonant(p.lambda, deltaE_eV, tol_eV)) {
+      absorbed.push(p);
+    } else {
+      survivors.push(p);
+    }
+  }
+  return { survivors, absorbed };
 }
 
 /**

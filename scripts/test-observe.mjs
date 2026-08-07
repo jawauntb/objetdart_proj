@@ -408,28 +408,51 @@ const O = loadTsModule("src/lib/observe.ts");
 }
 
 // ——— rotateMolecule: additive on the euler angles ————————————————
+// Catches: a rotation applied in the wrong axis order (would swap dqx/dqy),
+// a mutation of the input (would break time reversibility for a film).
 {
   const m = O.bornMolecule3D();
+  const startRx = m.rotation[0];
+  const startRy = m.rotation[1];
   const r1 = O.rotateMolecule(m, 0.5, 0.2);
-  assert.equal(r1.rotation[1], m.rotation[1] + 0.5, "dqx adds to ry");
-  assert.equal(r1.rotation[0], m.rotation[0] + 0.2, "dqy adds to rx");
+  assert.equal(r1.rotation[1], startRy + 0.5, "dqx adds to ry");
+  assert.equal(r1.rotation[0], startRx + 0.2, "dqy adds to rx");
   // and returns a new object — no mutation of the input state
-  assert.equal(m.rotation[1], 0, "rotateMolecule does not mutate its input");
+  assert.equal(m.rotation[1], startRy, "rotateMolecule does not mutate its input");
+  // bornMolecule3D starts at the rest pose — chirality is visible at first
+  // paint because z-inversion projects onto screen x/y in this view.
+  assert.equal(m.rotation[0], O.MOLECULE_REST_RX, "born at the rest pose (rx)");
+  assert.equal(m.rotation[1], O.MOLECULE_REST_RY, "born at the rest pose (ry)");
+  assert.ok(O.MOLECULE_REST_RX !== 0 || O.MOLECULE_REST_RY !== 0,
+    "rest pose is a non-trivial tilt so chirality reads");
 }
 
-// ——— stepMolecule: chair flip on breath, rotation damps ————————————
+// ——— stepMolecule: chair flip on breath, rotation damps toward rest ——
+// Catches: a damp toward zero that would render chirality flip invisible on
+// a drag-released molecule.
 {
   const m0 = O.bornMolecule3D();
   const rot = O.rotateMolecule(m0, 1.5, 0);
   const stepped = O.stepMolecule(rot, 0.5, 0.5);
+  // Distance to the rest pose shrinks under one step
+  const distBefore = Math.abs(rot.rotation[1] - O.MOLECULE_REST_RY);
+  const distAfter = Math.abs(stepped.rotation[1] - O.MOLECULE_REST_RY);
   assert.ok(
-    Math.abs(stepped.rotation[1]) < Math.abs(rot.rotation[1]),
-    "rotation velocity damps toward rest",
+    distAfter < distBefore,
+    `rotation damps TOWARD the rest pose, not toward zero: ${distBefore} → ${distAfter}`,
   );
   // A breath at phase 0 vs 0.5 lands the chair phase at different places.
   const a = O.stepMolecule(m0, 0.5, 0);
   const b = O.stepMolecule(m0, 0.5, 0.5);
   assert.ok(a.chairFlipPhase !== b.chairFlipPhase, "chair phase reads the breath");
+  // Many steps land at the rest pose — a released molecule finds it and stays
+  let state = O.rotateMolecule(m0, 2.4, -1.8);
+  for (let i = 0; i < 200; i++) state = O.stepMolecule(state, 0.03, 0);
+  assert.ok(
+    Math.abs(state.rotation[0] - O.MOLECULE_REST_RX) < 0.02
+      && Math.abs(state.rotation[1] - O.MOLECULE_REST_RY) < 0.02,
+    "long enough rest pulls the molecule all the way back to the rest pose",
+  );
 }
 
 // ——— moTransitionEnergy: 1/L² scaling ————————————————————————————————
@@ -497,6 +520,109 @@ const O = loadTsModule("src/lib/observe.ts");
   const long = O.chromophoreBoxLength(600, 800);
   assert.ok(long > short, "a longer span opens a wider box");
   assert.ok(short > 0, "even a pinch to zero gives a positive box length");
+}
+
+// ——— PIB integration: span-through-L → ΔE monotonically drops ——————
+// Catches: a wiring that took spread but never re-computed ΔE, a sign flip
+// in chromophoreBoxLength that would make a wider span TIGHTEN the box.
+// This is the "the hand feels the n²/L² law" law, in one integration pass.
+{
+  const framePx = 800;
+  const spreads = [40, 120, 240, 400, 600];
+  const energies = spreads.map((s) => {
+    const L = O.chromophoreBoxLength(s, framePx);
+    return O.moTransitionEnergy(1, 2, L);
+  });
+  for (let i = 1; i < energies.length; i++) {
+    assert.ok(
+      energies[i] < energies[i - 1],
+      `a longer span drops ΔE (spread ${spreads[i - 1]}→${spreads[i]}: ` +
+      `${energies[i - 1].toFixed(3)} → ${energies[i].toFixed(3)} eV) — the span IS the dial`,
+    );
+  }
+  // The resonant wavelength walks toward the red as the box widens — the
+  // photon-energy formula is E=hc/λ, so lower ΔE ⇒ longer λ.
+  const lambdaOnResonance = (dE) =>
+    (O.PLANCK_H * O.SPEED_OF_LIGHT) / (dE * O.EV_IN_JOULES) * 1e9;
+  const lambdas = energies.map(lambdaOnResonance);
+  for (let i = 1; i < lambdas.length; i++) {
+    assert.ok(
+      lambdas[i] > lambdas[i - 1],
+      "widening the span walks the on-resonance wavelength toward the red",
+    );
+  }
+}
+
+// ——— absorb-at-ring: retire resonant photons, pass the off-band ————
+// Catches: an absorption law that catches every photon regardless of match
+// (a broken resonance check), or one that never fires (a mistuned tolerance).
+// This is the whole reason a hand feels the resonance — the photon
+// disappears at the ring only when hc/λ matches ΔE.
+{
+  const L = 1e-9;
+  const dE = O.moTransitionEnergy(1, 2, L);
+  const lambdaHit = (O.PLANCK_H * O.SPEED_OF_LIGHT) / (dE * O.EV_IN_JOULES) * 1e9;
+  // Three photons: one on-resonance at the ring, one off-resonance at the
+  // ring, one on-resonance but not at the ring yet.
+  const photons = [
+    { lambda: lambdaHit, y: O.CHROMOPHORE_RING_Y + 0.02, born: 0 },     // absorbed
+    { lambda: lambdaHit * 3, y: O.CHROMOPHORE_RING_Y + 0.02, born: 0 }, // survives (off-band)
+    { lambda: lambdaHit, y: 0.2, born: 0 },                             // survives (not yet)
+  ];
+  const { survivors, absorbed } = O.absorbChromophorePhotonsAtRing(photons, dE, 0.05);
+  assert.equal(absorbed.length, 1, "one photon absorbed — the on-resonance one at the ring");
+  assert.equal(absorbed[0].lambda, lambdaHit, "the absorbed photon is the resonant one");
+  assert.equal(survivors.length, 2, "the off-band photon and the not-yet-at-ring one survive");
+  // A photon well past the ring (y > ringY + window) is NOT absorbed — it
+  // already crossed without being caught, and cannot be swallowed retroactively.
+  const past = [{ lambda: lambdaHit, y: 0.9, born: 0 }];
+  const r2 = O.absorbChromophorePhotonsAtRing(past, dE, 0.05);
+  assert.equal(r2.absorbed.length, 0, "a photon that already fell past the ring is not absorbed");
+  assert.equal(r2.survivors.length, 1, "and stays in flight");
+  // No photons in, no absorbed out.
+  const empty = O.absorbChromophorePhotonsAtRing([], dE, 0.05);
+  assert.equal(empty.absorbed.length, 0, "empty in, empty out");
+  assert.equal(empty.survivors.length, 0, "empty survivors on empty input");
+}
+
+// ——— walkBackFromZoom: one hard altitude per step, monotone descent ——
+// Catches: a step-back that skips or doubles an altitude, or hangs on the
+// widest one instead of releasing to the manifold.
+{
+  // From deep chromophore, land at the widest edge of molecule.
+  assert.equal(O.walkBackFromZoom(3000), O.ALTITUDE_BOUNDS.molecule.lo,
+    "from chromophore, step back to molecule.lo (1024)");
+  assert.equal(O.walkBackFromZoom(4000), O.ALTITUDE_BOUNDS.molecule.lo,
+    "from anywhere inside chromophore, step back is molecule.lo");
+  // From molecule, land at solution's widest.
+  assert.equal(O.walkBackFromZoom(1500), O.ALTITUDE_BOUNDS.solution.lo,
+    "from molecule, step back to solution.lo (16)");
+  // From solution, land at crystal's widest.
+  assert.equal(O.walkBackFromZoom(64), O.ALTITUDE_BOUNDS.crystal.lo,
+    "from solution, step back to crystal.lo (1)");
+  // From crystal (the widest hard altitude), release toward the /drop band wall.
+  assert.equal(O.walkBackFromZoom(1.2), O.OBSERVE_ZOOM_SPEC.zoomMin,
+    "from crystal, step back releases at the widest end of the /drop band");
+  // From transition bands, land at the outgoing hard altitude — never
+  // half-a-step, never sideways.
+  assert.equal(O.walkBackFromZoom(6), O.ALTITUDE_BOUNDS.crystal.lo,
+    "dissolve transition steps back to crystal");
+  assert.equal(O.walkBackFromZoom(600), O.ALTITUDE_BOUNDS.solution.lo,
+    "moleculeZoom transition steps back to solution");
+  // Repeated step-backs walk the visitor all the way to the manifold wall.
+  let z = 3200;
+  const trail = [z];
+  for (let i = 0; i < 6; i++) {
+    z = O.walkBackFromZoom(z);
+    trail.push(z);
+    if (z === O.OBSERVE_ZOOM_SPEC.zoomMin) break;
+  }
+  assert.equal(trail[trail.length - 1], O.OBSERVE_ZOOM_SPEC.zoomMin,
+    `four taps walk from chromophore to the widest edge: ${trail.join(" → ")}`);
+  // The sequence is strictly non-increasing.
+  for (let i = 1; i < trail.length; i++) {
+    assert.ok(trail[i] <= trail[i - 1], "step-back never zooms IN");
+  }
 }
 
 console.log("observe: ok");
