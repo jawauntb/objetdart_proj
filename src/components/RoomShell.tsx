@@ -42,6 +42,13 @@ import { roomGestureBindings, type RoomVoice } from "@/lib/gesture/defaults";
 import { onVessel } from "@/lib/vessel";
 import { entryScaleFor } from "@/lib/scale";
 import { roomChromeForRoute } from "@/rooms/registry";
+import {
+  createFrameGovernor,
+  isEmbeddedFrame,
+  onGalleryPause,
+  onVisibility,
+  type QualityTier,
+} from "@/lib/room-runtime";
 
 export type RoomShellProps = {
   /** The room's route — the scale address, the peer ring, the chrome. */
@@ -68,6 +75,26 @@ export type RoomShellProps = {
   ownsFrame?: boolean;
   /** Skip AxisChrome entirely (reading surfaces). */
   chrome?: boolean;
+  /**
+   * The frame-governor + pause plumbing. Instantiated by the shell either
+   * way — this prop is the room's *subscription* to it, so a room that
+   * drives its own RAF can guard the loop and pick detail from a tier
+   * without re-wiring `createFrameGovernor` / `onVisibility` /
+   * `onGalleryPause` for the thirtieth time. All fields are optional; a
+   * room that ignores `perf` behaves exactly as before.
+   */
+  perf?: {
+    /** Fires when the ema tier changes (first tick counted). */
+    onTier?: (tier: QualityTier) => void;
+    /** Coalesced sleep bit: `document.hidden || galleryPaused`. Fires on change. */
+    onPaused?: (paused: boolean) => void;
+    /**
+     * Filled by the shell; the room's draw loop calls it once per frame
+     * with the timestamp so the shared governor's ema stays authoritative
+     * and any tier change flows back through `onTier` in one place.
+     */
+    beginFrameRef?: React.MutableRefObject<((now: number) => QualityTier) | null>;
+  };
   children?: ReactNode;
   className?: string;
   style?: React.CSSProperties;
@@ -86,6 +113,7 @@ export default function RoomShell({
   onReducedMotion,
   ownsFrame = false,
   chrome = true,
+  perf,
   children,
   className,
   style,
@@ -101,6 +129,8 @@ export default function RoomShell({
   keyboardRef.current = keyboard;
   const glimmerRef = useRef(onGlimmer);
   glimmerRef.current = onGlimmer;
+  const perfRef = useRef(perf);
+  perfRef.current = perf;
 
   const manifestChrome = useMemo(() => roomChromeForRoute(route), [route]);
   const travel = manifestChrome.travel && !ownsFrame;
@@ -126,6 +156,48 @@ export default function RoomShell({
     media.addEventListener?.("change", applyReduced);
 
     const audio = getFieldAudio();
+
+    // ── the performance contract (src/lib/room-runtime) ─────────────
+    // The shell finally does what its file header promised: one governor,
+    // one pair of pause subscriptions, wired regardless so the plumbing
+    // stays alive whether the room asks about it or not. A room opts in
+    // via `perf`; a room that doesn't runs unchanged. Embedded rooms
+    // start at 'medium' — a gallery iframe should never open at full DPR.
+    const gov = createFrameGovernor(isEmbeddedFrame() ? "medium" : "high");
+    let hidden = false;
+    let galleryPaused = false;
+    let lastPaused: boolean | null = null;
+    let lastTier: QualityTier | null = null;
+    const publishPaused = () => {
+      const paused = hidden || galleryPaused;
+      if (paused === lastPaused) return;
+      lastPaused = paused;
+      perfRef.current?.onPaused?.(paused);
+    };
+    const offVisibility = onVisibility((h) => {
+      hidden = h;
+      publishPaused();
+    });
+    const offGalleryPause = onGalleryPause((p) => {
+      galleryPaused = p;
+      publishPaused();
+    });
+
+    // The child's draw loop drives the governor: each frame it calls
+    // beginFrame(now) through this ref, the ema advances in one place,
+    // and any tier change flows out through onTier without the room
+    // polling. A room that never fills a ref simply never ticks the
+    // governor — everything else still works.
+    const beginFrame = (now: number): QualityTier => {
+      const tier = gov.beginFrame(now);
+      if (tier !== lastTier) {
+        lastTier = tier;
+        perfRef.current?.onTier?.(tier);
+      }
+      return tier;
+    };
+    const beginFrameRef = perfRef.current?.beginFrameRef;
+    if (beginFrameRef) beginFrameRef.current = beginFrame;
 
     // The two senses every unclaimed verb still lands in. Weight bends the
     // voice low and long for heavy acts (ceremony, knock, night) and short and
@@ -223,6 +295,9 @@ export default function RoomShell({
       media.removeEventListener?.("change", applyReduced);
       detachGestures();
       detachVessel();
+      offVisibility();
+      offGalleryPause();
+      if (beginFrameRef) beginFrameRef.current = null;
       window.clearInterval(glimmerTimer);
       if (enterTimer) window.clearInterval(enterTimer);
       window.removeEventListener("keydown", onKeyDown);
