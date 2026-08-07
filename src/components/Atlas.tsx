@@ -2817,19 +2817,27 @@ export default function Atlas() {
       applyLiveView(next);
       pinchRef.current = { distance, midpoint, view: next };
       // Defer wider-chart minting until fingers settle — mid-gesture dispatch
-      // is what lets a stale wider sheet land under a still-moving pinch.
+      // is what lets a stale wider sheet land under a still-moving pinch —
+      // but let the manifold keep pressing in parallel: if the room can't
+      // answer in time (the hand outlives the 320 ms of intent) the coast is
+      // what the press meant, and the wheel path has always known that.
+      // Direction reversal (fingers moved off the floor) clears the intent,
+      // so a brief contract-then-spread doesn't mint a stale wider sheet on
+      // release AND doesn't keep the wall pressure dark under the reversed
+      // hand — the earlier sticky guard did both, which is why touch pinch
+      // at fit-to-view never pressed the manifold at all.
+      if (viewRef.current.zoom > floor + 0.02) {
+        pendingWiderTerritoryRef.current = false;
+      }
       if (wantsWider) {
         pendingWiderTerritoryRef.current = true;
-        resetScaleEdge();
       }
       // Residual pinch past a held extreme → the band walls: attempted
       // minus achieved ln-ratio per second, zero inside the plane's range.
       const nowMs = performance.now();
       const dtMs = nowMs - pinchAtRef.current;
       pinchAtRef.current = nowMs;
-      if (pendingWiderTerritoryRef.current) {
-        resetScaleEdge();
-      } else if (zoom >= ceiling && ceiling < MAX_ZOOM) {
+      if (zoom >= ceiling && ceiling < MAX_ZOOM) {
         // Held against the plane ceiling: the pyramid answers this, not
         // the coast. The settle path draws deeper ground and promotes it.
         resetScaleEdge();
