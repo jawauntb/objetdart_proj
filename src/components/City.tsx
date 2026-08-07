@@ -8,6 +8,8 @@ import { holdTier, tapTrainDepth, tapTrainTier, THRESHOLDS } from "@/lib/gesture
 import { getFieldAudio } from "@/lib/audio";
 import * as haptics from "@/lib/haptics";
 import { onVessel } from "@/lib/vessel";
+import { useBandEdgeTravel } from "@/components/ScaleTravel";
+import type { RoomZoomSpec } from "@/lib/scale";
 import {
   createFrameGovernor,
   createIdleWriter,
@@ -192,6 +194,20 @@ const STORAGE_KEY = "objetdart:city:v1";
 const MAX_PLOTS = 48;
 const MAX_PEOPLE = 96;
 const MAX_ROADS = 32;
+
+// /city lives in the atlas band and owns the coupled zoom+pitch pinch
+// (AxisChrome travel={false}). It joins the manifold via the adapter: the
+// city's own zoom01 in [0..1] is remapped to [1..e] so `scaleForRoomZoom`'s
+// log map lays the whole atlas band across it linearly — zoom01=0 (bird's-
+// eye, widest) lands flush against the band ceiling (larger scales beyond,
+// toward the ground) and zoom01=1 (eye-level, tightest) against the band
+// floor (smaller scales beyond, toward the atmosphere). Residual pinch at
+// either extreme becomes wall pressure the same physics as everywhere else.
+export const CITY_ZOOM_SPEC: RoomZoomSpec = {
+  band: "atlas",
+  zoomMin: 1,          // widest view → band ceiling
+  zoomMax: Math.E,     // tightest view → band floor
+};
 
 type Plot = {
   id: number;
@@ -975,6 +991,23 @@ export default function City() {
     try { window.dispatchEvent(new Event("letgo")); } catch { /* noop */ }
     setHasKept(false);
   };
+
+  // The scale manifold at the coupled-camera extremes. A pinch inside the
+  // city's own zoom range moves the bird's-eye ↔ eye-level camera as
+  // always; only pinch held past the widest or tightest view presses
+  // toward the neighboring band — the same physics as every other axis
+  // room (Tourbillon, Beam, Atlas).
+  const {
+    report: reportScaleEdge,
+    release: releaseScaleEdge,
+    overlay: scaleEdgeOverlay,
+  } = useBandEdgeTravel("/city", CITY_ZOOM_SPEC);
+  // Held in refs so the useEffect closure — mounted once — always reads
+  // the current callback identity that useBandEdgeTravel returns each render.
+  const reportScaleEdgeRef = useRef(reportScaleEdge);
+  const releaseScaleEdgeRef = useRef(releaseScaleEdge);
+  reportScaleEdgeRef.current = reportScaleEdge;
+  releaseScaleEdgeRef.current = releaseScaleEdge;
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -2213,13 +2246,21 @@ export default function City() {
         // camera zooms IN toward eye-level); e.scale < 1 = pinch IN
         // (fingers together, camera zooms OUT to bird's-eye). The city
         // camera's spring eases the target across the ~1 second travel.
-        if (e.phase === "start" || e.phase === "end") return;
+        if (e.phase === "end") { releaseScaleEdgeRef.current(); return; }
+        if (e.phase !== "move") return;
         // Map log(scale) to a zoom delta. A full-hand pinch (scale 2.0)
         // moves ~0.7 up the [0..1] zoom axis; a small nudge is a small
         // change. Log so a scale 0.5 (pinch-in) travels the same distance
         // as a scale 2.0 (pinch-out).
         const delta = Math.log(Math.max(0.05, e.scale)) * 0.09;
         cityCam.nudgeZoom(delta);
+        // The city owns pinch inside its range; report the attempted
+        // velocity to the adapter so a pinch held past zoom01=0 (bird's-
+        // eye) or zoom01=1 (eye-level) becomes wall pressure toward the
+        // neighboring band. Inside the range residualScaleInput answers
+        // inactive, so the report is inert. exp() lifts the zoom onto
+        // the spec's [1..e] log domain.
+        reportScaleEdgeRef.current(Math.exp(cityCam.targetZoom()), e.velocity);
       },
 
       rhythm: (e) => {
@@ -4020,6 +4061,7 @@ export default function City() {
           a settlement made of the care it takes
         </div>
       </div>
+      {scaleEdgeOverlay}
       <LetGo label="let the city go" onLetGo={letGo} visible={hasKept} />
       <style dangerouslySetInnerHTML={{ __html: `
         .city-hud {

@@ -15,7 +15,7 @@ export default function FlowersPage() {
       <main>
         <FlowersGarden />
       </main>
-      <AxisChrome route="/flowers" />
+      <AxisChrome route="/flowers" travel={false} />
     </>
   );
 }

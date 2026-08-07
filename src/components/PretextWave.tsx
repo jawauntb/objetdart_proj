@@ -19,6 +19,8 @@ import { tapTrainTier } from "@/lib/gesture/core";
 import { onVessel } from "@/lib/vessel";
 import { onVisibility } from "@/lib/room-runtime";
 import LetGo from "@/components/LetGo";
+import { useBandEdgeTravel } from "@/components/ScaleTravel";
+import type { RoomZoomSpec } from "@/lib/scale";
 
 type MotionMode = "move" | "shift" | "shake" | "quake" | "wave" | "sine";
 type PretextMark = { id: number; label: string; tone: "water" | "ember" | "voice"; strength: number };
@@ -43,6 +45,20 @@ const AMP_MIN = 0;
 const AMP_MAX = 42;
 const DENSITY_MIN = 0.4;
 const DENSITY_MAX = 3;
+
+// /pretext lives in the coast band and owns its own typography-zoom pinch
+// (AxisChrome travel={false}). It joins the manifold via the adapter: the
+// text zoom is 1:1 the zoom parameter, with the pulled-back reading (0.72)
+// as the band ceiling (larger scales beyond) and the close-in reading
+// (1.5) as the band floor (smaller scales beyond). Residual pinch at
+// either extreme becomes wall pressure the same physics as everywhere else.
+const PRETEXT_ZOOM_MIN = 0.72;
+const PRETEXT_ZOOM_MAX = 1.5;
+export const PRETEXT_ZOOM_SPEC: RoomZoomSpec = {
+  band: "coast",
+  zoomMin: PRETEXT_ZOOM_MIN,   // widest view → band ceiling
+  zoomMax: PRETEXT_ZOOM_MAX,   // tightest view → band floor
+};
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
@@ -165,6 +181,22 @@ export default function PretextWave() {
     moved: 0,
     lastFx: 0,
   });
+
+  // The scale manifold at the typography-zoom extremes. A pinch inside the
+  // sentence's own reading range stays local; only pinch held past 0.72
+  // (widest) or 1.5 (tightest) presses toward the neighboring band — the
+  // same physics as every other axis room.
+  const {
+    report: reportScaleEdge,
+    release: releaseScaleEdge,
+    overlay: scaleEdgeOverlay,
+  } = useBandEdgeTravel("/pretext", PRETEXT_ZOOM_SPEC);
+  // Held in refs so the useEffect closure — mounted once — always reads
+  // the current callback identity that useBandEdgeTravel returns each render.
+  const reportScaleEdgeRef = useRef(reportScaleEdge);
+  const releaseScaleEdgeRef = useRef(releaseScaleEdge);
+  reportScaleEdgeRef.current = reportScaleEdge;
+  releaseScaleEdgeRef.current = releaseScaleEdge;
 
   // ── frame-layer state (two/three-finger verbs) ─────────────────────
   // pinch scales the reading (a local zoom on the text), pan2/tilt shift
@@ -554,9 +586,19 @@ export default function PretextWave() {
         },
         pinch: (e) => {
           lastTouchAtRef.current = performance.now();
-          if (e.phase === "move") {
-            zoomRef.current.target = Math.max(0.72, Math.min(1.5, zoomRef.current.target * e.scale));
-          }
+          if (e.phase === "end") { releaseScaleEdgeRef.current(); return; }
+          if (e.phase !== "move") return;
+          zoomRef.current.target = Math.max(
+            PRETEXT_ZOOM_MIN,
+            Math.min(PRETEXT_ZOOM_MAX, zoomRef.current.target * e.scale),
+          );
+          // Report the attempted pinch velocity to the adapter. Inside
+          // the sentence's reading range residualScaleInput answers
+          // inactive, so the report is inert; only at 0.72 (pulled back)
+          // or 1.5 (close in) does continued pinch press become manifold
+          // wall pressure and, past TRAVEL_INTENT_MS, travel to the
+          // neighboring band.
+          reportScaleEdgeRef.current(zoomRef.current.target, e.velocity);
         },
         twist: (e) => {
           lastTouchAtRef.current = performance.now();
@@ -811,6 +853,7 @@ export default function PretextWave() {
         </div>
       )}
 
+      {scaleEdgeOverlay}
       <LetGo label="let the kept phrases go" onLetGo={letGoKeptPhrases} visible={keptPhrases.length > 0} />
 
       <div className="pretext-title" aria-hidden="true">
