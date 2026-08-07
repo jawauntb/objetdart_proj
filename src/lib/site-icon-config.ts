@@ -796,3 +796,111 @@ export function siteIconPath(key: SiteIconKey, asset: "icon" | "apple" | "opengr
 export function siteAppIconPath(key: SiteIconKey, size: 192 | 512): string {
   return `/site-icons/${key}/app/${size}`;
 }
+
+/**
+ * The Apple splash device family. Each entry describes one viewport the iOS
+ * launcher paints while an installed PWA is starting up — declared in CSS
+ * points (`deviceWidth` × `deviceHeight`), the actual PNG we hand back is
+ * scaled by `pixelRatio`. The media query is what Safari matches against; we
+ * emit one `<link rel="apple-touch-startup-image">` per entry in
+ * `siteMetadata()`, and the splash route renders the matching PNG on demand.
+ *
+ * Portrait and landscape are separate entries because the media query has to
+ * name the orientation — landscape swaps deviceWidth/deviceHeight so the
+ * rendered PNG is oriented the way the launcher expects.
+ */
+export type AppleSplashDevice = {
+  /** URL-safe slug — becomes /site-icons/<key>/splash/<slug>. */
+  slug: string;
+  /** CSS-point viewport width the device reports. */
+  deviceWidth: number;
+  /** CSS-point viewport height the device reports. */
+  deviceHeight: number;
+  /** Pixel ratio; the PNG we return is deviceWidth*ratio × deviceHeight*ratio. */
+  pixelRatio: number;
+  /** Which orientation this entry targets. */
+  orientation: "portrait" | "landscape";
+};
+
+/**
+ * Portrait CSS-point sizes for the iOS devices we splash for. The list is
+ * doubled below into portrait + landscape entries.
+ */
+const APPLE_SPLASH_PORTRAITS: ReadonlyArray<{
+  slug: string;
+  deviceWidth: number;
+  deviceHeight: number;
+  pixelRatio: number;
+}> = [
+  { slug: "iphone-15-pro-max", deviceWidth: 430, deviceHeight: 932, pixelRatio: 3 },
+  { slug: "iphone-15-pro",     deviceWidth: 393, deviceHeight: 852, pixelRatio: 3 },
+  { slug: "iphone-15",         deviceWidth: 390, deviceHeight: 844, pixelRatio: 3 },
+  { slug: "iphone-se",         deviceWidth: 375, deviceHeight: 667, pixelRatio: 2 },
+  { slug: "ipad-pro-12",       deviceWidth: 1024, deviceHeight: 1366, pixelRatio: 2 },
+  { slug: "ipad-pro-11",       deviceWidth: 834, deviceHeight: 1194, pixelRatio: 2 },
+  { slug: "ipad-air",          deviceWidth: 820, deviceHeight: 1180, pixelRatio: 2 },
+  { slug: "ipad-mini",         deviceWidth: 744, deviceHeight: 1133, pixelRatio: 2 },
+];
+
+export const APPLE_SPLASH_DEVICES: readonly AppleSplashDevice[] = APPLE_SPLASH_PORTRAITS.flatMap(
+  (p) => [
+    {
+      slug: `${p.slug}-portrait`,
+      deviceWidth: p.deviceWidth,
+      deviceHeight: p.deviceHeight,
+      pixelRatio: p.pixelRatio,
+      orientation: "portrait" as const,
+    },
+    {
+      slug: `${p.slug}-landscape`,
+      // Media query still reports the natural (portrait) device-width/-height
+      // — orientation flips which is "wide" without renaming the axes. But
+      // the PNG we render is rotated 90°, hence w/h swap on the render side.
+      deviceWidth: p.deviceWidth,
+      deviceHeight: p.deviceHeight,
+      pixelRatio: p.pixelRatio,
+      orientation: "landscape" as const,
+    },
+  ],
+);
+
+const APPLE_SPLASH_BY_SLUG: Record<string, AppleSplashDevice> = Object.fromEntries(
+  APPLE_SPLASH_DEVICES.map((d) => [d.slug, d]),
+);
+
+/** Pure helper: URL-slug → device config, or undefined for an unknown slug. */
+export function resolveSplashDevice(slug: string | undefined): AppleSplashDevice | undefined {
+  if (!slug) return undefined;
+  return APPLE_SPLASH_BY_SLUG[slug];
+}
+
+/**
+ * Pixel dimensions of the PNG the splash route should render for a device —
+ * portrait leaves the natural axis alone, landscape swaps w/h so the PNG is
+ * oriented the way the iOS launcher paints it.
+ */
+export function splashPixelSize(device: AppleSplashDevice): { width: number; height: number } {
+  const w = device.deviceWidth * device.pixelRatio;
+  const h = device.deviceHeight * device.pixelRatio;
+  return device.orientation === "landscape"
+    ? { width: h, height: w }
+    : { width: w, height: h };
+}
+
+/**
+ * The `media="…"` attribute Safari matches against when picking which splash
+ * to paint. device-width / device-height are always the portrait axes; the
+ * `orientation` term is what disambiguates the two entries per device.
+ */
+export function appleSplashMediaQuery(device: AppleSplashDevice): string {
+  return (
+    `(device-width: ${device.deviceWidth}px) ` +
+    `and (device-height: ${device.deviceHeight}px) ` +
+    `and (-webkit-device-pixel-ratio: ${device.pixelRatio}) ` +
+    `and (orientation: ${device.orientation})`
+  );
+}
+
+export function siteSplashPath(key: SiteIconKey, slug: string): string {
+  return `/site-icons/${key}/splash/${slug}`;
+}

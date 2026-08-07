@@ -29,9 +29,31 @@ export function renderOpenGraphImage(key: SiteIconKey, readingPoints?: ReadingPo
   );
 }
 
+/**
+ * The launch splash: full-bleed room bg with the medallion centered at a
+ * moderate scale (~35% of the shorter axis). This is what iOS paints between
+ * tap-open and first React frame when the site is installed as a PWA — the
+ * missing tag before this route family was why every launch flashed white.
+ */
+export function renderSplashImage(key: SiteIconKey, width: number, height: number): ImageResponse {
+  const visual = SITE_ICON_VISUALS[key];
+
+  return new ImageResponse(
+    <SplashArtwork visual={visual} width={width} height={height} />,
+    { width, height },
+  );
+}
+
 function IconArtwork({ visual, size }: { visual: SiteIconVisual; size: number }) {
-  const medallion = size * 0.74;
-  const halo = size * 0.92;
+  // The 192/512 icons declare `purpose: "any maskable"`, which means Android
+  // (and any other maskable-aware launcher) can crop this PNG down to the
+  // safe zone — a centered circle of radius 40% of the icon's shorter axis.
+  // Anything outside that circle is decorative padding; anything inside is
+  // guaranteed visible. Keeping the medallion + border ≤ 78% of the icon,
+  // and pulling the outer halo from 92% → 80%, keeps the sigil in the
+  // guaranteed zone under aggressive circle masks.
+  const medallion = size * 0.72;
+  const halo = size * 0.80;
   const stroke = Math.max(1.2, size * 0.026);
 
   return (
@@ -84,6 +106,70 @@ function IconArtwork({ visual, size }: { visual: SiteIconVisual; size: number })
             `0 ${size * 0.08}px ${size * 0.22}px rgba(0,0,0,0.48), ` +
             `inset 0 ${size * 0.03}px ${size * 0.08}px ${hexAlpha("#ffffff", 0.28)}, ` +
             `inset 0 -${size * 0.045}px ${size * 0.1}px rgba(0,0,0,0.32)`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          position: "relative",
+        }}
+      >
+        <Ring size={medallion} color={visual.ink} />
+        <RouteSigilSvg
+          kind={visual.kind}
+          color={visual.ink}
+          accent={visual.accent2}
+          size={medallion * 0.64}
+          stroke={stroke}
+        />
+      </div>
+    </div>
+  );
+}
+
+function SplashArtwork({
+  visual,
+  width,
+  height,
+}: {
+  visual: SiteIconVisual;
+  width: number;
+  height: number;
+}) {
+  const shorter = Math.min(width, height);
+  // Moderate scale — the splash is a still, not the icon. ~35% of the shorter
+  // axis leaves the room's bg to do the visual work and lets the medallion
+  // read as a mark rather than the whole subject.
+  const medallion = shorter * 0.35;
+  const stroke = Math.max(1.4, medallion * 0.026);
+
+  return (
+    <div
+      style={{
+        width,
+        height,
+        backgroundColor: visual.bg,
+        backgroundImage:
+          `radial-gradient(circle at 32% 24%, ${hexAlpha(visual.glow, 0.55)} 0%, transparent 34%), ` +
+          `radial-gradient(circle at 74% 78%, ${hexAlpha(visual.bg2, 0.9)} 0%, transparent 52%)`,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        position: "relative",
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          width: medallion,
+          height: medallion,
+          borderRadius: medallion,
+          backgroundImage:
+            `radial-gradient(circle at 37% 28%, ${hexAlpha("#ffffff", 0.5)} 0%, transparent 22%), ` +
+            `linear-gradient(145deg, ${hexAlpha(visual.accent, 0.96)}, ${hexAlpha(visual.accent2, 0.9)})`,
+          border: `${Math.max(1.5, medallion * 0.032)}px solid ${hexAlpha(visual.ink, 0.46)}`,
+          boxShadow:
+            `0 ${medallion * 0.08}px ${medallion * 0.22}px rgba(0,0,0,0.48), ` +
+            `inset 0 ${medallion * 0.03}px ${medallion * 0.08}px ${hexAlpha("#ffffff", 0.28)}, ` +
+            `inset 0 -${medallion * 0.045}px ${medallion * 0.1}px rgba(0,0,0,0.32)`,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
