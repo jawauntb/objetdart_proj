@@ -64,6 +64,7 @@ export const SITE_ROUTES: SiteRouteEntry[] = [
   { key: "manifold",    icon: "stars",    href: "/manifold",                          desc: "every scale kept in one fold", cluster: "field",     dark: true },
   { key: "overlook",    icon: "growth",   href: "/overlook",                          desc: "the whole tree kept in one glance", cluster: "field", dark: true },
   manifestRoute("relativity"),
+  manifestRoute("eigen"),
   manifestRoute("group"),
   { key: "loom",        icon: "signal",   href: "/loom",                              desc: "one structure, every sense",   cluster: "mechanism", dark: true },
   { key: "storm",       icon: "storm",    href: "/storm",                             desc: "pressure · charge · discharge", cluster: "water",     dark: true },

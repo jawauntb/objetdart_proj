@@ -593,8 +593,8 @@ for (const entry of ROOM_REGISTRY) {
   // — 6. rooms with a scale address mount the chrome ——————————————
   const band = bandOf(entry);
   const pageSrc = there(entry.page) ? read(entry.page) : "";
-  const shellOmitsChrome = /chrome\s*=\s*\{\s*false\s*\}/.test(raw);
-  const mountsAxis = /<AxisChrome/.test(pageSrc) || (viaRoomShell && !shellOmitsChrome);
+  const shellHidesChrome = viaRoomShell && /chrome\s*=\s*\{\s*false\s*\}/.test(raw);
+  const mountsAxis = /<AxisChrome/.test(pageSrc) || (viaRoomShell && !shellHidesChrome);
   const mountsTravel = /<ScaleTravel/.test(pageSrc);
   const mountsPeers = /<MetaNavigator/.test(pageSrc);
   const declared =
