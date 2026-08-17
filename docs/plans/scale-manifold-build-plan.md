@@ -74,9 +74,12 @@ before it commits — no menu, no label. Rooms that know their own geography
 because `Atlas` drives the manifold itself through `useBandEdgeTravel`, the
 same pattern `/stars` uses.
 
-**Still unbuilt:** the four sky rooms (atmosphere, planets, solar, galaxy),
-the ground's strata (`/rocks`, `/soil`), W7's twist-lens registry, and W8's
-overlook. Nothing above depends on them landing.
+**Still unbuilt:** W7's twist-lens registry, and W8's
+overlook. The sky rooms and ground strata have since landed as rooms; this
+paragraph is the travel-graph remainder, not a room backlog. Law-rooms
+`/group` and `/eigen` (and the fiber walk) are a **sibling workstream**, not
+bands — see `docs/plans/fibration-eigen-group.md`. Nothing above depends on
+them landing.
 
 ## Shape of the work
 
@@ -209,6 +212,15 @@ Lens registry + global twist binding: at fixed scale, twist rotates the level of
 description. First lenses: sea as *felt water ↔ wave equation*; light as *color ↔ music*
 (the inverse maps already exist — this is their promotion to a universal gesture);
 stars as *sky ↔ gravity field*. One lens pair per PR.
+
+`/group` and `/eigen` each have a *local* twist (Weyl's symmetry ladder; cloud ↔
+quotient). That does not replace W7. Site-wide lens rotation is still this
+workstream.
+
+## W9 — Law rooms (parallel to W7; not bands)
+
+`/group` then `/eigen`, then the fiber walk on `/loom`. Exempt from metres.
+Plan: `docs/plans/fibration-eigen-group.md`. Notes: `docs/notes/metaphysics-to-rooms.md`.
 
 ## Sequencing & parallel capacity
 

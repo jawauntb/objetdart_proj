@@ -560,6 +560,37 @@ export const ROOM_REGISTRY: RoomEntry[] = [
       "immediate inspiral and merger",
   },
   {
+    key: "eigen",
+    href: "/eigen",
+    kind: "room",
+    source: "src/components/EigenField.tsx",
+    page: "src/app/eigen/page.tsx",
+    address: { exempt: "a law, not a place: surviving freedom after a constraint, identical at every band" },
+    frame: "yield",
+    chrome: "none",
+    keeps: "objetdart:eigen:v1",
+    creates: "a constraint",
+    exempt: {},
+    interacts:
+      "two independent non-Gaussian sources unmix into separated sources that are neither parent " +
+      "(perm/sign leftover ok); two collinear constraints collapse to one constraint that is neither parent",
+  },
+  {
+    key: "group",
+    href: "/group",
+    kind: "room",
+    source: "src/components/GroupField.tsx",
+    page: "src/app/group/page.tsx",
+    address: { exempt: "a law, not a place: automorphic invariance of a seen fragment, inferred from an incomplete orbit" },
+    frame: "yield",
+    chrome: "none",
+    keeps: "objetdart:group:v1",
+    creates: "a mark",
+    exempt: {},
+    interacts:
+      "the force is automorphism of the seen fragment; two fragments that close under the same generator fuse into one orbit that is neither parent; a rotation-generator meeting a flip-generator yields a dihedral orbit.",
+  },
+  {
     key: "loom",
     href: "/loom",
     kind: "room",

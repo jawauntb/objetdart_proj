@@ -377,6 +377,10 @@ for (const entry of ROOM_REGISTRY) {
   const viaRoomShell = /@\/components\/RoomShell/.test(raw);
   const viaScene = /@\/lib\/scene\/(?:voice|object)/.test(raw);
   const viaShell = viaRoomShell || viaScene;
+  // Law-rooms (`chrome: "none"`) still build on <RoomShell chrome={false}> so
+  // they get the grammar, vessel, glimmer and LetGo without AxisChrome. The
+  // prop is the exemption made visible; treating any RoomShell import as a
+  // chrome mount would forbid the first law-room on the shell.
   const verbs = viaScene ? declaredVerbs(raw) : null;
 
   // — 1. the gesture engine, and no raw pointer wiring ———————————————
@@ -589,7 +593,8 @@ for (const entry of ROOM_REGISTRY) {
   // — 6. rooms with a scale address mount the chrome ——————————————
   const band = bandOf(entry);
   const pageSrc = there(entry.page) ? read(entry.page) : "";
-  const mountsAxis = /<AxisChrome/.test(pageSrc) || viaRoomShell;
+  const shellHidesChrome = viaRoomShell && /chrome\s*=\s*\{\s*false\s*\}/.test(raw);
+  const mountsAxis = /<AxisChrome/.test(pageSrc) || (viaRoomShell && !shellHidesChrome);
   const mountsTravel = /<ScaleTravel/.test(pageSrc);
   const mountsPeers = /<MetaNavigator/.test(pageSrc);
   const declared =

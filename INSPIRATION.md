@@ -80,7 +80,11 @@ preserves the invariant but may have entirely new causal powers because its mate
 context differ. Every lens on this site is a `q`; every room that renders shared state is an
 `ι`; the album as a whole is this loop run continuously. The manifold is the *fiber* of `S`
 — the space `I(S)/∼` of materially different but structurally equivalent embodiments, laid
-along an axis.
+along an axis. `/loom` is the worked `ι` (one structure compiled into five senses). The
+law-rooms `/group` and `/eigen` are further quotients of the same cycle: a transform that
+leaves a seen fragment itself, and the directions that survive a constraint. The fiber as
+a place you can wander — drift versus a chosen section — is the next `ι`, not a classroom.
+See `docs/plans/fibration-eigen-group.md`.
 
 This reframes the site's own laws as one conjecture — the thesis the whole build enacts:
 
@@ -107,7 +111,9 @@ Three consequences are load-bearing for future work:
   its organization until they feel it. That is why embodiment, not description, is the whole
   method — and why the strongest form of this work is one structure compiled into many
   substrates at once (see `src/lib/structure.ts` and the room that plays it), each medium
-  verified to preserve the same invariant.
+  verified to preserve the same invariant. `/group` and `/eigen` are the next law
+  quotients of that same object (orbit under an inferred automorphism; spectrum of a
+  constraint), not new subjects.
 
 ## 3. The medium is the message: exteriorized phenomenology
 
@@ -225,6 +231,11 @@ Design commitments already made:
   through scale; a two-finger twist at fixed scale rotates the level of description —
   the same sea as equation, as fluid, as felt weather. The music↔color inverse was the
   first lens rotation; make it a universal gesture.
+- **Law rooms sit off the metre axis.** `/relativity`, `/loom`, `/group`, `/eigen` are
+  laws and lenses, not sizes — `SCALE_EXEMPT`, after the quark→manifold walk. They
+  comment on structure at every band. They are not `/sine` or `/circularity` (those are
+  coast instruments). Build them as materials (`docs/plans/fibration-eigen-group.md`),
+  never as labeled vis.
 - **Scale maps to spectral register.** Sub-bass and minute-long LFOs at the cosmic end,
   mids at human scale, high granular shimmer at the atomic end, crossfaded with the same
   band weights as the visuals. Zooming is a glissando; the site is one instrument and the
