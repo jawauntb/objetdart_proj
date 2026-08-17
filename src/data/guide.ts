@@ -27,12 +27,19 @@ export type GuideRoom = {
   finds: string[];
   /** what the room remembers between visits (localStorage) */
   keeps?: string;
+  /** plain-english translation: `what` opens with the room's big idea in ordinary words; `how` is "do X and Y happens" lines a stranger can follow */
+  plain?: { what: string; how: readonly string[] };
   /** declared reading surfaces may document fewer than three moves */
   readingSurface?: boolean;
 };
 
 export type GuideStep = { title: string; body: string };
-export type GuideBinding = { gesture: string; meaning: string };
+export type GuideBinding = {
+  gesture: string;
+  meaning: string;
+  /** the same gesture translated for a stranger — the plain-words voice */
+  plain: string;
+};
 export type GuideLayer = { title: string; body: string };
 export type GuideWorkshopPart = { title: string; paragraphs: string[] };
 export type GuideApi = {
@@ -109,23 +116,91 @@ export const GUIDE_LAYERS: GuideLayer[] = [
 ];
 
 export const GUIDE_GLOBAL_BINDINGS: GuideBinding[] = [
-  { gesture: "tap", meaning: "touch the material — each room decides what a touch means in its own matter" },
-  { gesture: "long-press (~1s)", meaning: "plant, grow, charge — and the longer the hold, the deeper it goes; nothing fires the same at one second and at three" },
-  { gesture: "ceremony hold (2.5s)", meaning: "the room's one solemn act — keep, seal, bloom fully" },
-  { gesture: "two-finger tap", meaning: "step back — the frame retreats one step; a raised lens lowers" },
-  { gesture: "three-finger tap", meaning: "tutti — one synchronized pulse of everything alive in the room" },
-  { gesture: "pinch", meaning: "zoom within the current scale band" },
-  { gesture: "pinch held through the detent", meaning: "travel to the neighboring band, with resistance and a haptic click at the door" },
-  { gesture: "twist", meaning: "rotate the lens — the same room at another level of description, fluid to equation to felt" },
-  { gesture: "two-finger drag", meaning: "pan the frame" },
-  { gesture: "three-finger drag", meaning: "wind and weather" },
-  { gesture: "three-finger hold", meaning: "time dilation while held" },
-  { gesture: "shake", meaning: "scatter, agitate — in the room's own material" },
-  { gesture: "tilt", meaning: "gravity — rooms lean, pour, and parallax with the real world" },
-  { gesture: "knock on the case", meaning: "wake the room, ring its door" },
-  { gesture: "flip face-down", meaning: "night — the room sleeps" },
-  { gesture: "breath", meaning: "the candle's alone — invited, never demanded" },
-  { gesture: "desktop dialect", meaning: "hover is a light touch, the wheel is local zoom, ctrl+wheel is the pinch; arrows, enter, and escape stay wired in every room" },
+  {
+    gesture: "tap",
+    meaning: "touch the material — each room decides what a touch means in its own matter",
+    plain: "touch the screen once. something small happens right where your finger lands — each room decides what.",
+  },
+  {
+    gesture: "long-press (~1s)",
+    meaning: "plant, grow, charge — and the longer the hold, the deeper it goes; nothing fires the same at one second and at three",
+    plain: "press and keep your finger down for about a second. it starts making or charging something, and the longer you hold, the further it goes.",
+  },
+  {
+    gesture: "ceremony hold (2.5s)",
+    meaning: "the room's one solemn act — keep, seal, bloom fully",
+    plain: "keep holding for a slow count of three. this is the room's one big deliberate act — it keeps, seals, or finishes something.",
+  },
+  {
+    gesture: "two-finger tap",
+    meaning: "step back — the frame retreats one step; a raised lens lowers",
+    plain: "tap once with two fingers to step back — it undoes a zoom or closes a view you opened.",
+  },
+  {
+    gesture: "three-finger tap",
+    meaning: "tutti — one synchronized pulse of everything alive in the room",
+    plain: "tap once with three fingers and everything alive in the room answers at the same moment.",
+  },
+  {
+    gesture: "pinch",
+    meaning: "zoom within the current scale band",
+    plain: "pinch with two fingers to zoom in and out.",
+  },
+  {
+    gesture: "pinch held through the detent",
+    meaning: "travel to the neighboring band, with resistance and a haptic click at the door",
+    plain: "keep pinching past the point where the zoom resists, and you travel to the next room up or down in size — you'll feel a small click at the door.",
+  },
+  {
+    gesture: "twist",
+    meaning: "rotate the lens — the same room at another level of description, fluid to equation to felt",
+    plain: "put two fingers down and rotate them. the room shows the same thing another way — like flipping to the diagram version.",
+  },
+  {
+    gesture: "two-finger drag",
+    meaning: "pan the frame",
+    plain: "drag with two fingers to slide the view around.",
+  },
+  {
+    gesture: "three-finger drag",
+    meaning: "wind and weather",
+    plain: "drag with three fingers to push wind and weather through the room.",
+  },
+  {
+    gesture: "three-finger hold",
+    meaning: "time dilation while held",
+    plain: "rest three fingers on the screen and time inside the room slows down until you let go.",
+  },
+  {
+    gesture: "shake",
+    meaning: "scatter, agitate — in the room's own material",
+    plain: "shake the phone and whatever the room is made of gets stirred up or scattered.",
+  },
+  {
+    gesture: "tilt",
+    meaning: "gravity — rooms lean, pour, and parallax with the real world",
+    plain: "tilt the phone and things lean, pour, and slide as if gravity reached inside the screen.",
+  },
+  {
+    gesture: "knock on the case",
+    meaning: "wake the room, ring its door",
+    plain: "rap the body of the phone (not the screen) and the room wakes and answers, louder for a harder knock.",
+  },
+  {
+    gesture: "flip face-down",
+    meaning: "night — the room sleeps",
+    plain: "lay the phone face-down and the room goes dark and sleeps until you turn it back over.",
+  },
+  {
+    gesture: "breath",
+    meaning: "the candle's alone — invited, never demanded",
+    plain: "blowing at the phone (it listens through the microphone, and only ever asks around the candle) can stir the flame. nothing else uses it.",
+  },
+  {
+    gesture: "desktop dialect",
+    meaning: "hover is a light touch, the wheel is local zoom, ctrl+wheel is the pinch; arrows, enter, and escape stay wired in every room",
+    plain: "on a computer: moving the mouse is a light touch, the scroll wheel zooms, ctrl+scroll acts like a pinch, and the arrow keys, enter, and escape always do something.",
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -148,6 +223,15 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "the door and the deepest room are the same place — the manifold's own entry says what the fold can do",
     ],
     keeps: "nothing of its own — the candle, the mute state, and the vessel's permission live site-wide",
+    plain: {
+      what:
+        "this is the front door. the whole site is a chain of rooms ordered by size — from the smallest particles of physics up to the whole universe — and the door drops you straight onto that chain.",
+      how: [
+        "arrive → you land on the fold, the deepest room, already alive under your hand",
+        "tap \"view all\" → a panel lists every room, smallest things at one end, biggest at the other",
+        "tap the small symbol in the top corner → from any room, it brings you back here",
+      ],
+    },
   },
 
   // --- field ---
@@ -186,6 +270,19 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "the settlement is tuned to d mixolydian: a home rings the tonic, a store the fourth, an event the fifth, a tree the flat seventh — the civic ladder climbs the mode; a sealed plot tolls the triad rooted at its own note, and tutti stacks a voice for every event the city holds",
     ],
     keeps: "every sealed plot, the season the year reached, and the day the city had been living in",
+    plain: {
+      what:
+        "this room is a working model of a small town. you plant buildings, people move in with real needs like food and company, and they walk to whatever answers those needs. the point is to watch a settlement organize itself around what you build.",
+      how: [
+        "press and hold on open ground → plants a home; keep holding and it upgrades — home, then store, then event, then tree",
+        "hold even longer, a slow count of three → seals the building so it stays; the same long hold on a sealed building removes it",
+        "drag → draws a road, and people walk faster along it",
+        "tap quickly several times → three taps knock on the nearest door, five ring a market bell that calls people to eat, seven or more ring every building at once",
+        "twist with three fingers → the season turns through spring, summer, autumn, winter",
+        "tilt the phone → the whole view leans, and a deep lean gathers rain",
+        "the small button at the bottom of the screen → empties the town you built",
+      ],
+    },
   },
   {
     key: "atlas",
@@ -215,6 +312,19 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "diving through the deep wall on /stars over a planet opens the atlas on that world instead of the origin sheet",
     ],
     keeps: "up to 32 planted naturals across the whole plane, plus the territory itself",
+    plain: {
+      what:
+        "this room is an endless map. you fly over an imaginary territory, and when you zoom in, the map draws a brand-new sharper map underneath — districts, then streets, then the grain of the ground — instead of just stretching the picture.",
+      how: [
+        "drag → moves you across the map; keep going past the edge and you cross into the next territory",
+        "pinch in and keep pinching → the ground opens into a deeper, freshly drawn layer; you can go down dozens of times",
+        "pinch out at the bottom → climbs back up one layer, exactly where you left it",
+        "tap a glowing landmark → opens a whole new map about that thing",
+        "hold still on open ground → plants a small marker: a stone stack, a wildflower, or an animal trail",
+        "tap quickly several times → three raise birds from the ground, five start a migration, seven or more fill the whole sky",
+        "type a few words in the text box → the site invents a brand-new territory from them",
+      ],
+    },
   },
   {
     key: "archive",
@@ -229,6 +339,16 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
     ],
     finds: ["a small live seismograph in the corner tracks every touch you make on the wall itself"],
     keeps: "any drawers you've asked the room to imagine",
+    plain: {
+      what:
+        "this room is a filing cabinet of short written cards — little specimen entries you can search, filter, and open. you can also ask it to write a brand-new card for you.",
+      how: [
+        "type in the search box or tap the filter chips → the wall narrows to matching drawers",
+        "press and hold a filter chip → shows only that filter and quiets the rest",
+        "flick a card → the drawer rattles open onto its own page",
+        "fill in the \"imagine a drawer\" form → the site writes a new entry in its own voice and keeps it for you",
+      ],
+    },
   },
   {
     key: "kept",
@@ -242,6 +362,15 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
     ],
     finds: ["a star's position is deterministic from its reading's own hash, so your constellation looks the same on every visit and every device"],
     keeps: "your kept readings",
+    plain: {
+      what:
+        "this room is your bookshelf. every reading you chose to keep on the compass page floats here as a star over dark water, and you can reopen, compare, or delete each one.",
+      how: [
+        "tap a star → opens the reading it holds, with buttons to play it, compare it, or forget it",
+        "select two stars → a line joins them and offers a side-by-side comparison of the two readings",
+        "press and hold a star for a slow count of three → lets that reading go, same as the forget button",
+      ],
+    },
   },
   {
     key: "colophon",
@@ -250,6 +379,15 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
     essence: "the quiet last page — what the site is and isn't, signed in three registers you can actually hear.",
     moves: ["the three register buttons (devotional, operational, oceanic) → each sounds its own note and swaps the line beneath it"],
     finds: ["the three notes are literally a chord — pressed in sequence they sound the site's own tonic triad"],
+    plain: {
+      what:
+        "this is the credits page — a short statement of what the site is, what it isn't, and how it was kept. the three buttons let you hear the three tones of voice the whole site is written in.",
+      how: [
+        "read down the page → the site says plainly what it is and is not",
+        "tap one of the three register buttons → it sounds its own note and swaps the sentence beneath it",
+        "tap all three in a row → the three notes stack into the site's own chord",
+      ],
+    },
     readingSurface: true,
   },
   {
@@ -260,8 +398,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
     moves: [
       "the table of contents → jumps to the first minute, the grammar, the rooms, or the workshop",
       "any room's screenshot or title → opens that room",
+      "the voice switch → every entry turns between plain words and the field notes, and the ? on every screen follows the same choice",
     ],
     finds: ["this entry documents itself, the same way every other room does"],
+    plain: {
+      what:
+        "this page is the manual. it is the one place the site explains itself — every room, every gesture — kept up to date whenever a room changes.",
+      how: [
+        "use the table of contents → jumps to the opening walk, the gesture list, the rooms, or the workshop notes",
+        "tap any room's picture or title → takes you into that room",
+        "use the voice switch → flips every entry between plain words like these and the site's own field notes",
+      ],
+    },
     readingSurface: true,
   },
 
@@ -289,6 +437,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "earth opens a lateral door down onto this shore — press, release, press again at the wall",
     ],
     keeps: "the shells you plant in the sand",
+    plain: {
+      what:
+        "this room is a beach — waves, wet sand, foam, dunes. you can splash the surf, leave marks in the sand, and plant shells that stay.",
+      how: [
+        "tap → foam splashes at the waterline with a note",
+        "tap quickly several times → one print, then a breaking wave, then a surge, then the whole shore answers at once",
+        "press and hold → plants a shell in the sand; hold a slow count of three to keep it",
+        "drag → draws a groove in the sand that the tide slowly erases",
+        "drag with three fingers → wind blows across the beach",
+        "tilt or shake the phone → the horizon leans, or sand kicks up into spray",
+      ],
+    },
   },
   {
     key: "ocean",
@@ -314,6 +474,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "the tap ladder changes register with depth: what startles birds at the surface flares the motes below",
     ],
     keeps: "the naturals you plant, shared with /tide as one persistent shore",
+    plain: {
+      what:
+        "this room is the open sea, top to bottom. you can play with the sunlit surface, then dive all the way down through the water column to the dark, where the life changes with the depth.",
+      how: [
+        "tap → a ripple at the surface; down in the deep, a spark of glowing sea-life instead",
+        "drag down with two fingers → dives you deeper; the water darkens and the animals change",
+        "press and hold near the surface → plants a shell, kelp, driftwood, or a starfish; a slow count of three settles it for good",
+        "tap quickly several times → a splash, then seabirds startle up, then a whale answers, then a giant wave arrives",
+        "circle a finger → stirs a glowing whirlpool that carries the floating things around",
+        "tilt or shake the phone → the sea leans and churns with your hands",
+      ],
+    },
   },
   {
     key: "tide",
@@ -335,6 +507,17 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "five quick taps skip the stone the knock skips — the same discovery, reachable by hand alone",
     ],
     keeps: "naturals on this shore, shared with /ocean",
+    plain: {
+      what:
+        "this room is a working model of the tides. you drag the moon and the sun around the earth and watch the water rise and fall exactly as their pull says it should.",
+      how: [
+        "drag the moon or the sun → the tide follows it up and down the shore",
+        "line the sun up with the moon → an extra-big tide (a spring tide); set them at a right angle for a small one (a neap tide)",
+        "tap the earth → the moon starts or stops orbiting on its own",
+        "press and hold near the waterline → plants something on the beach; what you get depends on the tide you just made",
+        "tap quickly five times on the open water → skips a stone across it; a rap on the phone's body does the same",
+      ],
+    },
   },
   {
     key: "waves",
@@ -357,6 +540,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "five quick taps close a ring whose wavefronts focus back through the centre — interference made a lens",
     ],
     keeps: "the pond's naturals — lilies, leaves, koi",
+    plain: {
+      what:
+        "this room is a physics-class ripple tank: drop something in water and watch the rings spread, bounce off the walls, and cross each other. two more views swap the water for a plucked string and a field of bending light.",
+      how: [
+        "tap or drag → drops a ripple, or drags a continuous wake",
+        "press and hold in the pond → grows a lily, then a fallen leaf, then a koi fish moves in",
+        "tap quickly several times → one drop, then a beating pair, then a ring that focuses back on itself, then the whole tank rings",
+        "tap the medium buttons → switches between the pond, the string, and the light view",
+        "hold two still fingers apart → two waves beat between them; on the string, a double note",
+        "circle a finger → stirs the pond into a turning current",
+      ],
+    },
   },
   {
     key: "sine",
@@ -379,6 +574,17 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "three fingers moving the same way winds the whole phase — read straight off the moving voices, never a separate gesture",
       "a rap on the device's case rings the wave — harder raps ring lower and leave a wavefront mid-ribbon",
     ],
+    plain: {
+      what:
+        "this room is the simplest possible instrument: one pure wave. wherever you touch, it sings the pitch of that height, and every extra finger adds another voice.",
+      how: [
+        "touch → a note sounds right away; higher on the screen means higher pitch",
+        "move your finger → the note glides and the whole wave bends with it",
+        "flick → throws a pulse traveling down the wave",
+        "tap quickly several times → three taps bloom the overtones, five change the wave's whole character, seven or more swell it loud",
+        "rap on the phone's body → rings the wave like a struck bell; a harder rap rings lower",
+      ],
+    },
   },
   {
     key: "pretext",
@@ -400,6 +606,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "if the room can't answer, it falls back to one of four sentences chosen deterministically from your own prompt — a failure always fails the same way",
       "three fingers held still slow the tide's clock, and it keeps slowing the longer the hand stays",
     ],
+    plain: {
+      what:
+        "this room turns a sentence into an instrument. real words are laid out along a wave, and your hand bends the wave — so you are literally playing the text.",
+      how: [
+        "drag → up makes the wave taller, right makes it faster; a note follows both",
+        "tap → lands a drop on the sentence, and the words ripple where it fell",
+        "press and hold → charges a ring that keeps the current phrase; the same hold on a kept phrase lets it go",
+        "tap the six mode buttons → each throws the text into a different kind of motion",
+        "type in the prompt field → the site writes new text for you to play",
+        "tap \"speak\" → the room reads the current words aloud",
+      ],
+    },
   },
   {
     key: "circularity",
@@ -420,6 +638,17 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "the lens is a ratchet, not a dial — a long twist flips circle and wave once per quarter turn",
       "a rap on the device's case rings every standing harmonic once, louder for a harder rap",
     ],
+    plain: {
+      what:
+        "this room shows how spinning circles add up to any wave — the same trick sound software uses to build tones. a chain of up to twelve circles turns, and the tip of the chain draws the wave beside it.",
+      how: [
+        "drag → spins the chain and sets how many circles are drawn",
+        "flick → throws the wheel spinning; it slows down on its own",
+        "press and hold → adds one more circle to the chain; hold a slow count of three and all twelve unfurl at once",
+        "put two fingers down and twist → flips between the spinning circles and the wave they draw",
+        "tap the preset buttons → square, saw, triangle, pulse — each a famous wave built from circles",
+      ],
+    },
   },
   {
     key: "beyond",
@@ -440,6 +669,17 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "the field is a fixed weighted sum of four frequencies, not noise — the aliveness comes from their incommensurability",
       "three fingers held still dilate the field's time, deepening toward stillness the longer they stay",
     ],
+    plain: {
+      what:
+        "this room is four overlapping waves added into one shimmering grid. their rhythms never quite line up, so the pattern never repeats — and you can fold and pull it by hand.",
+      how: [
+        "press and drag → sideways folds the pattern, up and down pulls it",
+        "tap quickly several times → three snap the fold deeper, five bloom the field wide, seven or more flood it",
+        "circle a finger → stirs the field; faster circles stir harder",
+        "tap \"keep fold\" then \"replay fold\" → saves the exact pattern you made and brings it back",
+        "hold three fingers still → time slows for as long as you hold",
+      ],
+    },
   },
   {
     key: "storm",
@@ -461,6 +701,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "a hold keeps feeding what it planted — the sea cell fattens toward a squall, the sky bank keeps rising — so 900ms and 2400ms are never the same storm",
       "reduced motion floors how fierce the storm is allowed to get, not just how it animates",
     ],
+    plain: {
+      what:
+        "this room is a thunderstorm you charge and fire yourself. drag the sky to build up static, release it as lightning, and hear the thunder arrive late when the strike lands far away — just like counting seconds in a real storm.",
+      how: [
+        "drag the sky → banks up electric charge",
+        "tap the charged sky → lightning discharges, and the thunder follows after a distance-sized delay",
+        "tap or drag the sea → raises wave crests and sculpts spray",
+        "press and hold for a slow count of three → opens the calm eye of the storm; a second long hold closes it",
+        "drag with three fingers → sets which way the wind blows",
+        "drum sky and sea with two hands → each answers in its own voice, and a steady patter arcs a bolt between your hands",
+      ],
+    },
   },
   {
     key: "clouds",
@@ -483,6 +735,17 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "the day cycle genuinely drives the palette — labels and tooltips flip between light and dark paper as it turns",
       "the cloud floor and the mountain share one scale address — pinch travels the axis; the peer ring steps sideways",
     ],
+    plain: {
+      what:
+        "this room is a sky of heaped clouds running its own two-minute day. you condense clouds out of the air, gather storms by hand, and watch the sun light their tops while their bellies darken.",
+      how: [
+        "tap → the air thickens into a puff of cloud where you touched",
+        "tap quickly several times → three turn cloud into first rain, five call lightning down to your finger, seven or more bring in a whole storm front",
+        "press and hold → the held air darkens into a storm cell; hold a slow count of three and the storm is kept, with lightning",
+        "drag → shears the wind where you stroke; drag with three fingers to race the whole sky",
+        "tap the sun/moon glyph → skips the day forward a quarter turn",
+      ],
+    },
   },
   {
     key: "mountain",
@@ -514,6 +777,19 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "raising the fog only ever drowns more land — the swell rolls, but the sea's altitude never secretly falls",
     ],
     keeps: "the cairns you stacked",
+    plain: {
+      what:
+        "this room is a mountain peak standing above a sea of fog. you look around from the summit, stack little stone towers, move the fog and the sun, and hear echoes come back from the distance.",
+      how: [
+        "tap → an echo, pitched by how high the ground you tapped sits",
+        "drag with one finger → turns your head; drag with two to move the whole view",
+        "press and hold → places a cairn (a stack of stones); hold a slow count of three to stack it taller",
+        "circle a finger → pulls the fog down or lifts it, depending on which way you circle",
+        "drag with three fingers → raises or lowers the fog; sideways moves the sun",
+        "put two fingers down and twist → switches to a contour-map drawing of the same peak",
+        "the small button at the bottom of the screen → removes every cairn you stacked",
+      ],
+    },
   },
   // aphros migrated to src/rooms/aphros/room.config.ts — its guide entry
   // travels with the room now, spliced in by roomGuideEntries() at the tail.
@@ -542,6 +818,19 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "earth opens downward onto this garden — the ground's first inward door",
     ],
     keeps: "the flowers you've deliberately planted (volunteers don't persist)",
+    plain: {
+      what:
+        "this room is a night garden where every flower grows from a seed under your finger. each seed has its own species written inside it, so the same seed always grows the same flower.",
+      how: [
+        "press and hold on open soil → plants a seed, and the flower grows for as long as you hold",
+        "keep holding past full bloom → it blooms even wider, breathing with your press",
+        "hold a spent flower for a slow count of three → it wilts back into the soil",
+        "drag → a breeze sways the nearby flowers",
+        "circle a finger → stirs pollen into the air",
+        "tap quickly several times → a sway, then loose pollen, then a new flower is coaxed up, then the whole garden waves",
+        "the small button at the bottom of the screen → lets the whole garden go",
+      ],
+    },
   },
   {
     key: "cells",
@@ -572,6 +861,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "leave the dish overnight and it has gone on without you — descendants, a settled dimmer glow on the elders, the census eased toward its own resting point",
     ],
     keeps: "the cells you've seeded, generation by generation, and the real hours between visits",
+    plain: {
+      what:
+        "this room is a dish of living cells under a microscope. you seed them and split them, and they keep living on their own clock — come back tomorrow and there are descendants you never watched divide.",
+      how: [
+        "press and hold on open fluid → seeds a new cell, its skin closing while you hold",
+        "hold an existing cell → charges it to divide; a slow count of three and it splits into two daughters",
+        "tap three times → the nearest cell divides; five times → one bursts; seven or more → a whole wave of division",
+        "drag → stirs the fluid and pushes the cells along the current",
+        "tilt or shake the phone → the cells settle downhill, or seethe in a storm",
+        "lay the phone face-down → night; the light under the dish goes down and everything nearly stills",
+      ],
+    },
   },
   {
     key: "organelles",
@@ -603,6 +904,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "gather all six organs in one plasm and the cell membrane closes around them of its own accord — when the ring settles, the plasm becomes the cell above",
     ],
     keeps: "the organs you've gathered, and how the membrane is shared between them",
+    plain: {
+      what:
+        "this room is the inside of a single cell — its six little organs — with one fixed amount of skin (membrane) shared between them. give more skin to one organ and the others visibly smooth out to pay for it; nothing is ever created or lost.",
+      how: [
+        "tap an organ → it rings its own tone; the more folded it is, the richer the sound",
+        "press and hold an organ → membrane flows into it while you hold, and the rest of the cell pays in the same moment",
+        "circle a finger on an organ → folds it deeper; circle the other way and the folds come out",
+        "drag an organ → moves it through the streaming fluid, and the fluid drags back",
+        "press and hold on open fluid → the organ the cell is still missing forms there",
+        "gather all six organs → the cell's outer skin closes around them by itself",
+      ],
+    },
   },
   {
     key: "tissue",
@@ -640,6 +953,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "the sheet is the same sheet at 60 and 120 hz — a fixed-step integrator, deterministic from its seed",
     ],
     keeps: "the sheet: every division, every tear, every fate landed, and any layer you sealed",
+    plain: {
+      what:
+        "this room shows how single cells become a fabric — a few hundred of them glued edge to edge into one living sheet. every cell sings a note that depends on how many neighbours hold it, so you can hear the sheet's health as a chord.",
+      how: [
+        "tap a cell → it sings; three quick taps → the nearest cell divides; five → one dies",
+        "stroke across the sheet → every cell the stroke touches divides",
+        "press and hold → the sheet dimples into a pit; hold a slow count of three and the pit seals over into a second layer",
+        "flick → tears the sheet along the line, and you hear the bonds let go",
+        "drag with three fingers → turns the glue itself up or down — down and the sheet falls apart, up and it re-knits",
+        "hold on the empty dark after clearing → plants a fresh sheet under your finger",
+      ],
+    },
   },
   {
     key: "birds",
@@ -681,6 +1006,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "the wave of wingbeats after a knock crosses the sky rather than firing at once — the flock is wide, and the news takes time",
     ],
     keeps: "the flock's character — how it separates, aligns and gathers — with the season and where you were facing",
+    plain: {
+      what:
+        "this room is an aviary at dusk — thirteen kinds of birds over a meadow and a pond, each with its own body and call. they flock by the real rules of flocking: stay close, stay aligned, don't collide.",
+      how: [
+        "tap a bird → it answers in its own body — the duck swims, the peacock displays, the hawk dives",
+        "tilt the phone → wind; the whole flock banks with your hands",
+        "shake → every bird startles into the air at once",
+        "press and hold → feeds the nearest bird; held on open grass, the flock gathers to your hand",
+        "circle a finger → the flock turns about itself and winds into a tighter swirl",
+        "twist with three fingers → the season changes, and with it where the flock wants to go",
+      ],
+    },
   },
   {
     key: "dna",
@@ -713,6 +1050,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "finish a polymerase run on an open stretch and a chromatid peels off — the copy made visible, not only heard",
     ],
     keeps: "the strand, with every mutation you or the world have made to it",
+    plain: {
+      what:
+        "this room is a working model of dna — the twisted ladder inside every cell. you can unzip it, copy it, and mutate it; and because each of its four letters is also a note, the code plays back as a melody.",
+      how: [
+        "drag across the helix → unzips it rung by rung; some rungs honestly resist more, because they hold three bonds instead of two",
+        "keep your finger down while it's open → a copier runs along the strand and plays the sequence back",
+        "hold on through that → a whole copy peels off beside the ladder and stays",
+        "tap a rung → sounds its letter's note; three quick taps rewrite the letter itself",
+        "five quick taps → a real mutation lands right there",
+        "drag with three fingers → turns up the world's own mutation rate, and the code starts changing without you",
+      ],
+    },
   },
   {
     key: "organics",
@@ -742,6 +1091,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "a fully folded chain is a coil — which is the backbone the ladder one band up is made of",
     ],
     keeps: "the chains you've built, and how far each one has folded",
+    plain: {
+      what:
+        "this room is a warm chemical soup of carbon, nitrogen, and oxygen, and the chains you can talk them into — the starter kit of all living chemistry. a strained molecule audibly beats, and goes quiet once its shape relaxes into the angle real carbon prefers.",
+      how: [
+        "drag a loose atom onto the end of a chain → it bonds if chemistry allows, and is pushed firmly away if it doesn't",
+        "press and hold on open soup → builds a new chain, bond by bond",
+        "hold a chain → folds it; the longer you press, the further it folds, until it locks into a coil",
+        "tap a chain → a kick of heat; it bends and starts beating again",
+        "tap three times → adds an atom to a chain; five times → a sealed coil comes apart",
+        "drag with three fingers → warmth, which keeps every chain restless",
+      ],
+    },
   },
   {
     key: "molecules",
@@ -767,6 +1128,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "a dashed arc breathes between two molecules that could react, proposed without a word of text",
     ],
     keeps: "the molecules you've condensed",
+    plain: {
+      what:
+        "this room is a tank of drifting, tumbling molecules with honest chemistry: bonds have real strengths, and only compatible partners can react. watch for the dashed arc — it appears between two molecules that could react, like a suggestion.",
+      how: [
+        "tap → a kick of heat; light molecules fly farther than heavy ones",
+        "press and hold on open space → builds a molecule, bond by bond",
+        "hold a molecule near a compatible partner → charges a real reaction; a slow count of three fires it",
+        "flick → throws a molecule tumbling across the tank",
+        "tap three times → condenses a molecule under your hand; five times → the nearest one dissolves",
+        "put two fingers down and twist → shows the chemical diagram version, with the bonds drawn honestly",
+      ],
+    },
   },
   {
     key: "atoms",
@@ -790,6 +1163,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "shift+enter throws the atom under the keyboard cursor at its nearest neighbor, the same fusion physics as a flick",
     ],
     keeps: "the atoms and bonds you've made",
+    plain: {
+      what:
+        "this room is a tiny universe of atoms — soft glowing electron clouds around bright centers. they bond by real chemistry rules, and if you slam two together hard enough they fuse into a heavier element, the way stars make them — and, like the stars, the trick stops working at iron.",
+      how: [
+        "tap → excites an electron, and a ring flashes outward",
+        "tap three times → knocks the outermost electron loose; it falls back home a beat later",
+        "press and hold near a compatible atom → the two bond; incompatible atoms push each other firmly apart",
+        "drag or flick one atom into another, fast → they fuse into a new element",
+        "hold three fingers still → time slows, which makes lining up a fusion much easier",
+        "put two fingers down and twist → shows the textbook orbital diagram with the element's name and number",
+      ],
+    },
   },
   {
     key: "nucleons",
@@ -818,6 +1203,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "at a = 238 the valley bottoms out at uranium — not placed by hand, it falls out of the energy",
     ],
     keeps: "the nuclei you've made, element by element",
+    plain: {
+      what:
+        "this room is about the cores of atoms — little drops of protons and neutrons — and why some hold together while others fall apart. every drop's size, hum, and appetite comes from the real physics formula, so the unstable ones genuinely decay on their own while you watch.",
+      how: [
+        "tap a drop → it rings; struck hard, a strained drop shakes a neutron loose",
+        "press and hold on open space → condenses a free neutron; keep holding to a slow count of three for a proton",
+        "flick a loose particle into a drop → a neutron walks right in; a proton must arrive fast to beat the electric repulsion",
+        "drive two drops together hard → they merge into a heavier element, or bounce off each other's charge",
+        "hold a drop for a slow count of three → it does what it already wanted: splits, or spits out a piece",
+        "circle a finger on a drop → spins it; spin a heavy one fast enough and it stretches, necks, and splits in two",
+      ],
+    },
   },
   {
     key: "quarks",
@@ -844,6 +1241,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "the room is tuned by its address: every pitch here is an offset from the register this depth of the axis assigns, high and quick, over a bed of zero-point hiss",
     ],
     keeps: "the hadrons you've bound",
+    plain: {
+      what:
+        "this room is about quarks, the smallest building blocks, and their one strange rule: they can never be alone. pull one away from its partners and the energy in the stretch snaps into a brand-new pair — a real law of physics you can feel under your finger.",
+      how: [
+        "press and hold on empty space → a particle condenses out of the vacuum, spinning up as it grows",
+        "drag a single quark away → the tether resists harder and harder, then snaps into a new pair — never a free quark",
+        "hold two still fingers apart → an energy tube strings between them; keep holding and it becomes a real pair",
+        "hold a particle for a slow count of three → it annihilates in a flash of light",
+        "flick → throws a whole particle, all its quarks moving together",
+        "tap quickly several times → a spray of flickering pairs, then chords, then the whole vacuum boils over",
+      ],
+    },
   },
   {
     key: "quanta",
@@ -871,6 +1280,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "tilt leans only the massive: light and neutrinos ignore gravity entirely",
     ],
     keeps: "the stable residue — the electrons, photons, and neutrinos still crossing",
+    plain: {
+      what:
+        "this room is the bottom floor of physics: particles as ripples in a field. its one law is real — heavier means shorter-lived — so light crosses the whole room forever while the heaviest particles die within a fingertip of where they're born.",
+      how: [
+        "press and hold → pours in energy; a short press makes light, a longer one makes matter, and a full slow hold makes the heaviest particle of all",
+        "tap quickly several times → hammers energy straight in — three taps afford the light particles, five the middleweights, seven the heavyweights",
+        "tap a light particle → it chirps its own pitch; higher-energy light really does chirp higher",
+        "flick a light particle → light can't be sped up or slowed, only redirected — the note bends instead",
+        "hold two still fingers apart → traps a standing wave between them; let go and it leaves as light of exactly that pitch",
+        "tilt the phone → only the things with mass lean; light and the ghost-particles ignore gravity completely",
+      ],
+    },
   },
   {
     key: "fire",
@@ -894,6 +1315,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "time dilation is honest all the way down — slowing time slows the fire's memory, not just its motion",
       "a steady tap rhythm makes the bed's own breath fall in with your pulse",
     ],
+    plain: {
+      what:
+        "this room is a fire you tend. embers, flames, updrafts — it behaves like real burning: heat rises, wind bends it, and stirring throws whirls of sparks.",
+      how: [
+        "tap → a burst of embers",
+        "tap quickly several times → embers, then a fountain of sparks, then the draft opens, then the whole bed roars",
+        "drag → bends the rising heat, leaving a glowing stroke",
+        "hold two still fingers apart → works like a bellows; sparks stream up between them",
+        "circle a finger → a fire-whirl catches the embers in a turning column",
+        "hold three fingers still → time thickens down to a tenth speed for as long as you hold",
+      ],
+    },
   },
   {
     key: "earth",
@@ -918,6 +1351,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "a quake's spike genuinely rings back and forth on the trace rather than just decaying",
       "the ground keeps three inward doors — flowers, coast, olympus — cycled by repeated wall-press",
     ],
+    plain: {
+      what:
+        "this room is a slice straight down through the ground — sky, surface, and eight layers of rock — with a live seismograph needle that reads your hand as geological pressure.",
+      how: [
+        "tap a rock layer → a mineral proper to that depth lights up there",
+        "drag through the layers → shears them, leaving visible fault lines",
+        "press and hold → squeezes the rock until it glows and changes, the way real rock is transformed under pressure",
+        "circle a finger → drills down like an auger; a second full turn pulls up cuttings from the layers below",
+        "tap quickly several times → a seed of a mineral, then a quake, then a cascade down the whole column, then a full rupture",
+        "tap the seismograph strip → sets off a quake that rings back and forth across the trace",
+      ],
+    },
   },
   {
     key: "growth",
@@ -942,6 +1387,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "forcing the exponential model actually reproduces — it spawns six new vines in a ring",
       "nothing here is stored: a blossom is a pure function of its vine's seed and its place on it, forever",
     ],
+    plain: {
+      what:
+        "this room is a garden of curves — vines whose shapes are the four famous growth patterns: the s-curve, runaway growth, decay, and the full life cycle. it's the same math that describes populations and epidemics, drawn as plants.",
+      how: [
+        "tap or hold on the open field → seeds a vine; hold a blossom to carry it into bloom",
+        "drag → bends the equation itself — gravity, growth rate, ceiling — and the vines reshape live",
+        "press and hold → makes the current pattern do its signature act: level off, multiply, collapse, or rest",
+        "tap the four mode buttons → switches which growth pattern the vines obey",
+        "put two fingers down and twist → shows the bare equations behind the plants",
+        "tap quickly several times → a wobble, then an arpeggio, then a wave of bloom down the stem, then the whole trellis pulses",
+      ],
+    },
   },
   {
     key: "stars",
@@ -967,6 +1424,19 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "a bright star dies on its own now and then, and its remnant can become a brand-new black hole",
     ],
     keeps: "your named constellations, plus every layer's born stars, worlds, and black holes",
+    plain: {
+      what:
+        "this room is a night sky you populate yourself. you birth stars, explode them, grow planets, and open black holes — and the black holes really do swallow nearby stars and spiral into each other.",
+      how: [
+        "tap empty sky → a new star is born; tap a bright one → it explodes",
+        "press and hold about a second → opens a black hole; let go and it pulls in or swallows whatever is near",
+        "pinch → zooms through four layers of sky, from the whole galaxy down to your local patch",
+        "double-click a star you made → a planet condenses into orbit around it",
+        "shift+click a few stars, then press enter → names and keeps a constellation",
+        "hold three fingers still → the sky's clock slows for as long as you hold",
+        "the small button at the bottom of the screen → lets the whole sky go",
+      ],
+    },
   },
   {
     key: "space",
@@ -999,6 +1469,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "the web's own breath is ~48 seconds long — the register the scale axis assigns this place, and the note a median filament sounds is that register exactly",
     ],
     keeps: "the galaxies you have pulled into resolution",
+    plain: {
+      what:
+        "this room is the biggest map there is: galaxies strung along invisible threads of dark matter. the glowing galaxies sit exactly where the hidden material is dense — so the sky you can see is really a picture of the sky you can't.",
+      how: [
+        "drag → shifts your viewpoint; the near part of the web slides over the far",
+        "tap a galaxy → it sounds how heavy its spot is — deeper wells ring lower",
+        "hold three fingers still → the veil: the invisible dark matter fades into view, deeper the longer you hold",
+        "press and hold a galaxy → zooms into it — first its arms, then its stars, until you're inside",
+        "drag up or down with three fingers → runs cosmic history forward and back; wind it far enough back and the galaxies vanish while the dark matter stays",
+        "lay the phone face-down → night: the galaxies go out, and the web remains",
+      ],
+    },
   },
   {
     key: "comb",
@@ -1022,6 +1504,17 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "five rapid taps split a sun into two suns and a saddle — the total winding never changes, however the field is struck",
       "rotating the device between portrait and landscape flips the direction of time itself",
     ],
+    plain: {
+      what:
+        "this room is like combing hair that covers the whole sky: however you brush, there are always whorls and partings you can't comb away. that's a real law of nature — the same reason your head has a cowlick — and the whorls can only vanish by cancelling each other out.",
+      how: [
+        "drag → combs the streaks of light along your stroke",
+        "tap → blooms a whorl; press and hold one → feeds it",
+        "tap quickly several times → three make the opposite kind of whorl, five split one into three, seven or more flare every whorl at once",
+        "shake the phone → slams the nearest opposite pair together, cancelling both",
+        "put two fingers down and twist → rotates the whole field",
+      ],
+    },
   },
 
   // --- mechanism ---
@@ -1046,6 +1539,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "two alternating fingers make a third tone neither is playing — the difference between them, the beat frequency made audible",
     ],
     keeps: "up to 12 kept signals",
+    plain: {
+      what:
+        "this room shows you what sound looks like — the site's own audio drawn three ways at once: a spectrum, a waveform, and a spiral. you can also ask it to compose music from a few words, then bend the piece while it plays.",
+      how: [
+        "tap the spectrum band → plays the exact frequency you touched",
+        "drag the waveform → distorts the sound; press harder to dig deeper",
+        "type in the prompt field → the site composes and loops a piece for you",
+        "tap the nudge buttons → slower, more bells, deeper, dimmer — reshapes the piece without stopping it",
+        "rest a finger on the spiral → keeps the live sound; hold a slow count of three to seal it with a bell",
+        "drum two spots by turns → both notes sound, plus a third ghost tone that is the difference between them",
+      ],
+    },
   },
   {
     key: "light",
@@ -1067,6 +1572,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "visible scale frets bloom brighter where your finger is nearest — the continuum becomes a piano of light under the active lens",
       "a quick tap booms like a drum; the same touch held is a sustained note — the release decides which",
     ],
+    plain: {
+      what:
+        "this room plays colors as notes. the screen is the rainbow laid flat — red at one side, violet at the other — and touching a color sounds the pitch that light would be if you could hear it.",
+      how: [
+        "touch → sounds the color under your finger; more fingers stack a chord",
+        "drag → the pitch glides as the color changes under your hand",
+        "double-tap one spot → a deep bass thump",
+        "tap quickly several times → three play the color's own chord, five sweep the whole rainbow, seven or more bring the bass floor up",
+        "shake the phone → strums everything you've touched",
+        "press \"listen\" → ghost hands demonstrate a chord on the plate",
+      ],
+    },
   },
   {
     key: "music-color",
@@ -1085,6 +1602,17 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "unparseable tokens don't fail the whole score — they're quietly skipped and named, and the rest still plays",
       "every cell of the bar and the matrix is itself an instrument — the translation reads back by touch, one color at a time",
     ],
+    plain: {
+      what:
+        "this room is the color-music idea backwards: write music, see color. paste or type a melody and every note becomes its own colored stripe, so a whole tune turns into a color bar you can read — and play back by touch.",
+      how: [
+        "type or paste a melody in the score field → it becomes a bar of colors and a grid",
+        "tap any color cell → it plays its own note",
+        "tap \"play notes\" → the whole tune plays, lighting the colors in time",
+        "tap \"interpret\" → the site reads a photo of sheet music, or loose text, into a playable score",
+        "tap \"export bar\" or \"export matrix\" → downloads your colors as an image",
+      ],
+    },
   },
   {
     key: "timbre",
@@ -1105,6 +1633,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "between two instruments the readout names a real blended hybrid rather than snapping to one or the other",
       "the lesson's ghost fingers land where yours should — one pitch morphing harp through trumpet, then a room-wide chord",
     ],
+    plain: {
+      what:
+        "this room is eight musical instruments melted into one surface. left and right choose the pitch; up and down slide you smoothly from one instrument into the next, passing through real hybrids in between.",
+      how: [
+        "touch → a note in whatever instrument that height is closest to",
+        "drag up or down → the instrument itself morphs — harp into horn into strings",
+        "rest your finger → it settles gently onto the nearest pure instrument",
+        "use several fingers → each plays its own instrument at its own height",
+        "tap quickly several times → a note, then a chord, then the pitch walks all eight instruments, then the whole orchestra plays it at once",
+        "press \"listen\" → a guided demo plays the surface for you",
+      ],
+    },
   },
   {
     key: "instrument",
@@ -1121,6 +1661,17 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "keys a s d f g h j k l → plays the pentatonic row from the plate's last position",
     ],
     finds: ["fingers that land more than 80ms apart are always treated as voices and can never be mistaken for a pinch, so a rolled chord is always safe"],
+    plain: {
+      what:
+        "this room is the same eight-instrument surface as the one before it, but played entirely with gestures — every finger is its own voice, a pinch zooms into finer pitch steps, and a twist changes the musical scale you're playing in.",
+      how: [
+        "touch → a note; each finger is an independent voice",
+        "pinch → zooms the pitch range tighter, for finer and finer intervals",
+        "put two fingers down and twist → switches the scale — five-note, twelve-note, or pure light-frequency tuning",
+        "tap quickly several times → one voice, then its chord, then a strum across the whole range, then everything sounds at once",
+        "press \"listen\" → ghost hands demonstrate the moves for you",
+      ],
+    },
   },
   {
     key: "plasma",
@@ -1139,6 +1690,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "a steady tapped pulse → the core blinks in time with you",
     ],
     finds: ["heat decays like real inertia rather than resetting instantly, so a globe you just left keeps glowing a little longer"],
+    plain: {
+      what:
+        "this room is one of those glass plasma globes from the science shop: a glowing core under glass, with threads of lightning that reach for your fingers.",
+      how: [
+        "touch the glass → a spark cracks to your finger",
+        "hold two still fingers on the glass → an arc bridges between them, humming higher the longer you hold",
+        "hold and drag → banks up heat; lift your last finger and it discharges as one bright arc",
+        "press and hold for a slow count of three → a full crown of filaments in every direction",
+        "drag with three fingers → wind bends every arc",
+        "circle a finger around the rim → a filament chases your finger around the glass",
+      ],
+    },
   },
   {
     key: "pulse",
@@ -1157,6 +1720,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
     ],
     finds: ["drumming genuinely overrides the room's own heartbeat while your hands keep time, and it settles back the moment you stop"],
     keeps: "up to 18 saved patterns, plus a shareable link that carries your exact settings",
+    plain: {
+      what:
+        "this room is a hospital monitor with a living patient inside — heartbeat, breathing, blood pressure, and brain waves, all connected to each other. hold your breath and the heart really does climb.",
+      how: [
+        "tap or drag → presses on the membrane, and the trace answers",
+        "drum steadily with two hands → you become the pacemaker; the heart follows your rhythm until you stop",
+        "hold two still fingers apart → the breath is held: the trace flattens, and after a few seconds the heart starts to climb — release is the exhale",
+        "tap quickly several times → a bloom, then extra heartbeats, then an adrenaline surge, then the paddles: a full shock by hand",
+        "tap the channel buttons → turns heart, breath, pressure, or mind on and off",
+        "hold for a slow count of three → keeps the current pattern under its own name",
+      ],
+    },
   },
   {
     key: "charts",
@@ -1183,6 +1758,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "nobody has to touch it: the reading breathes on its own, a slow swell walking the panels on the site's shared clock",
     ],
     keeps: "one pinned snapshot of the whole chart",
+    plain: {
+      what:
+        "this room looks like a stock-trading screen, but every mark on it is soft: the candles, the indicator lines, the wiggles are all physical things you can grab and bend by hand.",
+      how: [
+        "tap or drag a candle → plays its note and lets you stretch it",
+        "drag the bare left margin → a hidden dial for how wild the chart gets",
+        "circle a finger → winds the wildness up with the turn, or calms it against it",
+        "put two fingers down and twist → drops to the raw random walk underneath the candles",
+        "hold for a slow count of three → pins the current reading so it keeps",
+        "tilt or shake the phone → the whole reading slides downhill, or churns and settles back",
+      ],
+    },
   },
   {
     key: "dither",
@@ -1200,6 +1787,17 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "the name field → presses any name into a mirrored, deterministic avatar",
     ],
     finds: ["the avatar is a pure hash of the letters — the same name always returns the same face"],
+    plain: {
+      what:
+        "this room is about how old printers and screens faked shades of gray using only dots. a data chart is drawn entirely in that dot pattern, and a name-stamp turns any name you type into its own little dot-portrait.",
+      how: [
+        "tap the chart → jumps to that month and pins its label in place",
+        "flick → strums all eight months in order",
+        "circle a finger → the ink gathers with your turn and thins against it",
+        "put two fingers down and twist → dissolves the dots into smooth tone and back",
+        "type a name → stamps it into a mirrored portrait; the same name always gives the same face",
+      ],
+    },
   },
   {
     key: "time",
@@ -1226,6 +1824,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "at the felt-duration lens the two ladders start together and open apart — the gap between them is the falling-behind",
       "the clocks are already running and falling apart the moment you arrive, and the well rings itself down on its own — pausing is the one deliberate stillness here",
     ],
+    plain: {
+      what:
+        "this room is einstein's time trick made playable: moving fast, or sitting deep in gravity, genuinely slows your clock. two clocks run side by side, and you watch the traveller's fall behind the stay-at-home one.",
+      how: [
+        "drag left and right → sets speed; up and down → sets mass, denting the grid into a well",
+        "watch the two clocks → the faster or deeper you set things, the further the second clock falls behind",
+        "flick → launches the traveller at that speed",
+        "circle a finger → winds both clocks forward; the gap between them grows as you wind",
+        "put two fingers down and twist → steps through three views: the path, the felt time, the bare math",
+        "hold three fingers still → both clocks slow together while you hold",
+      ],
+    },
   },
   {
     key: "tourbillon",
@@ -1252,6 +1862,19 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "the cage under the balance never stops turning, on its own, whether the case is leaning or dead level",
       "lean the case hard and hold it: the balance's glow swings warm then cool as the cage carries it through the position, proof the average still lands at zero",
     ],
+    plain: {
+      what:
+        "this room is the inside of a luxury mechanical watch, fully modeled — mainspring, gears, the ticking escapement, and the tourbillon itself: a little turning cage invented so gravity can never favor one position of the watch. wind it, open it, set it to your own time.",
+      how: [
+        "circle a finger → turns the crown and winds the spring; a faster wrist pours in more",
+        "tap a part → each gear rings its own pitch; the crown visibly presses in",
+        "tap quickly several times → one part speaks, then the chime strikes the quarter, then it counts the hour, then every gear rings at once",
+        "put two fingers down and twist → opens the case: dial off, bare gears",
+        "hold for a slow count of three → sets the watch to your true local time",
+        "drag empty space → orbits the camera around the whole movement",
+        "tilt the phone → the watch leans with it, and the little cage keeps turning regardless — that is its whole job",
+      ],
+    },
   },
   {
     key: "jewel",
@@ -1272,6 +1895,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "hold to the ceremony tier → seals the stone at full fire",
     ],
     finds: ["every way of handling the stone adds to one shared \"fire\" — it visibly gets hotter the more you touch it"],
+    plain: {
+      what:
+        "this room is a single cut gemstone filling the screen — light bends through it, splits into rainbows, and sparkles as it turns. the more you handle it, the more fire it holds.",
+      how: [
+        "drag → spins the stone; let go and it keeps turning with real weight",
+        "touch a spinning stone → catches and stops it",
+        "flick → throws it into a fast spin",
+        "tap the six gem buttons → re-cuts the stone into a different gem, each with its own chord",
+        "press and hold on the gold → grows a new facet; hold a facet a slow count of three → removes it",
+        "hold for a slow count of three → seals the stone at full fire",
+      ],
+    },
   },
   {
     key: "drop",
@@ -1303,6 +1938,19 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "the cabinet at this scale holds every handheld room — a drop, a seed, a coin, a watch — without leaving the band",
       "left alone the water keeps trembling and catching a draught, dust keeps settling into it, and its bacteria go on dividing",
     ],
+    plain: {
+      what:
+        "this room is a single drop of water, big as the screen, wobbling with real surface tension. dive the lens deeper into it and smaller and smaller creatures fade in — the pond-water zoo hiding in every raindrop.",
+      how: [
+        "tap or drag → dents and sloshes the drop",
+        "drag down with two fingers → sinks the lens into the water; new tiny animals appear at each depth",
+        "a fast, hard drag → pulls a whole new droplet off and hands it to your finger",
+        "flick → throws a droplet clear",
+        "hold two still fingers apart → the drop stretches into a lens between them",
+        "tilt or shake the phone → the water runs downhill or sloshes; shake hard enough and a droplet flies off",
+        "hold for a slow count of three → the water goes glass-calm",
+      ],
+    },
   },
   {
     key: "seed",
@@ -1328,6 +1976,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "a seed and a drop share one scale; the cabinet ring steps between them without leaving the band",
     ],
     keeps: "how far this seed has grown, and how many times it has split",
+    plain: {
+      what:
+        "this room is one seed in dark soil. warm it under your hand and it wakes: the first root emerges, the husk cracks, the sprout begins — a whole germination in miniature.",
+      how: [
+        "tap → pokes the seed; it answers with a low note",
+        "press and hold → the root grows while you hold; a slow count of three splits the husk",
+        "hold two still fingers apart → a cradle of warmth: the embryo grows gently without cracking anything",
+        "tap quickly several times → a poke, then the kernel knocks inside, then the husk visibly nicks, then the seed rattles itself awake",
+        "circle a finger → stirs the soil, and the seed leans with the swirl",
+        "tilt, shake, or rap the phone → the seed leans, rattles, or shudders",
+      ],
+    },
   },
   {
     key: "coin",
@@ -1351,6 +2011,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
     ],
     finds: ["every interaction adds permanent brilliance to the night sky around it — it only ever climbs, asymptotically, never fading"],
     keeps: "how bright the night has become",
+    plain: {
+      what:
+        "this room is a gold medal hanging in a dark, sparkling night. flip it, spin it, rub it — and every touch adds permanent shine to the night around it. the shine never fades.",
+      how: [
+        "tap → flips the medal toward your touch, with a note for each direction",
+        "drag → tilts or resizes it; a fast rub polishes it to a shine",
+        "circle a finger → spins it flat; put two fingers down and twist → turns it over to its other face",
+        "tap quickly several times → a flip, then a chord, then a grand toss, then a peal that sets the whole night pulsing",
+        "tilt the phone → the medal leans, and a sudden tilt can flip it",
+        "hold for a slow count of three → blesses the medal — its single biggest gift of brightness",
+      ],
+    },
   },
   {
     key: "watch",
@@ -1371,6 +2043,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "two-finger hold to dwell → opens the cabinet peer ring",
     ],
     finds: ["snuffing and the vigil are the same held press at different depths — you can only keep a vigil over a candle you just put out yourself"],
+    plain: {
+      what:
+        "this room is a candle-lit desk at night: a living flame at the center, ringed by a clock, a music box, a record player, a glass, a book, and a window on the sea. everything is touchable, and the flame is the heart of it.",
+      how: [
+        "tap the candle → sparks it, or relights it if it's out",
+        "press and hold the candle → snuffs it; keep holding through the dark, a slow count of three, and it comes back brighter — a vigil",
+        "tap the record → play or stop; double-tap → reverse; triple-tap → a new mood",
+        "drag the glass → pours it, each level with its own pitch",
+        "circle a finger → turns the room's day: sun, clock hands, and pendulum all follow",
+        "rap on the phone's body → the clock ticks once out of turn and the flame flinches",
+      ],
+    },
   },
   {
     key: "manifold",
@@ -1392,6 +2076,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "the cosmic web genuinely holds together near a mass and expands everywhere else",
     ],
     keeps: "the masses you've placed on the fold",
+    plain: {
+      what:
+        "this room is the whole site as one object: a fabric of space that dips wherever you place weight — a model of how gravity curves space — threaded with a string of beads, one bead per room, smallest to biggest. it doubles as the site's own map.",
+      how: [
+        "tap the fabric → a pulse races out at exactly the speed of light",
+        "tap a bead → hear that room's own register; hold a built room's bead for a slow count of three → travel there",
+        "press and hold open fabric → weight gathers under your finger, denting the fabric",
+        "put two fingers down and twist → shows the bare math — the only place on the site where notation appears",
+        "hold three fingers still → time slows until the light itself nearly stands still",
+        "the small button at the bottom of the screen → lifts every weight you placed",
+      ],
+    },
   },
   {
     key: "overlook",
@@ -1409,6 +2105,17 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "twist → drops the lens to the bare derived graph",
     ],
     finds: ["the tree is never hand-authored — it's derived live from the same travel graph the rest of the site uses, so a cosmology change redraws it for free"],
+    plain: {
+      what:
+        "this room is the site's own family tree: every room drawn as a node on one living tree, the smallest things at the roots and the whole universe at the crown. it draws itself from the site's real map, so it is never out of date.",
+      how: [
+        "tap a node → chimes at that room's pitch; tap open air → the tree sways",
+        "tap a node three times → lights its ancestry down to the roots; five times → its whole branch blooms",
+        "pinch → zooms the view (here, pinch is just a camera)",
+        "hold a node for a slow count of three → travels to that room",
+        "tap with three fingers → every room sounds once, in order, root to crown",
+      ],
+    },
   },
   {
     key: "loom",
@@ -1427,6 +2134,18 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
     ],
     finds: ["the verification table distinguishes a medium that honestly can't witness something from one that's actually broken — most marks are the natural loss of translation, not failure"],
     keeps: "how many times you've carried the structure across its threshold",
+    plain: {
+      what:
+        "this room is one abstract thing expressed five ways at once — as sound, shape, text, space, and touch — with a live table checking that all five still agree. pour attention in and the thing grows toward making a choice of its own.",
+      how: [
+        "tap or hold → pours attention in; the longer you hold, the faster it pours",
+        "circle a finger → one way aligns the weave, the other way loosens it",
+        "pinch → reaches for a nearer or farther future to pick",
+        "put two fingers down and twist → shows the bare structure and the rule it conserves",
+        "tilt the phone → pours attention in with no touch at all",
+        "once it has grown enough, hold for a slow count of three → keeps one future, once",
+      ],
+    },
   },
 ];
 

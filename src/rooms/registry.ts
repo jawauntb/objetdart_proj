@@ -249,6 +249,7 @@ export function roomGuideEntries(): Array<
     moves: string[];
     finds: string[];
     keeps?: string;
+    plain?: { what: string; how: readonly string[] };
     readingSurface?: boolean;
   }
 > {
@@ -263,6 +264,7 @@ export function roomGuideEntries(): Array<
       moves: [...guide.moves],
       finds: [...(guide.finds ?? [])],
       ...(guide.keeps ? { keeps: guide.keeps } : {}),
+      ...(guide.plain ? { plain: guide.plain } : {}),
       ...(guide.readingSurface ? { readingSurface: true } : {}),
     };
   });

@@ -27,7 +27,11 @@ export default function GuideGrammar() {
           {GUIDE_GLOBAL_BINDINGS.map((binding) => (
             <tr key={binding.gesture}>
               <th scope="row" className="t-mono">{binding.gesture}</th>
-              <td className="t-body">{binding.meaning}</td>
+              {/* both voices ship in the HTML; <html data-guide-voice> shows one */}
+              <td className="t-body">
+                <span className="guide-voice-plain">{binding.plain}</span>
+                <span className="guide-voice-field">{binding.meaning}</span>
+              </td>
             </tr>
           ))}
         </tbody>

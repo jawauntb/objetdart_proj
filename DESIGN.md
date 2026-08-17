@@ -84,6 +84,7 @@ surfaces did not go away — they became routes:
 - `/kept` — your trail. Cards with sigil + date + headline + `compare ↔` toggle + `forget`. Two-selection mode reveals a `compare →` banner.
 - `/compare?a=&b=` — two polygons overlaid, candle-orange (A) and sea-blue (B), with axis labels, side-by-side readings, top-4 concern delta.
 - `/colophon` — standalone colophon.
+- `/guide` — the field guide, the one surface where the site explains itself; the chrome `?` on every screen mirrors the current route's entry. Both now speak two voices from the same guide data — each entry carries a plain-english `plain` block beside the room's own register, and a `plain words` / `field notes` toggle (default plain, remembered at `objetdart:guide-voice:v1`) switches between them. The components write no room prose in either voice; on `/guide` both voices are server-rendered and swapped by `<html data-guide-voice>` alone.
 
 ---
 

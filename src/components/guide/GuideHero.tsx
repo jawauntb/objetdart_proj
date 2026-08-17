@@ -1,5 +1,6 @@
 import { GUIDE_ROOMS } from "@/data/guide";
 import { auroraSpots, hexToRgba } from "@/lib/guide-aurora";
+import GuideVoiceToggle from "./GuideVoiceToggle";
 
 /**
  * The album's threshold: title, lede, TOC, and the aurora of room-colored
@@ -50,6 +51,7 @@ export default function GuideHero() {
             <a href="#rooms">the rooms</a>
             <a href="#workshop">the workshop</a>
           </nav>
+          <GuideVoiceToggle />
         </div>
       </div>
     </header>
