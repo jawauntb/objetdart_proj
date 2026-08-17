@@ -597,6 +597,8 @@ export default function SiteHeader() {
               alignItems: "center",
               justifyContent: "center",
               gap: 6,
+              whiteSpace: "nowrap",
+              flexShrink: 0,
             }}
           >
             close ×
