@@ -58,7 +58,9 @@ surfaces did not go away — they became routes:
   clustered field / water / nature / mechanism, plus a dust field, a patina that
   deepens across visits, and embers a dwell plants and a ceremony hold lets go.
   Deliberately off the scale axis — a case holding every scale is a view of the
-  tree, like `/overlook` and `/loom`.
+  tree, like `/overlook`, `/loom`, `/group`, and `/eigen`. The last two are
+  law-rooms (inferred automorphism; surviving directions), not instruments on
+  the coast — `docs/plans/fibration-eigen-group.md`.
 - **`/compass`** — the concern compass, the site's founding interaction.
   `src/components/ConcernField.tsx`: eight concerns as radial axes with a draggable
   polygon, each vertex holding that concern's own tone while dragged; twist turns

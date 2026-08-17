@@ -36,8 +36,10 @@ Before writing anything, place the room in the cosmology. Answer in order:
      siblings but needs its own vertical doors uses `ROUTE_TRAVEL_OVERRIDES`.
 2. **Is it a *law*, *lens*, or *abstraction*?** Then it takes no scale address (the
    `/relativity` precedent — write the exemption into your registry entry's
-   `address: { exempt: "…" }` and add the key to `SCALE_EXEMPT_KEYS`), or it branches
-   off the band it comments on (the `/beyond` precedent).
+   `address: { exempt: "…" }` and add the key to `SCALE_EXEMPT_KEYS`; `/group` and
+   `/eigen` are the next two — see `docs/plans/fibration-eigen-group.md`), or it branches
+   off the band it comments on (the `/beyond` precedent). `/sine` and `/circularity` are
+   coast instruments, not this class.
 3. **Keep the tree shallow.** Branches exist only where containment genuinely forks. If
    you're about to give a wall a fourth door, the cosmology is probably wrong — look for
    the level you're missing.

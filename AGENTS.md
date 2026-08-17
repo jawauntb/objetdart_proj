@@ -47,8 +47,12 @@ reasoned exemption into the registry. **Never delete the entry you should be upd
 4. **`docs/plans/scale-manifold-build-plan.md`** — the active build: one log-scale axis
    from the quantum fields to the spacetime manifold, band detents, handoff anchors,
    twist-lens, scale-as-spectral-register.
-5. **`DESIGN.md`** — what exists and why each piece looks the way it does.
-6. **`docs/page-feel-audit.md`** — per-route state of play and improvement batches.
+5. **`docs/plans/fibration-eigen-group.md`** — the law-room lane: `/group` (incomplete
+   orbit, inferred automorphism), `/eigen` (constraint collapse), then the fiber walk
+   on `/loom`. Reading notes: `docs/notes/metaphysics-to-rooms.md`. These are
+   `SCALE_EXEMPT` materials, not math classrooms.
+6. **`DESIGN.md`** — what exists and why each piece looks the way it does.
+7. **`docs/page-feel-audit.md`** — per-route state of play and improvement batches.
 
 ## The laws, and the test that checks each one
 
@@ -218,7 +222,9 @@ Start from **`docs/new-room.md`**. The first decision is always ordinal: find
 the level where the room fits on the quark→manifold axis, prefer deepening an
 existing band over adding rooms, and branch only where containment genuinely
 forks. State the placement (or the law/lens exemption) in one sentence in the
-PR body.
+PR body. `/group` and `/eigen` are law-rooms (`SCALE_EXEMPT`); follow
+`docs/plans/fibration-eigen-group.md` — do not place them on the coast next to
+`/sine`.
 
 Then the room is **declared once**, in `src/rooms/<key>/room.config.ts` (route
 row, sigil, cluster, placement, icon palette, guide entry, chrome overrides)
