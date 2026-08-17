@@ -257,6 +257,13 @@ page belongs on the axis (band or peer circle) or in `SCALE_EXEMPT_KEYS`
 rest of the cabinet/shore/sky/hearth rings included. A manifest states this
 once, as its `place`; `<RoomShell>` mounts `AxisChrome` from it.
 `scripts/test-routes.mjs` and `scripts/test-rooms.mjs` pin it.
+The dropdown's grouping (fold / spine / laws / lenses / reading, with each
+peer ring collapsed under its leading room) is derived presentation over that
+same order — `src/lib/nav-groups.ts` chunks `NAVIGATION_ROUTES` by registry
+facts, so a new room lands in its section with no nav edit, and its
+`disciplines` tags (annotated in `src/lib/room-registry.ts`, from
+`NAV_DISCIPLINES`) feed the menu's filter chips; `scripts/test-nav-groups.mjs`
+pins both.
 
 ## The field guide (`/guide`) — the documentation law
 
