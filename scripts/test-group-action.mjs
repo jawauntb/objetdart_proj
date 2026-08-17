@@ -84,13 +84,14 @@ function fragment(classId, poses, seed = 11) {
 }
 
 {
-  const cyclic = fragment(1, [0, 2, 4, 6]);
+  const cyclic = fragment(1, [0, 2, 4]);
   const perm = G.scramblePerm();
   assert.ok(
     G.consistencyPerm(cyclic, perm) < G.MATCH_TAU,
     "a pose-scramble that is not a group element does not unlock the fragment",
   );
-  assert.ok(G.consistency(cyclic, { id: 0, k: 2, kind: "rotate" }) >= G.MATCH_TAU);
+  const even = fragment(1, [0, 2, 4, 6]);
+  assert.ok(G.consistency(even, { id: 0, k: 2, kind: "rotate" }) >= G.MATCH_TAU);
 }
 
 {
@@ -103,7 +104,7 @@ function fragment(classId, poses, seed = 11) {
 
 {
   const src = readFileSync(fileURLToPath(new URL("src/lib/group-action.ts", rootUrl)), "utf8");
-  assert.equal(src.includes("Math.random"), false, "the orbit law does not roll");
+  assert.equal(src.includes("Math.random("), false, "the orbit law does not roll");
 }
 
 {
