@@ -65,6 +65,18 @@ const cabinet = {
       "an ember planted near a gem drifts into its orbit and burns in that cluster's color",
     ],
     keeps: "your patina, the current you left it on, and the embers you planted",
+    plain: {
+      what: "this room is a display case holding the whole site — every room hangs inside it as a small lit gem. the more you handle the case, the deeper it glows, and it remembers that warmth between visits.",
+      how: [
+        "hover over or focus a gem → the case turns toward it and that gem's family of rooms warms",
+        "rest a finger on open glass → an ember gathers under it and keeps growing while you hold",
+        "hold on an ember until it blooms → it is let go",
+        "twist two fingers → turns the light through the four families of rooms",
+        "drag with two fingers → leans the whole case, then it springs back",
+        "knock the phone, or tap with three fingers → every gem answers at once",
+        "press the clear button → your embers are let go",
+      ],
+    },
   },
   // ——— the room quality bar, structured ————————————————————————————————
   // Phase 4 (Track 2) note: the cabinet's persistence used to be a private

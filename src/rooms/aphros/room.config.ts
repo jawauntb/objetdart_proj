@@ -85,6 +85,18 @@ const aphros = {
     ],
     keeps:
       "up to twelve living blooms — the ones you planted and gathered, at their sizes and their seeded phyllotaxis phases. Ascended blooms are let go the moment the shell has taken them.",
+    plain: {
+      what: "this room is a living painting of a goddess born from sea foam — botticelli's venus, made playable. foam is the material: you stir it, gather it into swirls, and finally send one up into the shell as a birth, and the whole painting celebrates and changes color for a while.",
+      how: [
+        "tap the water → a bit of foam and a note; tap a figure → it answers in its own way",
+        "press and hold on open water → foam gathers into a swirl that keeps growing while you hold",
+        "hold much longer, then let go → the swirl rises into the shell and the whole sea celebrates a birth",
+        "tap a swirl three times quickly → it bursts into smaller swirls thrown outward",
+        "drag → stirs the water; a wake follows your finger",
+        "twist two fingers → the painting becomes its own pencil sketch, and back",
+        "press the clear button → every swirl you made is let go",
+      ],
+    },
   },
   // ——— the felt-bar declaration, per scripts/test-room-quality.mjs ————
   life: {

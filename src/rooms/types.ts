@@ -55,6 +55,8 @@ export type RoomGuideEntry = {
   finds?: readonly string[];
   /** what it remembers between visits */
   keeps?: string;
+  /** plain-english translation: `what` opens with the room's big idea in ordinary words; `how` is "do X and Y happens" lines a stranger can follow */
+  plain?: { what: string; how: readonly string[] };
   /** declared reading surfaces may document fewer than three moves */
   readingSurface?: boolean;
 };

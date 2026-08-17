@@ -63,6 +63,18 @@ const voids = {
       "a knock on the case is a knock on the web: every cluster jumps, and settles",
     ],
     keeps: "the web — every cluster at the mass and place you left it, and every void at the size it had grown to",
+    plain: {
+      what: "this room is the biggest empty places in the universe — the voids between galaxies, walled in by a web of matter. the emptiness is not nothing: it pushes, stretching its walls apart and draining matter along the threads that join them.",
+      how: [
+        "tap → the nearest cluster of galaxies rings; the heavier it is, the deeper the note",
+        "rest a finger → matter gathers into a new cluster; keep holding → it pulls in more and more",
+        "hold to the deepest tier → a new bubble of emptiness is born inside a wall and starts to push",
+        "drag one cluster onto another → they fall together into one giant",
+        "drag the open dark → stretches the void; the threads between clusters thin",
+        "flick across a wall → it collapses, its clusters falling into one",
+        "twist three fingers → runs the universe's expansion forward or backward",
+      ],
+    },
   },
   // ——— the room quality bar, structured (AGENTS.md items 3, 5, 6) ————————
   life: {

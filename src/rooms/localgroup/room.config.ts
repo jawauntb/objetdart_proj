@@ -64,6 +64,18 @@ const localgroup = {
       "after twenty idle seconds a supernova twinkles in one disc — the group is never quite still",
     ],
     keeps: "the group — every galaxy, at the mass, spin, age and orbit you left it wheeling on",
+    plain: {
+      what: "this room is our galaxy's neighborhood — the milky way, andromeda, and a scatter of small galaxies, all falling slowly around a shared center. leave two of them near each other and gravity does the rest: they spiral in, tear streams of stars off each other, and merge into one.",
+      how: [
+        "tap a galaxy → it flares and rings; the heavier it is, the lower its note",
+        "rest a finger on the dark → a small galaxy condenses; keep holding → it grows heavier, step by step",
+        "drag a galaxy → carry it; the speed you let go with becomes its new orbit",
+        "flick a galaxy → flings it out of the group, trailing a stream of stars",
+        "hold on a galaxy to the deepest tier → it and its nearest neighbour are forced to merge into one",
+        "twist three fingers → winds time forward or back; forward, the giants fall together",
+        "press the clear button → the whole group is let go",
+      ],
+    },
   },
   // ——— the room quality bar, structured ————————————————————————————————
   // AGENTS.md §"The room quality bar" items 3, 5 and 6, declared per

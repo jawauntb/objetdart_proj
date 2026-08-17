@@ -63,6 +63,18 @@ const planets = {
       "each world's chord is read off its vector: ringed worlds carry a fifth the bare ones lack",
     ],
     keeps: "the worlds you forged, where in their orbits they are, and a deliberate clearing",
+    plain: {
+      what: "this room is a forge for worlds: a star, a disc of dust, and planets you condense out of it by hand. where you leave a world decides its face — close in, its seas boil away; far out, ice takes it — and the dust is a fixed budget, so the disc visibly dims as you spend it.",
+      how: [
+        "press and hold on the dust → a world condenses and keeps growing for as long as you hold",
+        "tap a world → it comes forward and plays its chord",
+        "drag a world → moves it; let go with a throw and it keeps the throw",
+        "flick a world into the star → the star eats it and its dust returns to the disc",
+        "let two worlds meet → they merge into one that carries both",
+        "circle a finger around a world → winds its ring denser, or the other way lets it out",
+        "press the clear button → the worlds you forged are let go",
+      ],
+    },
   },
   // ——— the room quality bar, structured ————————————————————————————————
   // Phase 4 (Track 2) migration: the direct save() calls at every plant,

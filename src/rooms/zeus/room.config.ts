@@ -67,6 +67,18 @@ const zeus = {
       "the earth is very small; the god's bolts are vast; a strike that reaches it is a proportionality the room asks the eye to hold",
     ],
     keeps: "every standing house with its charge and its water column; a spent house is spent between visits too.",
+    plain: {
+      what: "storm clouds in space, played as a god: charge builds, clouds attract and merge, and a long hold spends a cloud in one lightning bolt down to the little earth.",
+      how: [
+        "tap → sheet lightning flickers inside the nearest cloud, as bright as you tapped",
+        "press and hold → a storm cloud gathers under your finger and keeps charging while you hold",
+        "hold to the deepest tier → the cloud spends everything in one bolt down to the earth, and is gone",
+        "drag → shepherds a cloud across the sky",
+        "rapid taps → a flicker, then a calved little cloud, then a forced merger, then every cloud strikes in turn",
+        "shake the phone → static: every cloud gains charge and flickers",
+        "press the clear button → the sky is cleared",
+      ],
+    },
   },
   // The felt-bar declaration for scripts/test-room-quality.mjs — AGENTS.md
   // §"The room quality bar" items 3/5/6. The code answers each line the

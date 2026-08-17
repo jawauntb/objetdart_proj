@@ -65,6 +65,18 @@ const insects = {
       "after about twenty seconds of quiet one cricket chirps and a ripple of light passes through the swarm — the meadow reminding you it is alive",
     ],
     keeps: "every body still on the wing, its seed and stage and role, so the swarm you left is the swarm you return to.",
+    plain: {
+      what: "this room is a swarm of insects at a meadow's edge at dusk, milling around a lantern. each body simply is its behavior — grazers drift with the flock, pollinators chase the light, a hunter thins the crowd — and the eggs you lay hatch and grow up on their own.",
+      how: [
+        "tap → startles the nearest insect into a chirp",
+        "press and hold on the grass → lays a clutch of eggs; keep holding → they hatch and grow up under your finger",
+        "hold to the deepest tier → releases a mantis that hunts the swarm",
+        "drag → draws a scent trail the swarm follows",
+        "flick → a swat: the crowd scatters, and a body or two is struck loose",
+        "twist three fingers → turns dusk to night to dawn; the chorus follows",
+        "press the clear button → the meadow empties, and stays empty",
+      ],
+    },
   },
   // ——— the room quality bar, structured ————————————————————————————————
   // AGENTS.md §"The room quality bar" items 3, 5 and 6, declared per

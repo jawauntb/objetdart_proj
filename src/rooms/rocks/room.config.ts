@@ -65,6 +65,18 @@ const rocks = {
       "a grooved stone loses its clarity as well as its polish: you can see the scratch and hear the ring go dull",
     ],
     keeps: "every stone, its species and seed and the cuts made in it, and how much is still dissolved in the tray",
+    plain: {
+      what: "this room is a tray of crystals growing out of salty water — salt, quartz, pyrite and their kin. each stone's shape, the way it splits, and the ring it makes when struck all come from its own inner grid, so no two kinds sound alike.",
+      how: [
+        "tap a stone → it rings the notes its own crystal allows",
+        "press and hold on the wet dark → seeds a new crystal and feeds it while you hold",
+        "flick across a stone → it splits, along the stone's own plane rather than your line",
+        "drag a stone → turns it; drag it into a neighbour → the harder one scratches the softer",
+        "hold a nodule to the deepest tier → the geode opens and shows its lining",
+        "drag three fingers down → the water takes the stones back into solution",
+        "shake the phone → salt snows out of the water",
+      ],
+    },
   },
   // ——— the room quality bar, structured ————————————————————————————————
   // AGENTS.md §"The room quality bar" items 3, 5 and 6, declared per

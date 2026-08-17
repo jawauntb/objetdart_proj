@@ -68,6 +68,18 @@ const land = {
       "grass drowns under standing water as surely as it browns on a dry cliff — the greenest ground is the flat wet hollow, not the wet riverbed",
     ],
     keeps: "the whole parcel — its elevation and grass at every cell, and the river's course",
+    plain: {
+      what: "this room is a parcel of ground you shape with your hands — raise hills, carve valleys, rain on it. water always runs downhill, cuts channels, and greens the low wet places, and a river you set keeps its course between visits.",
+      how: [
+        "rest a finger → raises a hill that settles and greens; keep holding → it piles higher",
+        "drag → sculpts a ridge, or drag downward to carve a valley",
+        "circle a finger → rain follows your hand; the water flows downhill and cuts channels",
+        "flick → a landslide: the loose slope slides until it can rest",
+        "hold to the deepest tier → a river finds its course and keeps it, even between visits",
+        "twist three fingers → turns the season: green, gold, frost",
+        "press the clear button → the whole parcel is levelled flat",
+      ],
+    },
   },
   // ——— the room quality bar, structured ————————————————————————————————
   // AGENTS.md §"The room quality bar" items 3, 5 and 6, declared per Land.tsx.

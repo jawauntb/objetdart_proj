@@ -66,6 +66,18 @@ const root = {
       "a fortnight's absence is read off the closed-form transport equations — the network does not owe the visitor the growth they missed",
     ],
     keeps: "every node with its depth, water, sugar and sealed status, the tree's parent-child edges, the total sunlight and soil-water levels, the season the year had reached, and the hour it was last looked at.",
+    plain: {
+      what: "this room is a plant's roots hunting water in the dark, shown in a slice of soil. water climbs up from below and sugar comes down from the leaves, and the tips only grow where both arrive — tap one and its pitch tells you how deep it is.",
+      how: [
+        "tap → the nearest root tip rings its depth: shallow rings high, deep rings low",
+        "press and hold → a new tip sprouts from the nearest root and grows under your finger",
+        "hold to the deepest tier → seals the tip as a branch point the plant keeps",
+        "twist three fingers → turns the year; summer feeds the roots, winter stalls them",
+        "drag three fingers → down raises the groundwater, across is sunlight on the leaves",
+        "knock the phone → shakes the youngest, weakest tips loose; the mature ones hold",
+        "press the clear button → the network is let go",
+      ],
+    },
   },
   // The felt-bar declaration for scripts/test-room-quality.mjs — AGENTS.md
   // §"The room quality bar" items 3/5/6, round-trip-derived from spec.life

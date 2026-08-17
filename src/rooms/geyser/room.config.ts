@@ -67,6 +67,18 @@ const geyser = {
       "a fortnight's absence is read off a closed-form cycle counter, not replayed — the room does not owe the visitor the fires they missed",
     ],
     keeps: "the current head, the temperature, the phase the column is in, the count of eruptions ever fired, the season the year had reached, and the hour it was last looked at.",
+    plain: {
+      what: "this room is a geyser: hot ground, a narrow throat, and a long wait. water and heat build underground until they cross a trigger and the column fires — the room is less the fountain than the patience before one, and it keeps building even while you are away.",
+      how: [
+        "tap → rings the ground; the pitch rises as an eruption gets close, so you can hear the wait",
+        "press and hold → your palm warms the ground and the build speeds up",
+        "hold to the deepest tier → fires the geyser now, ready or not",
+        "flick → throws a bubble that bursts where it lands",
+        "twist two fingers → raises a chart of the water, the heat, and the time until the next eruption",
+        "drag with three fingers → down is rain, across is underground warmth — both feed the next fire",
+        "knock the phone near the trigger → a hard knock can push a nearly-ready geyser over the top",
+      ],
+    },
   },
   // ——— the room quality bar, structured ————————————————————————————————
   // Round-trip-derived from Geyser.tsx + geyserflow.ts. The declared noun in

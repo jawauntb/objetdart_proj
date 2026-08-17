@@ -73,6 +73,18 @@ const spring = {
       "a wide-throated seep bubbles on its own, unasked — the air it breathes rises and pops at the surface at a rate that is just the flux, seen",
     ],
     keeps: "the current head, the pool level, every seep with its throat and its ring, the season the year had reached, and the hour it was last looked at.",
+    plain: {
+      what: "this room is a natural spring: a small pool fed from underground water through openings you make in the ground. the note of every ripple is the pressure of the water below, so you can hear how full the ground is.",
+      how: [
+        "tap → a ripple; its note tells you the water pressure underneath — deep water rings low",
+        "press and hold → opens a seep in the ground; keep holding and it widens, letting more water through",
+        "hold to the deepest tier → the seep opens fully and stays open between visits",
+        "flick → tosses the standing bubble; it rings like a little bell where it lands",
+        "drag three fingers → down is rain refilling the ground, across is the sun drying it out",
+        "twist three fingers → turns the year: the thaw runs high, late summer runs low",
+        "watch an open seep → it bubbles on its own, exactly as fast as the water flows",
+      ],
+    },
   },
   // ——— the room quality bar, structured ————————————————————————————————
   // AGENTS.md §"The room quality bar" items 3, 5 and 6, declared per

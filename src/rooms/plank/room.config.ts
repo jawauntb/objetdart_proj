@@ -58,6 +58,18 @@ const plank = {
       "the vacuum borrows a pair every few breaths and gives it back; after twenty idle seconds it borrows one where your finger might rest",
     ],
     keeps: "the weave — every stitch, at the spin and the place you left it",
+    plain: {
+      what: "this room is the floor of the world — the smallest scale there is, where space itself is a restless foam. rest a finger and threads knit into a stitch of space: where the weave grows dense the foam calms, and where it is bare it never stops seething.",
+      how: [
+        "tap → the nearest stitch rings; bare foam answers with a borrowed flicker",
+        "rest a finger → threads gather into a new stitch; keep holding → it grows heavier and lower-voiced",
+        "hold far past that → the stitch collapses into a pinprick hole that slowly evaporates",
+        "drag one stitch onto another → they fuse into one loop carrying both",
+        "circle a finger → the whole weave twists into a vortex around your hand",
+        "twist two fingers → three views: the foam, the bare network, the shape of space drawn as contours",
+        "pinch down past the floor → you come out at the whole world; the scale is a loop",
+      ],
+    },
   },
 } as const satisfies RoomManifest;
 

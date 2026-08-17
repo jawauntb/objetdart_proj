@@ -70,6 +70,18 @@ const reef = {
       "a fortnight's absence is read off the closed-form logistic — the reef does not owe the visitor the growth they missed",
     ],
     keeps: "every polyp with its size and its ring, the current direction and strength, the illumination gradient's angle, the season the year had reached, and the hour it was last looked at.",
+    plain: {
+      what: "this room is a slice of sunlit reef: small coral animals settling on a stone frame, growing where light and current feed them. each one rings at a pitch that is exactly its size, so you can hear how grown the colony is.",
+      how: [
+        "tap → a ripple, and the nearest coral rings; young ones ring high, old cornerstones ring low",
+        "press and hold → a new coral settles under your finger and grows while you hold",
+        "hold to the deepest tier → seals it as a cornerstone the reef keeps between visits",
+        "flick → scatters a puff of spawn where you flicked",
+        "twist three fingers → turns the year; summer grows the colony, winter slows it",
+        "knock the phone hard → sweeps the young loose; the cornerstones hold",
+        "press the clear button → the reef is emptied",
+      ],
+    },
   },
   // The felt-bar declaration for scripts/test-room-quality.mjs — AGENTS.md
   // §"The room quality bar" items 3/5/6, round-trip-derived from spec.life

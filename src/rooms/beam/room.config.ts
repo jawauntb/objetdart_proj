@@ -50,6 +50,17 @@ const beam = {
       "a petal breaks formation and streaks across the sky as a meteor every so often, on its own",
     ],
     keeps: "your tempo, day/night state, and how far apart you left the suns",
+    plain: {
+      what: "this room is a pair of soft suns wearing rings of glowing petals, drifting through a day of changing light. it behaves like a great eye: tap to refocus it, hold to open it wider, and it remembers the rhythm you give it.",
+      how: [
+        "tap → the focus shifts to where you tapped, with a ripple as wide as the strike",
+        "press and hold → the eye keeps opening for as long as you hold; let go → a long exhale",
+        "drag → a gust leans the petals; circle your finger → the whole formation stirs after your hand",
+        "tap a steady beat → the room learns your tempo and keeps it, even after you leave",
+        "pinch → pulls the two suns apart or squeezes them together; close enough and they merge in a flash",
+        "rapid taps → three send a shimmer round the rings, five quicken the suns' dance, seven wake the whole bloom",
+      ],
+    },
   },
   // ——— the room quality bar, structured ————————————————————————————————
   // Phase 4 (Track 2) migration: saveMemory() at every tempo/night/sep

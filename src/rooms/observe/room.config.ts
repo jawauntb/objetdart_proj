@@ -84,6 +84,17 @@ const observe = {
     ],
     keeps:
       "the ghost spectrum you built and the standing population of molecules, at the concentration and wavelength you left the beam on",
+    plain: {
+      what: "this room is one chemical substance seen at five zoom levels — a heap of crystals, the crystals dissolving into a beaker, a tray of the liquid, one molecule, and the cloud of electrons on its ring. at the tray, your finger is a beam of light: molecules light up only at the colors they truly absorb, which is how chemists identify a substance.",
+      how: [
+        "pinch → zooms between the five views of the same substance",
+        "tap the tray → a flash of one color (violet left, red right); molecules that match it light up",
+        "drag across the tray → sweeps the beam through every color; a fingerprint curve builds along the top",
+        "at the molecule → drag spins it in space; twist flips it into its mirror image",
+        "press and hold → a droplet falls and more molecules gather while you hold",
+        "hold to the deepest tier → the fingerprint you built is kept for your next visit",
+      ],
+    },
   },
   // ——— the room quality bar, structured ————————————————————————————
   life: {
