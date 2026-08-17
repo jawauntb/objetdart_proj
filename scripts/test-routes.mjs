@@ -102,6 +102,7 @@ const expectedKeys = [
   "manifold",
   "overlook",
   "relativity",
+  "group",
   "loom",
   "storm",
   "clouds",
