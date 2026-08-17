@@ -64,6 +64,18 @@ const solar = {
     ],
     keeps:
       "the epoch and every element — precessed orbits, planted worlds, their weights, the sun's own weight, and the pace of the days",
+    plain: {
+      what: "this room is a small solar system that keeps orbiting while you are away — come back in a week and the planets sit exactly where a week puts them. the worlds pull on each other, fall into rhythms, and sing: each planet's note is its own orbit turned into sound.",
+      how: [
+        "tap a planet → it flares and sings its orbit; outer worlds sing lower",
+        "press and hold on open sky → a new world condenses; the longer the hold, the heavier it grows",
+        "drag a planet → pulls its orbit with your hand; pulled outward, its voice falls",
+        "flick a planet hard enough → it escapes the system for good",
+        "hold a planet to the deepest tier → the sky gathers behind it into a grand line-up, then drifts apart",
+        "tap a steady beat → the chosen world's year retimes onto your pulse",
+        "twist two fingers → the sky becomes a page of notes, each world drawn as the music of its orbit",
+      ],
+    },
   },
   // ——— the room quality bar, structured ————————————————————————————————
   // Phase 4 (Track 2) migration: the system's persistence moved from a

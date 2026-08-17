@@ -66,6 +66,18 @@ const marsh = {
       "a fortnight's absence is read off a closed-form diffusion — the marsh does not owe the visitor the breaths it took",
     ],
     keeps: "every reed with its height, sealed status and phase, every biofilm mat's mass, the oxygen field as a small grid, the sunlight scalar, the season the year had reached, and the hour it was last looked at.",
+    plain: {
+      what: "this room is a wetland seen from above: reeds standing in shallow water, and the oxygen dissolved in that water breathing between them. reeds make oxygen in the sun, the film of life on the water uses it up — and you can hear the balance, because every spot rings at its own oxygen level.",
+      how: [
+        "tap → a ripple, and the spot rings its oxygen: fresh water rings high, stagnant water rings low",
+        "press and hold → plants a reed that grows while you hold and feeds oxygen to the water around it",
+        "hold to the deepest tier → the reed is sealed at full height and kept between visits",
+        "flick → throws a burst of oxygen at that point",
+        "twist three fingers → turns the year; summer fills the water with oxygen, winter slows everything",
+        "knock the phone → stirs the whole field, mixing stagnant patches back into the rest",
+        "press the clear button → the marsh is emptied",
+      ],
+    },
   },
   // The felt-bar declaration for scripts/test-room-quality.mjs — AGENTS.md
   // §"The room quality bar" items 3/5/6, round-trip-derived from spec.life

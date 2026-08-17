@@ -57,6 +57,18 @@ const group = {
       "left idle, the fragment ghost-turns by its last kept move and settles — one breath, near-silent unison",
     ],
     keeps: "every standing mark and every kept move; an emptied field stays empty.",
+    plain: {
+      what: "this room is about symmetry — the moves that leave a pattern looking the same. you only ever see part of the pattern; when you find a move that fits, it tells you where the missing pieces must go.",
+      how: [
+        "press and hold → a mark condenses under your finger; holding longer charges it",
+        "drag → turns the whole pattern as a ghost; at most angles it shimmers, at the right one it clicks",
+        "let go on a click → the move is kept, and pale seats appear where the pattern says pieces must sit",
+        "a straight stroke → proposes a mirror flip instead of a turn",
+        "tap → the last kept move acts on the nearest mark, as hard as you tapped",
+        "hold to the deepest tier → the nearest kept move retires, and the seats it predicted dissolve",
+        "press the clear button → every mark and move is let go; the field stays empty",
+      ],
+    },
   },
   life: {
     population: {

@@ -67,6 +67,18 @@ const atmosphere = {
       "walk the sun down to the horizon and the reds arrive by subtraction — the same λ⁻⁴ that keeps noon blue",
     ],
     keeps: "the lanterns you gave to the wind — they drift on their layer's wind between visits",
+    plain: {
+      what: "this room is the column of air above a mountain, seen from the side — ground at the bottom, the edge of space at the top. press to warm a patch of air: it rises, cools, and turns to cloud exactly the way real clouds form.",
+      how: [
+        "tap → a ring of sound; deep near the ground, thin and high up near space",
+        "press and hold → warms the air under your finger until it rises and turns to cloud",
+        "keep holding → the cloud builds taller; hold to the very end → a lantern joins the wind and is kept",
+        "drag → stirs the air at that height and carries the cloud you touch",
+        "flick → tears a cloud apart and throws the rag downwind",
+        "drag with three fingers → walks the sun across the sky and changes the weather every cloud obeys",
+        "press the clear button → your lanterns are let go",
+      ],
+    },
   },
   // ——— the room quality bar, structured ————————————————————————————————
   // AGENTS.md §"The room quality bar" items 3, 5 and 6, declared per

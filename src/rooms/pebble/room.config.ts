@@ -68,6 +68,18 @@ const pebble = {
       "the same mineral can be identified from the ring even under deep polish; the load-bearing map only damps, does not erase",
     ],
     keeps: "the pebble's lattice (system, centering, axial ratios), its growth-ring history, the current polish depth, and the season the stream is at.",
+    plain: {
+      what: "this room is one water-worn stone, cut open so you can see the rings it grew. tap it and it rings like a small bell — the more the water has polished it, the shorter it rings, so you can hear its history.",
+      how: [
+        "tap the stone → it rings; a fresh crystal rings long, a well-polished pebble rings short",
+        "press and hold on the shell → rubs the polish deeper; the high notes quiet as it smooths",
+        "hold to the deepest tier → polishes the stone as far as it will go, and keeps it that way",
+        "drag → turns the stone in the light",
+        "flick across it → splits the stone along a plane its own crystal allows, never your line",
+        "twist three fingers → runs the stream's seasons; the stone grows rounder, or older and sharper",
+        "knock the phone → strikes the stone like a bell",
+      ],
+    },
   },
   // ——— the room quality bar, structured ————————————————————————————————
   // Round-trip-derived from Pebble.tsx + pebblecore.ts. Pebble's spec-noun

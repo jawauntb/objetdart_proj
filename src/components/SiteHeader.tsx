@@ -2,11 +2,24 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Sigil from "@/components/Sigil";
 import RouteSigil from "@/components/RouteSigil";
 import ConstellationGlyph from "@/components/ConstellationGlyph";
 import { isDarkRoutePath, NAVIGATION_ROUTES, PRIMARY_ROUTE_KEYS, SITE_ROUTE_BY_KEY } from "@/lib/routes";
+import { buildNavSections, disciplinesOf } from "@/lib/nav-groups";
+import { NAV_DISCIPLINES, type NavDiscipline } from "@/lib/room-registry";
+
+// The grouped sections are presentation computed from the same derived
+// sequence — NAVIGATION_ROUTES chunked by registry facts, never re-sorted
+// (src/lib/nav-groups.ts; pinned by scripts/test-nav-groups.mjs).
+const NAV_SECTIONS = buildNavSections(
+  NAVIGATION_ROUTES.map((r) => ({ key: r.key, href: r.href })),
+);
+
+type DisciplineFilter = NavDiscipline | "all";
+
+const FILTER_CHIPS: readonly DisciplineFilter[] = ["all", ...NAV_DISCIPLINES];
 
 export default function SiteHeader() {
   const pathname = usePathname() ?? "/";
@@ -21,7 +34,33 @@ export default function SiteHeader() {
   const dragRef = useRef<{ startX: number; startY: number; pointerId: number } | null>(null);
   const [dragOffset, setDragOffset] = useState(0);
 
+  // which discipline chip is pressed; "all" shows every room
+  const [discipline, setDiscipline] = useState<DisciplineFilter>("all");
+  // per-ring disclosure overrides; unset rings fall back to the default
+  // (only the current route's ring starts open)
+  const [ringToggles, setRingToggles] = useState<Record<string, boolean>>({});
+
   const close = useCallback(() => setOpen(false), []);
+
+  const isCurrent = useCallback(
+    (href: string) => pathname === href || (href !== "/" && pathname.startsWith(href)),
+    [pathname],
+  );
+
+  // the spine group holding the current route — its ring starts open
+  const currentGroupId = useMemo(() => {
+    for (const g of NAV_SECTIONS.spine) {
+      for (const key of [g.primary, ...g.peers]) {
+        if (isCurrent(SITE_ROUTE_BY_KEY[key].href)) return g.id;
+      }
+    }
+    return null;
+  }, [isCurrent]);
+
+  // arriving somewhere new folds the other rings back to their default
+  useEffect(() => {
+    setRingToggles({});
+  }, [pathname]);
 
   // Body scroll lock while the panel is open.
   useEffect(() => {
@@ -132,6 +171,202 @@ export default function SiteHeader() {
 
   const headerInk = dark ? "rgba(244, 238, 222, 0.96)" : "var(--ink)";
   const headerInk2 = dark ? "rgba(232,226,213,0.78)" : "var(--ink-2)";
+
+  const filtering = discipline !== "all";
+  const matchesFilter = useCallback(
+    (key: string) => discipline === "all" || disciplinesOf(key).includes(discipline),
+    [discipline],
+  );
+
+  // ——— panel rows ———
+
+  const roomRow = (key: string, opts?: { inRing?: boolean; dimmed?: boolean }) => {
+    const r = SITE_ROUTE_BY_KEY[key];
+    const current = isCurrent(r.href);
+    const href = r.anchor && isHome ? `#${r.anchor}` : r.href;
+    const onClick = (e: React.MouseEvent) => {
+      if (r.anchor) handleAnchor(e, r.anchor);
+      close();
+    };
+    return (
+      <Link
+        href={href}
+        onClick={onClick}
+        aria-current={current ? "page" : undefined}
+        className="oda-row"
+        style={{
+          display: "grid",
+          gridTemplateColumns: "28px 1fr auto",
+          alignItems: "center",
+          gap: 14,
+          minHeight: 44,
+          padding: "8px",
+          borderRadius: 4,
+          color: "inherit",
+          opacity: opts?.dimmed ? 0.4 : current ? 1 : 0.92,
+        }}
+      >
+        <span
+          className="oda-row__sigil"
+          style={{
+            display: "inline-flex",
+            width: 24,
+            height: 24,
+            alignItems: "center",
+            justifyContent: "center",
+            color: dark ? "rgba(232,226,213,0.86)" : "var(--ink-2)",
+            transition: "transform var(--t), color var(--t)",
+          }}
+        >
+          <RouteSigil kind={r.icon} size={opts?.inRing ? 20 : 24} />
+        </span>
+        <span
+          className="t-mono"
+          style={{
+            fontSize: opts?.inRing ? 13 : 14,
+            letterSpacing: "0.04em",
+            textTransform: "lowercase",
+            color: dark ? "rgba(244,238,222,0.96)" : "var(--ink)",
+          }}
+        >
+          {r.key}
+        </span>
+        <span
+          className="oda-row__desc t-mono"
+          style={{
+            fontSize: 11,
+            letterSpacing: "0.04em",
+            opacity: 0.5,
+            textAlign: "right",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {r.desc}
+        </span>
+      </Link>
+    );
+  };
+
+  const sectionHead = (label: string) => (
+    <div
+      className="t-mono"
+      style={{
+        fontSize: 11,
+        letterSpacing: "0.10em",
+        textTransform: "lowercase",
+        opacity: 0.6,
+        margin: "16px 0 4px",
+      }}
+    >
+      {label}
+    </div>
+  );
+
+  const listStyle: React.CSSProperties = {
+    listStyle: "none",
+    padding: 0,
+    margin: 0,
+    display: "flex",
+    flexDirection: "column",
+    gap: 2,
+  };
+
+  // laws / lenses / reading (and the fold): flat short lists; while a
+  // discipline is pressed, rooms without the tag drop out and an emptied
+  // section takes its header with it
+  const flatSection = (label: string, keys: string[]) => {
+    const shown = filtering ? keys.filter(matchesFilter) : keys;
+    if (shown.length === 0) return null;
+    return (
+      <div key={label}>
+        {sectionHead(label)}
+        <ul style={listStyle}>
+          {shown.map((k) => (
+            <li key={k}>{roomRow(k)}</li>
+          ))}
+        </ul>
+      </div>
+    );
+  };
+
+  const spineGroups = NAV_SECTIONS.spine
+    .map((g) => {
+      const primaryMatches = matchesFilter(g.primary);
+      const ringShown = filtering ? g.peers.filter(matchesFilter) : g.peers;
+      if (filtering && !primaryMatches && ringShown.length === 0) return null;
+      const ringOpen = filtering ? ringShown.length > 0 : (ringToggles[g.id] ?? (g.id === currentGroupId));
+      return (
+        <li key={g.id}>
+          <div style={{ display: "flex", alignItems: "stretch" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {roomRow(g.primary, { dimmed: filtering && !primaryMatches })}
+            </div>
+            {g.peers.length > 0 && !filtering && (
+              <button
+                type="button"
+                className="oda-disclose"
+                aria-expanded={ringOpen}
+                aria-label={`${g.label} — ${g.peers.length} rooms`}
+                onClick={() => setRingToggles((t) => ({ ...t, [g.id]: !ringOpen }))}
+                style={{
+                  width: 44,
+                  minHeight: 44,
+                  flex: "0 0 auto",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 4,
+                  border: "none",
+                  borderRadius: 4,
+                  background: "transparent",
+                  color: "inherit",
+                  cursor: "pointer",
+                  opacity: 0.65,
+                }}
+              >
+                <span className="t-mono" style={{ fontSize: 10, letterSpacing: "0.04em" }}>
+                  {g.peers.length}
+                </span>
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 12 12"
+                  aria-hidden="true"
+                  style={{
+                    transform: ringOpen ? "none" : "rotate(-90deg)",
+                    transition: reduceMotion ? undefined : "transform var(--t)",
+                  }}
+                >
+                  <path
+                    d="M2.5 4.25 L6 7.75 L9.5 4.25"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            )}
+          </div>
+          {ringOpen && ringShown.length > 0 && (
+            <ul
+              style={{
+                ...listStyle,
+                margin: "0 0 4px 20px",
+                paddingLeft: 10,
+                borderLeft: dark ? "1px solid rgba(232,226,213,0.14)" : "1px solid var(--rule)",
+              }}
+            >
+              {ringShown.map((k) => (
+                <li key={k}>{roomRow(k, { inRing: true })}</li>
+              ))}
+            </ul>
+          )}
+        </li>
+      );
+    })
+    .filter(Boolean);
 
   return (
     <>
@@ -304,7 +539,7 @@ export default function SiteHeader() {
             "max(24px, env(safe-area-inset-top, 0px)) 28px calc(32px + env(safe-area-inset-bottom, 0px))",
           display: "flex",
           flexDirection: "column",
-          gap: 22,
+          gap: 18,
           overflowY: "auto",
           overscrollBehavior: "contain",
           touchAction: "pan-y",
@@ -362,6 +597,8 @@ export default function SiteHeader() {
               alignItems: "center",
               justifyContent: "center",
               gap: 6,
+              whiteSpace: "nowrap",
+              flexShrink: 0,
             }}
           >
             close ×
@@ -375,77 +612,70 @@ export default function SiteHeader() {
           }}
         />
 
-        {/* the rows */}
-        <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 2 }}>
-          {NAVIGATION_ROUTES.map((r) => {
-            const isCurrent =
-              pathname === r.href ||
-              (r.href !== "/" && pathname.startsWith(r.href));
-            const href = r.anchor && isHome ? `#${r.anchor}` : r.href;
-            const onClick = (e: React.MouseEvent) => {
-              if (r.anchor) handleAnchor(e, r.anchor);
-              close();
-            };
+        {/* discipline filter — chips; a pressed chip hides rooms without the tag */}
+        <div
+          role="group"
+          aria-label="filter by discipline"
+          style={{ display: "flex", flexWrap: "wrap", gap: 6 }}
+        >
+          {FILTER_CHIPS.map((d) => {
+            const active = discipline === d;
             return (
-              <li key={r.key}>
-                <Link
-                  href={href}
-                  onClick={onClick}
-                  className="oda-row"
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "28px 1fr auto",
-                    alignItems: "center",
-                    gap: 14,
-                    minHeight: 44,
-                    padding: "8px",
-                    borderRadius: 4,
-                    color: "inherit",
-                    opacity: isCurrent ? 1 : 0.92,
-                  }}
-                >
-                  <span
-                    className="oda-row__sigil"
-                    style={{
-                      display: "inline-flex",
-                      width: 24,
-                      height: 24,
-                      alignItems: "center",
-                      justifyContent: "center",
-                      color: dark ? "rgba(232,226,213,0.86)" : "var(--ink-2)",
-                      transition: "transform var(--t), color var(--t)",
-                    }}
-                  >
-                    <RouteSigil kind={r.icon} size={24} />
-                  </span>
-                  <span
-                    className="t-mono"
-                    style={{
-                      fontSize: 14,
-                      letterSpacing: "0.04em",
-                      textTransform: "lowercase",
-                      color: dark ? "rgba(244,238,222,0.96)" : "var(--ink)",
-                    }}
-                  >
-                    {r.key}
-                  </span>
-                  <span
-                    className="oda-row__desc t-mono"
-                    style={{
-                      fontSize: 11,
-                      letterSpacing: "0.04em",
-                      opacity: 0.5,
-                      textAlign: "right",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {r.desc}
-                  </span>
-                </Link>
-              </li>
+              <button
+                key={d}
+                type="button"
+                className="t-mono oda-chip"
+                aria-pressed={active}
+                onClick={() => setDiscipline(active && d !== "all" ? "all" : d)}
+                style={{
+                  border: `1px solid ${
+                    active
+                      ? dark
+                        ? "rgba(232,226,213,0.55)"
+                        : "var(--ink)"
+                      : dark
+                        ? "rgba(232,226,213,0.22)"
+                        : "var(--rule)"
+                  }`,
+                  borderRadius: 999,
+                  background: active
+                    ? dark
+                      ? "rgba(232,226,213,0.14)"
+                      : "rgba(21,23,26,0.07)"
+                    : "transparent",
+                  color: "inherit",
+                  cursor: "pointer",
+                  padding: "7px 11px",
+                  minHeight: 34,
+                  fontSize: 11,
+                  letterSpacing: "0.05em",
+                  textTransform: "lowercase",
+                  lineHeight: 1,
+                  opacity: active ? 1 : 0.78,
+                  transition: "border-color var(--t), background var(--t), opacity var(--t)",
+                }}
+              >
+                {d}
+              </button>
             );
           })}
-        </ul>
+        </div>
+
+        {/* the sections — same derived order, grouped */}
+        <div style={{ marginTop: -6 }}>
+          {flatSection("the fold", NAV_SECTIONS.fold)}
+
+          {spineGroups.length > 0 && (
+            <div>
+              {sectionHead("the scale spine")}
+              <ul style={listStyle}>{spineGroups}</ul>
+            </div>
+          )}
+
+          {flatSection("laws", NAV_SECTIONS.laws)}
+          {flatSection("lenses & instruments", NAV_SECTIONS.instruments)}
+          {flatSection("reading", NAV_SECTIONS.reading)}
+        </div>
       </aside>
 
       {/* scoped styles for the panel hover + nav responsiveness */}
@@ -456,6 +686,9 @@ export default function SiteHeader() {
             .oda-row { transition: background var(--t), color var(--t); }
             .oda-row:hover { background: ${dark ? "rgba(232,226,213,0.06)" : "rgba(21,23,26,0.04)"}; }
             .oda-row:hover .oda-row__sigil { transform: scale(1.12); color: ${dark ? "rgba(244,238,222,0.98)" : "var(--ink)"}; }
+            .oda-disclose { transition: background var(--t), opacity var(--t); }
+            .oda-disclose:hover { background: ${dark ? "rgba(232,226,213,0.06)" : "rgba(21,23,26,0.04)"}; opacity: 1; }
+            .oda-chip:hover { opacity: 1; }
             @media (max-width: 899px) { .oda-primary-nav { display: none !important; } }
             @supports (height: 100dvh) { .oda-panel { height: 100dvh !important; } }
             @media (max-width: 699px) {

@@ -19,6 +19,14 @@
   margin: 0 auto;
   padding: var(--pad-y) var(--pad-x);
 }
+/* The column carries data-pretext-ignore (see src/app/guide/page.tsx); this
+ * pins any word wrapped before the attribute was seen, so the guide's prose
+ * keeps its true spaces on narrow screens. */
+.guide .global-pretext-text {
+  display: inline;
+  animation: none !important;
+  transform: none !important;
+}
 .guide a { transition: color var(--t); }
 .guide-hero { max-width: 100%; }
 .guide-hero-room {
@@ -93,6 +101,42 @@
   border-bottom: 1px solid rgba(232, 226, 213, 0.22);
 }
 .guide-toc a:hover { color: var(--candle); border-bottom-color: var(--candle); }
+
+/* The two voices. Every entry is server-rendered as a pair — the plain
+ * translation and the field notes — and <html data-guide-voice> (set by the
+ * boot script pre-paint, then by GuideVoiceToggle / the chrome `?`) decides
+ * which member shows. Plain is the default for a visitor who never chose. */
+html[data-guide-voice="field"] .guide .guide-voice-plain { display: none; }
+html:not([data-guide-voice="field"]) .guide .guide-voice-field { display: none; }
+.guide-voice-toggle {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  margin-top: 24px;
+  border: 1px solid rgba(232, 226, 213, 0.34);
+}
+.guide-voice-toggle button {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: 0;
+  color: rgba(232, 226, 213, 0.78);
+  font-size: 11px;
+  letter-spacing: 0.10em;
+  line-height: 1;
+  min-height: 44px;
+  padding: 0 16px;
+  cursor: pointer;
+  transition: color var(--t), background var(--t);
+}
+.guide-voice-toggle button + button { border-left: 1px solid rgba(232, 226, 213, 0.34); }
+.guide-voice-toggle button:hover { color: rgba(244, 238, 222, 0.98); }
+.guide-voice-toggle button[aria-pressed="true"] {
+  background: rgba(244, 238, 222, 0.94);
+  color: #10141f;
+}
+.guide-voice-toggle button:focus-visible { outline: 2px solid var(--candle); outline-offset: -2px; }
+.guide-room-plain-what { font-style: normal; }
 .guide-section {
   margin-top: clamp(64px, 9vw, 110px);
   padding-top: 28px;

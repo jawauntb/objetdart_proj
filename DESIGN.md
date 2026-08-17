@@ -45,10 +45,17 @@ These two axioms — three registers, water-as-template — predict almost every
 `/manifold` and nothing else: the fold — every scale kept in one place — is the
 index, and the room keeps its one registry address so chrome, guide, and axis
 all resolve where they always did. The constellation panel ("view all" in the
-header) remains the way to every other room. On a first visit, after a breath
-so the fold is seen, a dismissable invitation (`ArrivalInvitation`) names the
-album and the hand; dismissal is remembered at `objetdart:arrival:v1` and the
-card does not return, nor does it open the chrome `?`.
+header) remains the way to every other room; it reads as sections now — the
+fold, the scale spine with each peer ring folded under its leading room, laws,
+lenses & instruments, reading — derived presentation (`src/lib/nav-groups.ts`)
+over the same scale-graph order, never a second sort, with discipline chips
+(`disciplines` in `src/lib/room-registry.ts`) to filter by what a room teaches
+with. On a first visit, after a breath so the fold is seen, a dismissable
+invitation (`ArrivalInvitation`) says in plain english what the scale model is,
+what it is for, how the hand works on a phone and on a computer, and where the
+per-room big ideas live; dismissal is remembered at `objetdart:arrival:v2` (v1
+records are ignored, so everyone meets the plain card once) and the card does
+not return, nor does it open the chrome `?`.
 
 The manifold replaced a scrolling gallery of live route previews
 (`ScrollingGallery`, now unmounted like `Threshold` before it), which itself
@@ -84,6 +91,7 @@ surfaces did not go away — they became routes:
 - `/kept` — your trail. Cards with sigil + date + headline + `compare ↔` toggle + `forget`. Two-selection mode reveals a `compare →` banner.
 - `/compare?a=&b=` — two polygons overlaid, candle-orange (A) and sea-blue (B), with axis labels, side-by-side readings, top-4 concern delta.
 - `/colophon` — standalone colophon.
+- `/guide` — the field guide, the one surface where the site explains itself; the chrome `?` on every screen mirrors the current route's entry. Both now speak two voices from the same guide data — each entry carries a plain-english `plain` block beside the room's own register, and a `plain words` / `field notes` toggle (default plain, remembered at `objetdart:guide-voice:v1`) switches between them. The components write no room prose in either voice; on `/guide` both voices are server-rendered and swapped by `<html data-guide-voice>` alone.
 
 ---
 
@@ -164,6 +172,7 @@ src/
                                        written reason for whatever it cannot say
     routes.ts                        — derived from src/rooms/ manifests
     nav-order.ts                     — dropdown order from SCALE_BANDS + PEER_CIRCLES
+    nav-groups.ts                    — dropdown sections chunked from that order
     scale.ts / peers.ts              — the scale manifold; bands, doors, peer circles
     gesture/                         — the semantic gesture engine + its thresholds
     vessel.ts                        — tilt / shake / knock / flip, one subscription

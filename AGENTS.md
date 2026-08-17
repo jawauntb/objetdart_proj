@@ -148,8 +148,10 @@ And the laws that no test can reach — hold these yourself:
 
   The second narrowing is the arrival invitation on `/manifold` only
   (`src/components/ArrivalInvitation.tsx`): volunteered once after a short breath
-  so the fold is seen first, dismissable like a modal, remembered at
-  `objetdart:arrival:v1`, never inside another room, and it does not open the `?`.
+  so the fold is seen first, dismissable like a modal, written in plain english
+  by owner decree (v1 read as esoteric — a smart twelve-year-old must understand
+  every sentence on that card), remembered at `objetdart:arrival:v2`, never
+  inside another room, and it does not open the `?`.
   The ban on copy, labels and tooltips *inside* rooms stands exactly where it
   stood; discovery is still physical, and help is still asked for.
 - **Voice**: lowercase product copy, two of the three registers
@@ -255,6 +257,13 @@ page belongs on the axis (band or peer circle) or in `SCALE_EXEMPT_KEYS`
 rest of the cabinet/shore/sky/hearth rings included. A manifest states this
 once, as its `place`; `<RoomShell>` mounts `AxisChrome` from it.
 `scripts/test-routes.mjs` and `scripts/test-rooms.mjs` pin it.
+The dropdown's grouping (fold / spine / laws / lenses / reading, with each
+peer ring collapsed under its leading room) is derived presentation over that
+same order — `src/lib/nav-groups.ts` chunks `NAVIGATION_ROUTES` by registry
+facts, so a new room lands in its section with no nav edit, and its
+`disciplines` tags (annotated in `src/lib/room-registry.ts`, from
+`NAV_DISCIPLINES`) feed the menu's filter chips; `scripts/test-nav-groups.mjs`
+pins both.
 
 ## The field guide (`/guide`) — the documentation law
 
@@ -276,15 +285,23 @@ so the rooms never have to — in-room copy stays instruction-free, always.
   is the reminder working, not an obstacle — never silence it by deleting the
   entry you should be updating.
 - **The guide has one mirror and no copies.** The chrome `?` on every screen
-  renders the current route's own entry and nothing else: route → key by
-  `guideKeyForPath` (`src/lib/guide-route.ts`, reading `SITE_ROUTES`), key →
-  entry by `GUIDE_ROOM_BY_KEY` (`src/data/guide.ts`). Editing a manifest or
-  `src/data/guide.ts` is the only way to change what the `?` says — there is
-  nowhere else to type it. `npm run test:room-help` keeps both halves total
-  over every registered route, and fails the moment a room key, a route, or a
-  line of a room's copy appears in the component. A route that deliberately has
-  no entry (`/compare`, `/reading/<hash>`) renders no `?` at all rather than an
-  empty one, and says so by name in that test.
+ renders the current route's own entry and nothing else: route → key by
+ `guideKeyForPath` (`src/lib/guide-route.ts`, reading `SITE_ROUTES`), key →
+ entry by `GUIDE_ROOM_BY_KEY` (`src/data/guide.ts`). Editing a manifest or
+ `src/data/guide.ts` is the only way to change what the `?` says — there is
+ nowhere else to type it. `npm run test:room-help` keeps both halves total
+ over every registered route, and fails the moment a room key, a route, or a
+ line of a room's copy appears in the component. A route that deliberately has
+ no entry (`/compare`, `/reading/<hash>`) renders no `?` at all rather than an
+ empty one, and says so by name in that test.
+- **The guide carries two voices, and both live in the guide data.** Every
+ entry holds a plain-english translation beside the room's own register — a
+ `plain` block (`what` + "do x → y happens" `how` lines) on the entry, a
+ `plain` string per global binding — and the `?` and `/guide` toggle between
+ them (`plain words` / `field notes`, defaulting to plain for a visitor who
+ never chose, remembered at `objetdart:guide-voice:v1`). The components still
+ write no room prose in either voice; `npm run test:guide` fails an entry that
+ ships without its translation, exactly as it fails one without a screenshot.
 - The same law extends to the other load-bearing docs: a change that makes
   `DESIGN.md`, `docs/gesture-grammar.md`, or `docs/new-room.md` false must edit
   them in the same PR.

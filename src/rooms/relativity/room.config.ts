@@ -45,6 +45,17 @@ const relativity = {
     finds: [
       "harder flicks make comets glow hotter rather than move faster — effort is capped at the speed of light and turns to heat instead",
     ],
+    plain: {
+      what: "this room shows why the speed of light is a speed limit and what that does to time: clocks that move tick slower, and nothing you throw can beat a light pulse.",
+      how: [
+        "tap the dark → a pulse of light spreads at exactly light speed",
+        "hold two still fingers apart → a light clock ticks between them; spread them and the tick slows",
+        "drag a light clock → carrying it visibly slows its own tick",
+        "flick a beacon → its twin flies away and comes back younger than the one that stayed",
+        "flick harder → the thrown comet doesn't go faster, it just glows hotter — the limit holds",
+        "hold three fingers → time slows until light itself almost stands still",
+      ],
+    },
   },
   // ——— the room quality bar, structured ————————————————————————————————
   // AGENTS.md §"The room quality bar" items 3, 5 and 6, declared per

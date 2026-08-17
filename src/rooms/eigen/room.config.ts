@@ -60,6 +60,18 @@ const eigen = {
       "squeeze past the coarsest enough and the ember starves in the same frame",
     ],
     keeps: "every standing seam with its aim and its depth; an emptied field stays empty",
+    plain: {
+      what: "this room is about degrees of freedom — how many ways something can still move after you pin it down. the dots are the thing; press-and-hold plants a rule, and the movement that breaks the rule fades into ghosts. what keeps moving is the freedom that survived.",
+      how: [
+        "press and hold → plants a rule; the movement that breaks it dies away into ghosts",
+        "hold longer → the rule digs in deeper, and a voice in the sound swells with it",
+        "tap → nudges the dots along whatever can still move; more quick taps push in new ways",
+        "drag → stirs the living dots; pushing against a rule only slides the ghosts",
+        "hold to the deepest tier → the nearest rule lifts out; if the glow stays, it never truly constrained anything",
+        "shake the phone → the ghosts scatter while the living dots stand still",
+        "press the clear button → every rule lifts; an emptied field stays empty",
+      ],
+    },
   },
   life: {
     population: {

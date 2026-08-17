@@ -60,6 +60,18 @@ const viruses = {
       "left alone the medium keeps assembling: partial shells click together and relax on their own slow clock",
     ],
     keeps: "every standing shell — its class and seed and fold — and how many free subunits drift in the medium",
+    plain: {
+      what: "this room is about how viruses build themselves: loose protein pieces that snap together into hollow, ball-like shells with no builder but their own symmetry. it is the same trick as a geodesic dome — twelve special corners, always, however big the shell grows.",
+      how: [
+        "press and hold → drifting pieces gather into a shell; keep holding → it climbs to the next bigger size",
+        "tap a shell → it rings its size; bigger shells ring lower",
+        "drag a shell onto the floor, or onto another shell → it stamps out a copy of itself",
+        "flick a shell → it falls apart into loose pieces, none lost",
+        "hold a shell to the deepest tier → it unfolds flat into its map of tiles, and stays that way",
+        "twist two fingers → three views: the shell, its unfolded pattern, its lines of symmetry",
+        "twist three fingers → warmth lets shells wander in size; cold holds them perfect",
+      ],
+    },
   },
   // ——— the room-quality bar, structured (AGENTS.md §"The room quality bar")
   // Round-trip-derived from src/components/Viruses.tsx as it stands.

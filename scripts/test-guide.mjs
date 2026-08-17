@@ -91,12 +91,41 @@ for (const room of GUIDE_ROOMS) {
   assert.ok(room.moves.length >= 3, `${room.key}: an instrument documents at least three moves`);
 }
 
+// --- the two voices: every entry carries a plain-english translation --------
+//
+// The bug this catches: a room ships documented only in its own register, and
+// the plain-words toggle silently falls back — a stranger opens the ? and
+// reads riddles. `plain.what` opens the big idea in ordinary words;
+// `plain.how` is "do x → y happens" lines (the arrow is load-bearing: the
+// modal and the guide page split on it, exactly as they do for moves).
+//
+for (const room of GUIDE_ROOMS) {
+  if (!room.plain) {
+    assert.fail(`${room.key}: no plain translation — every entry carries both voices`);
+  }
+  assert.ok(
+    room.plain.what.length >= 40,
+    `${room.key}: plain.what must open the room's big idea in ordinary words (≥ 40 chars)`,
+  );
+  assert.ok(
+    room.plain.how.length >= 3,
+    `${room.key}: plain.how needs at least three "do x → y happens" lines`,
+  );
+  for (const line of room.plain.how) {
+    assert.ok(line.includes("→"), `${room.key}: each plain.how line reads "do x → y happens": ${line}`);
+  }
+}
+
 // --- the shared sections exist and hold their shape ------------------------
 
 assert.ok(GUIDE_FIRST_MINUTE.length >= 3, "the onboarding walk needs its steps");
 assert.ok(GUIDE_GLOBAL_BINDINGS.length >= 8, "the global bindings table must cover the grammar");
 for (const binding of GUIDE_GLOBAL_BINDINGS) {
   assert.ok(binding.gesture && binding.meaning, "each global binding names a gesture and a meaning");
+  assert.ok(
+    typeof binding.plain === "string" && binding.plain.length >= 12,
+    `${binding.gesture}: every site-wide gesture carries a plain-words translation`,
+  );
 }
 assert.ok(GUIDE_APIS.length >= 4, "every HTTP endpoint under src/app/api should be documented");
 for (const api of GUIDE_APIS) {
@@ -140,6 +169,7 @@ assert.ok(existsSync(new URL("src/app/guide/guide.css", rootUrl)), "the guide st
 assert.ok(existsSync(new URL("src/components/guide/GuideHero.tsx", rootUrl)), "the guide sections must live in src/components/guide/");
 
 console.log(
-  `guide ok: ${GUIDE_ROOMS.length} rooms documented, ${GUIDE_APIS.length} apis, ` +
-    `screenshots present, aurora deterministic across ${spotsA.length} spots`,
+  `guide ok: ${GUIDE_ROOMS.length} rooms documented in both voices, ` +
+    `${GUIDE_APIS.length} apis, screenshots present, ` +
+    `aurora deterministic across ${spotsA.length} spots`,
 );

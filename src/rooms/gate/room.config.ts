@@ -83,6 +83,18 @@ const gate = {
     ],
     keeps:
       "the current subunit (2A or 2B) and the standing binding — an empty pore stays empty, a bound one holds its block across the visit.",
+    plain: {
+      what: "this room is a tiny gate in the wall of a nerve cell, drawn in cross-section — a channel that charged particles flow through. the molecule from the sample room sits above the gate: while it is lodged there nothing flows, and you see the block as the flow stopping, not as a caption.",
+      how: [
+        "drag the molecule → move it; drop it into the pocket above the gate and the flow stops",
+        "drag it up and out → it lets go, and the particles pour through again when the gate opens",
+        "hold two still fingers apart → props the gate open — unless the molecule is lodged, and then nothing helps",
+        "press and hold above the channel → a fresh molecule appears and may drift down and plug it on its own",
+        "twist three fingers → walks the molecule down through the whole channel and out the far side",
+        "twist two fingers → swaps one of the channel's parts for its sibling; the colours shift",
+        "knock the phone → one clean pulse rides through, if the way is clear",
+      ],
+    },
   },
   // ——— the room quality bar, structured ————————————————————————————
   life: {

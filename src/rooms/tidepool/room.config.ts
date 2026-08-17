@@ -67,6 +67,18 @@ const tidepool = {
       "the storm state raises white foam on the surface and every creature reads it — snails retreat, anemones curl, kelp thrashes; a knock during storm is a rare event the room remembers",
     ],
     keeps: "every keeper creature (snails, anemones, kelp) with kind, position, biomass, and phase; the tide clock's current τ so a returning visitor finds the pool at the right water level; the climate (warmth, wet) the world-law hand last wrote.",
+    plain: {
+      what: "this room is a rock pool the ocean left behind, on a tide that rises and falls every half minute or so. snails, anemones and kelp live in it, and everything they do — open, curl, retreat — follows where the water stands.",
+      how: [
+        "tap → a ripple; the nearest creature answers in its own voice — a warm snail, a cool anemone, a kelp shiver",
+        "press and hold → plants a creature; where your finger sits decides what settles there",
+        "hold to the deepest tier → seals it as a keeper the pool remembers between visits",
+        "twist three fingers → turns the tide by hand — watch the pool empty and fill in a minute",
+        "tap an anemone while the tide is out → it curls up to protect itself",
+        "shake the phone → the water scatters and every anemone snaps shut",
+        "press the clear button → the pool is emptied",
+      ],
+    },
   },
   // The felt-bar declaration for scripts/test-room-quality.mjs — AGENTS.md
   // §"The room quality bar" items 3/5/6, round-trip-derived from spec.life

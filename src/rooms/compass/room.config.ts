@@ -61,6 +61,18 @@ const compass = {
       "keeping the same reading twice answers gently instead of refusing",
     ],
     keeps: "your eight weights, the preset you last snapped to, and every reading you kept",
+    plain: {
+      what: "this room is a compass for your attention — eight things a person might care about, arranged in a circle, with a shape stretched between them. drag the shape to say how much each one weighs on you right now, and the room plays the balance you drew.",
+      how: [
+        "drag a point → that concern's weight moves, and it sings while you hold it",
+        "tap a point → it blooms, exactly as hard as you tapped",
+        "press and hold the center until the ring closes → your reading is kept",
+        "twist two fingers → the circle turns so a different concern sits at the top",
+        "tap a preset chip → the shape snaps to a ready-made balance",
+        "circle a finger → stirs the weights: one way evens them out, the other sharpens the leaders",
+        "press the clear button → the shape relaxes to neutral and your kept readings are let go",
+      ],
+    },
   },
   // ——— the room quality bar, structured ————————————————————————————————
   // Phase 4 (Track 2) migration: the compass's persistence goes through

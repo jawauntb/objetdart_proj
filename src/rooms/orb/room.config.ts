@@ -56,6 +56,18 @@ const orb = {
       "a disc held past its bloom leaves a slow ring behind where it stood",
     ],
     keeps: "every disc you gathered — where it stands, how big it grew, and which season it was born into",
+    plain: {
+      what: "this room is a handful of glowing plasma discs floating in the dark — small storms of light you can make, grow, and unmake. they push on each other, and the whole field answers your hand together.",
+      how: [
+        "rest a finger on empty dark → a disc gathers under it and grows while you hold",
+        "hold on a disc until it blooms → the disc is unmade",
+        "tap a disc → it flares, exactly as hard as you tapped",
+        "circle a finger → the discs fall into orbit around your hand",
+        "twist two fingers → the ribbons of light inside every disc turn",
+        "shake or tilt the phone → the discs scatter, or lean and fall",
+        "press the clear button → the field empties, and stays empty",
+      ],
+    },
   },
   // ——— the room quality bar, structured ————————————————————————————————
   // AGENTS.md §"The room quality bar" items 3, 5 and 6, declared per

@@ -72,6 +72,18 @@ const soil = {
     ],
     keeps:
       "the ledger, every life standing in it and how big it has grown, the season the year had reached, and the hour it was last looked at",
+    plain: {
+      what: "this room is a handful of ground in cross-section — dead leaves on top, minerals at the bottom, everything between slowly rotting downward. nothing is created or lost: planting, pulling and stirring only move goodness between the layers, and every handful you lift sounds like what it is made of.",
+      how: [
+        "tap the ground → lifts a handful at that depth and sounds it; surface and floor are different soils",
+        "press and hold → presses the leaf litter down into darker, older ground",
+        "hold to the deepest tier → plants a life there: near the top a fungus, deep down a root",
+        "drag a life up out of the ground → it returns to the litter it was made from",
+        "scrub in circles → turns the compost; the pile answers an octave down",
+        "tap a steady beat → the ground's turning falls into your rhythm",
+        "drag three fingers → the weather: across is warmth, down is rain",
+      ],
+    },
   },
   // ——— the room quality bar, structured ————————————————————————————————
   // Phase 4 (Track 2) migration: the private SAVE_EVERY_MS throttle and

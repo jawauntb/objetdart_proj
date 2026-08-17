@@ -64,6 +64,18 @@ const galaxy = {
       "an untouched room sounds precisely the note the scale axis assigns this band; wind the law with three fingers and you can hear how far you have bent it",
     ],
     keeps: "the stars you have ridden through an arm, and the gas and remnants you left in the disc",
+    plain: {
+      what: "this room is one spiral galaxy seen from inside — thousands of stars, each on its own orbit, pouring through two bright arms. the arms are not made of stars: they are traffic jams the stars pass through, and you can hear the whole disc turn.",
+      how: [
+        "drag → leans your view around the disc; two fingers swing and tip it all the way over",
+        "tap a star → it rings at the speed of its own orbit; stars near the middle ring higher",
+        "press and hold → your eye rides the nearest star; every arm it crosses lands as a felt tick",
+        "keep holding → gas gathers under your finger; let go after a long hold → it ignites and lights its neighbours",
+        "drag with three fingers → winds the arms' speed and shape; the sound re-tunes with them",
+        "circle a finger → winds the spiral tighter, or the other way lets it out",
+        "tap a steady beat → the galaxy's turning locks onto your tempo",
+      ],
+    },
   },
   // ——— the room quality bar, structured ————————————————————————————————
   // Phase 4 (Track 2) migration: writeStore() at every gesture endpoint
