@@ -45,7 +45,10 @@ These two axioms — three registers, water-as-template — predict almost every
 `/manifold` and nothing else: the fold — every scale kept in one place — is the
 index, and the room keeps its one registry address so chrome, guide, and axis
 all resolve where they always did. The constellation panel ("view all" in the
-header) remains the way to every other room.
+header) remains the way to every other room. On a first visit, after a breath
+so the fold is seen, a dismissable invitation (`ArrivalInvitation`) names the
+album and the hand; dismissal is remembered at `objetdart:arrival:v1` and the
+card does not return, nor does it open the chrome `?`.
 
 The manifold replaced a scrolling gallery of live route previews
 (`ScrollingGallery`, now unmounted like `Threshold` before it), which itself
@@ -101,6 +104,7 @@ src/
   app/
     layout.tsx                       — html shell, fonts, candle + sound toggle global
     page.tsx                         — home: a redirect to /manifold, nothing else
+    manifold/page.tsx                — the fold, plus the one-time arrival invitation
     cabinet/page.tsx                 — the case (HomeCabinet), off the scale axis
     compass/page.tsx                 — the concern compass (ConcernField), off the axis
     orb/page.tsx                     — plasma discs (PlasmaOrb), a peer of /plasma at the drop
@@ -123,6 +127,7 @@ src/
     reading/[hash]/opengraph-image.tsx — per-reading OG with sigil
 
   components/
+    ArrivalInvitation.tsx            — first-visit card on /manifold; then gone
     Atlas.tsx                        — SVG map + region click + carry + drawer
     Archive.tsx                      — filters + cards + imagine
     CandleMark.tsx                   — fixed candle SVG, flickers
@@ -149,6 +154,7 @@ src/
     archive-bodies.ts                — voice-written body paragraphs for 12 entries
 
   lib/
+    arrival.ts                       — dismissal codec for the manifold invitation
     audio.ts                         — Web Audio: ocean + voices + sigil music
     reading.ts                       — buildReading, buildRegionReading, hash codec
     sigil-shape.ts                   — polygon points + ray-cast silhouette helpers

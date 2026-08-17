@@ -84,9 +84,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <SoundToggle />
         {/* The `?` holds the bottom-right seat of the chrome's baseline row —
             flush with <LetGo> at bottom-centre, under the sound toggle. It
-            is the only surface that explains, it never opens itself, and it
-            renders the current route's own field-guide entry — see
-            src/components/RoomHelp.tsx and AGENTS.md, "no instructions". */}
+            is the sought field-guide mirror; it never opens itself. The one
+            volunteered exception is ArrivalInvitation, mounted from
+            /manifold's page, never from this layout. */}
         <RoomHelp />
         <ConcernTint />
         {/* The passage host lives in the root layout so a band-crossing film

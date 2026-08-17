@@ -135,16 +135,23 @@ And the laws that no test can reach — hold these yourself:
 - **No instructions in the room, ever.** No new explanatory copy, labels, tooltips, or
   onboarding in the material. Discovery is physical: glimmers only, after ~20s idle.
 
-  This law was narrowed once, deliberately, by the owner, and the narrowing is the
-  whole of it: the site chrome now carries a `?` at the bottom right of every screen
+  This law was narrowed twice, deliberately, by the owner:
+
+  The site chrome carries a `?` at the bottom right of every screen
   (`src/components/RoomHelp.tsx`) that opens the current route's field-guide entry.
-  It is a **sought** surface, never a volunteered one — nothing auto-opens, there is
-  no first-run popup, no `?` sitting inside the canvas, and the room behind it still
+  It is a **sought** surface, never a volunteered one — the `?` never auto-opens,
+  there is no `?` sitting inside the canvas, and the room behind it still
   explains nothing about itself. And it explains without writing: it renders the
   room's own `GUIDE_ROOMS` entry, so it is a **mirror of `/guide`**, not a second
   copy of it, and it cannot drift from the guide because it has no words of its own
-  to drift with. The ban on copy, labels and tooltips *inside* rooms stands exactly
-  where it stood; discovery is still physical, and help is still asked for.
+  to drift with.
+
+  The second narrowing is the arrival invitation on `/manifold` only
+  (`src/components/ArrivalInvitation.tsx`): volunteered once after a short breath
+  so the fold is seen first, dismissable like a modal, remembered at
+  `objetdart:arrival:v1`, never inside another room, and it does not open the `?`.
+  The ban on copy, labels and tooltips *inside* rooms stands exactly where it
+  stood; discovery is still physical, and help is still asked for.
 - **Voice**: lowercase product copy, two of the three registers
   (devotional/operational/oceanic) in every line, no marketing verbs, no emoji.
 - **Build in one room, then extract the law** — prove a mechanic on a single route
