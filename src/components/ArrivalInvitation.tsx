@@ -158,9 +158,9 @@ export default function ArrivalInvitation() {
               trackpad to travel between sizes. arrow keys and enter play too.
             </p>
             <p>
-              lost? the small ? at the bottom right explains the room you are in — its
-              big idea and every move it answers. the menu at the top right lists every
-              room, biggest to smallest, then the rooms for laws.
+              lost? the small ? at the bottom right explains the room you are in, with
+              a plain-words setting. the menu at the top right lists every room,
+              grouped by size and kind.
             </p>
           </div>
 

@@ -99,20 +99,8 @@ for (const room of GUIDE_ROOMS) {
 // `plain.how` is "do x → y happens" lines (the arrow is load-bearing: the
 // modal and the guide page split on it, exactly as they do for moves).
 //
-// Manifest rooms (src/rooms/<key>/room.config.ts) receive their translations
-// from their own lane; until that merges, they are reported as pending rather
-// than failed. The strict assertion holds for every hand-written entry here,
-// and tightens to every room the moment a manifest starts carrying `plain`.
-
-const registryModule = loadTsModule("src/rooms/registry.ts");
-const manifestKeys = new Set(registryModule.ROOM_MANIFEST_LIST.map((room) => room.key));
-const pendingPlain = [];
 for (const room of GUIDE_ROOMS) {
   if (!room.plain) {
-    if (manifestKeys.has(room.key)) {
-      pendingPlain.push(room.key);
-      continue;
-    }
     assert.fail(`${room.key}: no plain translation — every entry carries both voices`);
   }
   assert.ok(
@@ -126,12 +114,6 @@ for (const room of GUIDE_ROOMS) {
   for (const line of room.plain.how) {
     assert.ok(line.includes("→"), `${room.key}: each plain.how line reads "do x → y happens": ${line}`);
   }
-}
-if (pendingPlain.length > 0) {
-  console.warn(
-    `plain translations pending for ${pendingPlain.length} manifest rooms ` +
-      `(filled by their own lane): ${pendingPlain.join(", ")}`,
-  );
 }
 
 // --- the shared sections exist and hold their shape ------------------------
@@ -187,7 +169,7 @@ assert.ok(existsSync(new URL("src/app/guide/guide.css", rootUrl)), "the guide st
 assert.ok(existsSync(new URL("src/components/guide/GuideHero.tsx", rootUrl)), "the guide sections must live in src/components/guide/");
 
 console.log(
-  `guide ok: ${GUIDE_ROOMS.length} rooms documented (${GUIDE_ROOMS.length - pendingPlain.length} ` +
-    `in both voices), ${GUIDE_APIS.length} apis, screenshots present, ` +
+  `guide ok: ${GUIDE_ROOMS.length} rooms documented in both voices, ` +
+    `${GUIDE_APIS.length} apis, screenshots present, ` +
     `aurora deterministic across ${spotsA.length} spots`,
 );
