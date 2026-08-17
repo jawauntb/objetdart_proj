@@ -560,6 +560,22 @@ export const ROOM_REGISTRY: RoomEntry[] = [
       "immediate inspiral and merger",
   },
   {
+    key: "eigen",
+    href: "/eigen",
+    kind: "room",
+    source: "src/components/EigenField.tsx",
+    page: "src/app/eigen/page.tsx",
+    address: { exempt: "a law, not a place: surviving freedom after a constraint, identical at every band" },
+    frame: "yield",
+    chrome: "none",
+    keeps: "objetdart:eigen:v1",
+    creates: "a constraint",
+    exempt: {},
+    interacts:
+      "two independent non-Gaussian sources unmix into separated sources that are neither parent " +
+      "(perm/sign leftover ok); two collinear constraints collapse to one constraint that is neither parent",
+  },
+  {
     key: "loom",
     href: "/loom",
     kind: "room",

@@ -329,3 +329,35 @@ export function principalDirection(cloud: readonly CloudPoint[]): Vec {
   if (Math.abs(c.xy) < 1e-12 && Math.abs(c.xx - l1) < 1e-12) return unit(1, 0);
   return unit(c.xy, l1 - c.xx);
 }
+
+/**
+ * How much motion in `dir` still lives after the aligned constraints.
+ * 1 = isotropic freedom, 0 = fully deadened. Residual amplitude lives in
+ * the room (killed directions keep a little shimmer; they never freeze).
+ */
+export function survival(dir: Vec, cs: readonly Constraint[]): number {
+  const axes = survivingAxes(cs);
+  if (axes.length === 0) return 1;
+  const u = unit(dir.x, dir.y);
+  let along = 0;
+  for (const a of axes) {
+    const d = dot(u, a);
+    along += d * d;
+  }
+  return Math.max(0, Math.min(1, along));
+}
+
+/**
+ * Coarsest sufficient span: surviving axes weighted by their share of the
+ * live cloud. An axis that carries almost none of the variance is a
+ * footprint — Fiber Finder drops it. Returning nothing is legal; that is
+ * over-collapse, and the ember starves.
+ */
+export function sufficientSpan(cloud: readonly CloudPoint[], cs: readonly Constraint[]): Vec[] {
+  const axes = survivingAxes(cs);
+  if (axes.length === 0) return [];
+  const live = collapse(cloud, cs);
+  const weights = axes.map((a) => taskReadout(live, a));
+  const peak = Math.max(...weights, 1e-9);
+  return axes.filter((_, i) => weights[i] / peak > 0.15);
+}

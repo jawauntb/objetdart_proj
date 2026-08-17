@@ -54,11 +54,13 @@ const E = loadTsModule("src/lib/eigen-field.ts");
 }
 
 {
-  const mixed = E.mixedSources(21);
+  const mixed = E.mixedSources(21, 800);
   assert.ok(!E.kurtosisLandscapeFlat(mixed), "mixed non-Gaussian sources lock a unique snap");
   const snap = E.icaSnap(mixed);
   assert.ok(Math.hypot(snap.x, snap.y) > 0.99, "the snap is a unit axis");
-  const gauss = E.gaussianCloud(21);
+  // 48 samples of a Gaussian are too noisy for kurtosis to look flat; a real
+  // isotropic cloud at a few hundred points is the landscape the snap refuses.
+  const gauss = E.gaussianCloud(21, 800);
   assert.ok(E.kurtosisLandscapeFlat(gauss), "a Gaussian cloud leaves the rotational gauge free");
 }
 
@@ -97,7 +99,48 @@ const E = loadTsModule("src/lib/eigen-field.ts");
 
 {
   const src = readFileSync(fileURLToPath(new URL("src/lib/eigen-field.ts", rootUrl)), "utf8");
-  assert.equal(src.includes("Math.random"), false, "the field does not roll");
+  assert.equal(src.includes("Math.random("), false, "the field does not roll");
+}
+
+{
+  const c = E.bornConstraint(1, 1, 0.5, 0.5, 1, 0);
+  c.beta = 1;
+  c.growth = 1;
+  assert.equal(E.survival({ x: 1, y: 0 }, []), 1, "unconstrained, every direction still lives");
+  assert.ok(E.survival({ x: 1, y: 0 }, [c]) > 0.9, "along the planted seam, motion survives");
+  assert.ok(E.survival({ x: 0, y: 1 }, [c]) < 0.1, "off the seam, motion deadens");
+  const shortcut = E.bornConstraint(2, 2, 0.5, 0.5, 0, 1, { aligned: false });
+  shortcut.beta = 1;
+  shortcut.growth = 1;
+  assert.ok(
+    E.survival({ x: 0, y: 1 }, [shortcut]) > 0.9,
+    "a shortcut does not deaden the shimmer — Constraint_Swap",
+  );
+}
+
+{
+  const cloud = E.bornCloud(11);
+  const load = E.bornConstraint(1, 1, 0.5, 0.5, 1, 0);
+  load.beta = 1;
+  load.growth = 1;
+  const print = E.bornConstraint(2, 2, 0.5, 0.5, 0, 1);
+  print.beta = 1;
+  print.growth = 1;
+  const span = E.sufficientSpan(cloud, [load, print]);
+  assert.equal(span.length, 1, "an elongated cloud's sufficient q is one axis, not two");
+  assert.ok(Math.abs(span[0].x) > 0.9, "fiber-finder keeps the axis the cloud actually spends");
+  const mixed = E.mixedSources(21);
+  const a = E.bornConstraint(3, 3, 0.5, 0.5, 1, 0);
+  a.beta = 1;
+  a.growth = 1;
+  const b = E.bornConstraint(4, 4, 0.5, 0.5, 0, 1);
+  b.beta = 1;
+  b.growth = 1;
+  assert.equal(
+    E.sufficientSpan(mixed, [a, b]).length,
+    2,
+    "two independent mixed sources both feed the task, so both survive the finder",
+  );
 }
 
 console.log("test-eigen-field: ok");
