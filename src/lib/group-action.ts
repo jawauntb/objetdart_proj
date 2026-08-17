@@ -300,3 +300,91 @@ export function applyGeneratorToMark(m: Mark, g: Generator, cx: number, cy: numb
   m.nx = pt.nx;
   m.ny = pt.ny;
 }
+
+/** Kinship hue in 0..1. A fused class hashes far from either parent — never their mix. */
+export function classHue(classId: number): number {
+  return (hashSeed(classId + 1, 0xc8732a) % 10007) / 10007;
+}
+
+/** Inverse of a kept move: a rotation runs backward; a flip is its own inverse. */
+export function invertGenerator(g: Generator): Generator {
+  if (g.kind === "rotate") return { id: g.id, k: wrapPose(-g.k), kind: "rotate" };
+  return { id: g.id, k: wrapPose(g.k), kind: "flip" };
+}
+
+/**
+ * Store a kept automorphism. Identity is always true and never occupies a slot.
+ * Duplicates are ignored. Past GEN_CAP the oldest leaves.
+ */
+export function keepGenerator(kept: readonly Generator[], g: Generator): Generator[] {
+  if (isIdentity(g)) return [...kept];
+  const k = wrapPose(g.k);
+  if (kept.some((x) => x.kind === g.kind && wrapPose(x.k) === k)) return [...kept];
+  const nextId = kept.reduce((m, x) => Math.max(m, x.id), 0) + 1;
+  const row: Generator = { id: nextId, k, kind: g.kind };
+  if (kept.length < GEN_CAP) return [...kept, row];
+  return [...kept.slice(1), row];
+}
+
+/** Angle of cyclic shift `k`, radians. */
+export function thetaOfShift(k: number): number {
+  return (wrapPose(k) / ORBIT_N) * Math.PI * 2;
+}
+
+/**
+ * Nearest lattice shift to a raw winding, and the angular gap to it.
+ * `delta` is in radians, in [0, π].
+ */
+export function shiftFromTheta(theta: number): { k: number; delta: number } {
+  const tau = Math.PI * 2;
+  let t = theta;
+  t = ((t % tau) + tau) % tau;
+  const raw = t / tau * ORBIT_N;
+  const k = wrapPose(Math.round(raw));
+  const nearest = thetaOfShift(k);
+  let d = t - nearest;
+  if (d > Math.PI) d -= tau;
+  if (d < -Math.PI) d += tau;
+  return { k, delta: Math.abs(d) };
+}
+
+/** Consistency shrunk by how far the hand sits from the nearest lattice seat. */
+export function consonanceAt(marks: readonly Mark[], g: Generator, delta: number): number {
+  const c = consistency(marks, g);
+  const seat = Math.PI * 2 / ORBIT_N;
+  const shrink = 1 - Math.min(1, delta / (seat * 0.5 + 1e-9));
+  return c * shrink;
+}
+
+export function classCentroid(marks: readonly Mark[], classId: number): { cx: number; cy: number } | null {
+  const members = alive(marks).filter((m) => m.classId === classId);
+  if (members.length === 0) return null;
+  let cx = 0;
+  let cy = 0;
+  for (const m of members) {
+    cx += m.nx;
+    cy += m.ny;
+  }
+  return { cx: cx / members.length, cy: cy / members.length };
+}
+
+/**
+ * Poses a kept generator predicts that are not yet seen — dim seats, never
+ * free at mount. Distinct from completeOrbit, which fills every missing seat.
+ */
+export function predictedPoses(
+  marks: readonly Mark[],
+  classId: number,
+  kept: readonly Generator[],
+): number[] {
+  const seen = new Set(seenPoses(marks, classId));
+  const out = new Set<number>();
+  const members = alive(marks).filter((m) => m.classId === classId);
+  for (const m of members) {
+    for (const g of kept) {
+      const p = applyPose(m.pose, g);
+      if (!seen.has(p)) out.add(p);
+    }
+  }
+  return [...out].sort((a, b) => a - b);
+}

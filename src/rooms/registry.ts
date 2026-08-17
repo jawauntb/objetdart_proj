@@ -36,6 +36,7 @@ import compass from "@/rooms/compass/room.config";
 import galaxy from "@/rooms/galaxy/room.config";
 import gate from "@/rooms/gate/room.config";
 import geyser from "@/rooms/geyser/room.config";
+import group from "@/rooms/group/room.config";
 import insects from "@/rooms/insects/room.config";
 import land from "@/rooms/land/room.config";
 import localgroup from "@/rooms/localgroup/room.config";
@@ -66,6 +67,7 @@ export const ROOM_MANIFESTS = [
   galaxy,
   gate,
   geyser,
+  group,
   insects,
   land,
   localgroup,

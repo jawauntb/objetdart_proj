@@ -84,13 +84,14 @@ function fragment(classId, poses, seed = 11) {
 }
 
 {
-  const cyclic = fragment(1, [0, 2, 4, 6]);
+  const cyclic = fragment(1, [0, 2, 4]);
   const perm = G.scramblePerm();
   assert.ok(
     G.consistencyPerm(cyclic, perm) < G.MATCH_TAU,
     "a pose-scramble that is not a group element does not unlock the fragment",
   );
-  assert.ok(G.consistency(cyclic, { id: 0, k: 2, kind: "rotate" }) >= G.MATCH_TAU);
+  const even = fragment(1, [0, 2, 4, 6]);
+  assert.ok(G.consistency(even, { id: 0, k: 2, kind: "rotate" }) >= G.MATCH_TAU);
 }
 
 {
@@ -103,7 +104,77 @@ function fragment(classId, poses, seed = 11) {
 
 {
   const src = readFileSync(fileURLToPath(new URL("src/lib/group-action.ts", rootUrl)), "utf8");
-  assert.equal(src.includes("Math.random"), false, "the orbit law does not roll");
+  assert.equal(src.includes("Math.random("), false, "the orbit law does not roll");
+}
+
+{
+  assert.equal(G.classHue(7), G.classHue(7), "kinship hue is a function of class id");
+  assert.notEqual(G.classHue(7), G.classHue(8));
+  const a = fragment(10, [0, 2, 4, 6]);
+  const b = fragment(20, [0, 2, 4, 6]).map((m) => ({ ...m, id: m.id + 10 }));
+  const all = [...a, ...b];
+  const g = G.propose(all, 2, "rotate");
+  const fused = G.fuseOrbits(all, 10, 20, g);
+  const ha = G.classHue(10);
+  const hb = G.classHue(20);
+  const hf = G.classHue(fused);
+  assert.notEqual(hf, ha, "fused hue is not the first parent");
+  assert.notEqual(hf, hb, "fused hue is not the second parent");
+  const mix = (ha + hb) / 2;
+  assert.ok(Math.abs(hf - mix) > 0.02, "fused hue hashes far from the mix of the parents");
+}
+
+{
+  const rot = { id: 1, k: 2, kind: "rotate" };
+  const inv = G.invertGenerator(rot);
+  assert.equal(inv.kind, "rotate");
+  assert.equal(inv.k, 6, "a half-turn runs backward as the other half-turn");
+  const id = G.compose(rot, inv);
+  assert.equal(id.kind, "rotate");
+  assert.equal(G.wrapPose(id.k), 0, "rotation composed with its inverse is identity");
+  const flip = { id: 2, k: 3, kind: "flip" };
+  const flipInv = G.invertGenerator(flip);
+  assert.equal(flipInv.kind, "flip");
+  assert.equal(flipInv.k, 3, "a flip is its own inverse");
+}
+
+{
+  const id = G.identity();
+  assert.equal(G.keepGenerator([], id).length, 0, "identity is always true and never occupies a slot");
+  const kept = G.keepGenerator([], { id: 0, k: 2, kind: "rotate" });
+  assert.equal(kept.length, 1);
+  assert.equal(G.keepGenerator(kept, { id: 0, k: 2, kind: "rotate" }).length, 1, "a duplicate is not stored twice");
+  const withFlip = G.keepGenerator(kept, { id: 0, k: 0, kind: "flip" });
+  assert.equal(withFlip.length, 2);
+  assert.equal(withFlip[1].kind, "flip");
+}
+
+{
+  const seat = (Math.PI * 2) / G.ORBIT_N;
+  const on = G.shiftFromTheta(2 * seat);
+  assert.equal(on.k, 2);
+  assert.ok(on.delta < 1e-9, "a lattice angle has no remainder");
+  const off = G.shiftFromTheta(2 * seat + seat * 0.2);
+  assert.equal(off.k, 2);
+  assert.ok(off.delta > 0.01, "a miss reports its gap");
+  const even = fragment(1, [0, 2, 4, 6]);
+  const g = { id: 1, k: 2, kind: "rotate" };
+  const full = G.consonanceAt(even, g, 0);
+  const thin = G.consonanceAt(even, g, seat * 0.4);
+  assert.ok(full > 0.99, "on-lattice consonance is the raw consistency");
+  assert.ok(thin < full, "a miss shrinks consonance");
+}
+
+{
+  const marks = fragment(1, [0, 2, 4, 6]);
+  const c = G.classCentroid(marks, 1);
+  assert.ok(c);
+  assert.ok(Math.abs(c.cx - 0.5) < 0.02 && Math.abs(c.cy - 0.5) < 0.02);
+  const predNone = G.predictedPoses(marks, 1, [{ id: 1, k: 2, kind: "rotate" }]);
+  assert.equal(predNone.length, 0, "a closed even fragment predicts no further even seats");
+  const open = fragment(1, [0, 2, 4]);
+  const pred = G.predictedPoses(open, 1, [{ id: 1, k: 2, kind: "rotate" }]);
+  assert.deepEqual(pred, [6], "rot2 of {0,2,4} names the unseen even seat");
 }
 
 console.log("test-group-action: ok");
