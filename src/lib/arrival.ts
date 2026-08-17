@@ -2,15 +2,20 @@
  * Arrival invitation — the one volunteered explanation, then silence.
  *
  * `/manifold` is the door. Once, after a breath so the fold is seen, a card
- * names why this is an album of rooms and how the hand works. Dismissal is
- * remembered here and the card never returns. The chrome `?` stays sought;
- * this module does not open it.
+ * says in plain english what the scale model is, what it is for, how the hand
+ * works on a phone and on a computer, and where the per-room big ideas live.
+ * Dismissal is remembered here and the card never returns. The chrome `?`
+ * stays sought; this module does not open it.
+ *
+ * v2: the card was rewritten plain after the owner found v1 esoteric. The key
+ * bump re-invites everyone once; old v1 records are simply ignored, never
+ * migrated.
  *
  * Pure codec: no DOM. Persistence is a JSON record at ARRIVAL_STORAGE_KEY.
  * The door stays open unless `dismissed` is the boolean `true`.
  */
 
-export const ARRIVAL_STORAGE_KEY = "objetdart:arrival:v1";
+export const ARRIVAL_STORAGE_KEY = "objetdart:arrival:v2";
 
 export type ArrivalRecord = { dismissed: true };
 
