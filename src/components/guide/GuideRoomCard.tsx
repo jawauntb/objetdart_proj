@@ -42,28 +42,47 @@ export default function GuideRoomCard({ room }: { room: GuideRoom }) {
             {room.href} →
           </Link>
         </header>
-        {room.scale ? <p className="t-mono guide-room-scale">{room.scale}</p> : null}
-        <p className="t-body guide-room-essence">{room.essence}</p>
-        <ul className="guide-moves">
-          {room.moves.map((move) => {
-            const [gesture, ...rest] = move.split("→");
-            return (
-              <li key={move}>
-                <span className="t-mono guide-move-gesture">{gesture.trim()}</span>
-                <span className="t-body guide-move-answer">{rest.join("→").trim()}</span>
-              </li>
-            );
-          })}
-        </ul>
-        {room.finds.length > 0 ? (
-          <p className="t-body guide-room-finds">
-            <span className="t-mono guide-room-finds-label">for the patient hand · </span>
-            {room.finds.join(" · ")}
-          </p>
+        {/* both voices ship in the HTML; <html data-guide-voice> shows one */}
+        {room.plain ? (
+          <div className="guide-voice-plain">
+            <p className="t-body guide-room-essence guide-room-plain-what">{room.plain.what}</p>
+            <ul className="guide-moves">
+              {room.plain.how.map((line) => {
+                const [gesture, ...rest] = line.split("→");
+                return (
+                  <li key={line}>
+                    <span className="t-mono guide-move-gesture">{gesture.trim()}</span>
+                    <span className="t-body guide-move-answer">{rest.join("→").trim()}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
         ) : null}
-        {room.keeps ? (
-          <p className="t-mono guide-room-keeps">it keeps: {room.keeps}</p>
-        ) : null}
+        <div className={room.plain ? "guide-voice-field" : undefined}>
+          {room.scale ? <p className="t-mono guide-room-scale">{room.scale}</p> : null}
+          <p className="t-body guide-room-essence">{room.essence}</p>
+          <ul className="guide-moves">
+            {room.moves.map((move) => {
+              const [gesture, ...rest] = move.split("→");
+              return (
+                <li key={move}>
+                  <span className="t-mono guide-move-gesture">{gesture.trim()}</span>
+                  <span className="t-body guide-move-answer">{rest.join("→").trim()}</span>
+                </li>
+              );
+            })}
+          </ul>
+          {room.finds.length > 0 ? (
+            <p className="t-body guide-room-finds">
+              <span className="t-mono guide-room-finds-label">for the patient hand · </span>
+              {room.finds.join(" · ")}
+            </p>
+          ) : null}
+          {room.keeps ? (
+            <p className="t-mono guide-room-keeps">it keeps: {room.keeps}</p>
+          ) : null}
+        </div>
       </div>
     </article>
   );

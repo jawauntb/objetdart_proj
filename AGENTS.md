@@ -285,15 +285,23 @@ so the rooms never have to — in-room copy stays instruction-free, always.
   is the reminder working, not an obstacle — never silence it by deleting the
   entry you should be updating.
 - **The guide has one mirror and no copies.** The chrome `?` on every screen
-  renders the current route's own entry and nothing else: route → key by
-  `guideKeyForPath` (`src/lib/guide-route.ts`, reading `SITE_ROUTES`), key →
-  entry by `GUIDE_ROOM_BY_KEY` (`src/data/guide.ts`). Editing a manifest or
-  `src/data/guide.ts` is the only way to change what the `?` says — there is
-  nowhere else to type it. `npm run test:room-help` keeps both halves total
-  over every registered route, and fails the moment a room key, a route, or a
-  line of a room's copy appears in the component. A route that deliberately has
-  no entry (`/compare`, `/reading/<hash>`) renders no `?` at all rather than an
-  empty one, and says so by name in that test.
+ renders the current route's own entry and nothing else: route → key by
+ `guideKeyForPath` (`src/lib/guide-route.ts`, reading `SITE_ROUTES`), key →
+ entry by `GUIDE_ROOM_BY_KEY` (`src/data/guide.ts`). Editing a manifest or
+ `src/data/guide.ts` is the only way to change what the `?` says — there is
+ nowhere else to type it. `npm run test:room-help` keeps both halves total
+ over every registered route, and fails the moment a room key, a route, or a
+ line of a room's copy appears in the component. A route that deliberately has
+ no entry (`/compare`, `/reading/<hash>`) renders no `?` at all rather than an
+ empty one, and says so by name in that test.
+- **The guide carries two voices, and both live in the guide data.** Every
+ entry holds a plain-english translation beside the room's own register — a
+ `plain` block (`what` + "do x → y happens" `how` lines) on the entry, a
+ `plain` string per global binding — and the `?` and `/guide` toggle between
+ them (`plain words` / `field notes`, defaulting to plain for a visitor who
+ never chose, remembered at `objetdart:guide-voice:v1`). The components still
+ write no room prose in either voice; `npm run test:guide` fails an entry that
+ ships without its translation, exactly as it fails one without a screenshot.
 - The same law extends to the other load-bearing docs: a change that makes
   `DESIGN.md`, `docs/gesture-grammar.md`, or `docs/new-room.md` false must edit
   them in the same PR.

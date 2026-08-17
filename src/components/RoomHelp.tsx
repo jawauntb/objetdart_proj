@@ -10,12 +10,15 @@
  * physical; help stays sought.
  *
  * It is a **mirror of /guide, never a second copy of it**. The component owns
- * about five words of chrome and not one sentence about any room: it resolves
+ * a handful of chrome labels and not one sentence about any room: it resolves
  * the current route to its `GUIDE_ROOMS` entry and renders that entry's own
- * fields. Editing `src/rooms/<key>/room.config.ts` or `src/data/guide.ts`
- * changes what the `?` says on that route, with no edit here — and
+ * fields — in whichever of the guide's two voices the visitor chose (`plain
+ * words` by default, `field notes` behind the switch; the preference is
+ * shared with /guide at `objetdart:guide-voice:v1`). Editing
+ * `src/rooms/<key>/room.config.ts` or `src/data/guide.ts` changes what the
+ * `?` says on that route, with no edit here — and
  * `scripts/test-room-help.mjs` fails if a room key, href or line of room copy
- * ever appears in this file.
+ * in either voice ever appears in this file.
  *
  * Two mechanics worth knowing before you touch it:
  *
@@ -40,6 +43,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { GuideBinding, GuideRoom } from "@/data/guide";
 import { guideKeyForPath } from "@/lib/guide-route";
+import { readGuideVoice, subscribeGuideVoice, writeGuideVoice, type GuideVoice } from "@/lib/guide-voice";
 
 type GuideData = {
   rooms: Record<string, GuideRoom>;
@@ -55,6 +59,7 @@ export default function RoomHelp() {
   const [mounted, setMounted] = useState(false);
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<GuideData | null>(null);
+  const [voice, setVoice] = useState<GuideVoice>("plain");
 
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -62,6 +67,12 @@ export default function RoomHelp() {
   const hasOpenedRef = useRef(false);
 
   useEffect(() => setMounted(true), []);
+
+  /** which voice reads: chosen once, shared with /guide, defaulting to plain */
+  useEffect(() => {
+    setVoice(readGuideVoice());
+    return subscribeGuideVoice(setVoice);
+  }, []);
 
   /** the prose, fetched once per session */
   const load = useCallback(() => {
@@ -139,6 +150,8 @@ export default function RoomHelp() {
   if (!mounted || !key || typeof document === "undefined") return null;
 
   const room = data?.rooms[key] ?? null;
+  /** the entry's translation, when the visitor asked for plain words and it has one */
+  const plain = voice === "plain" ? room?.plain ?? null : null;
 
   return createPortal(
     <>
@@ -173,6 +186,7 @@ export default function RoomHelp() {
             aria-labelledby={TITLE_ID}
             tabIndex={-1}
             className="oda-help-panel"
+            data-pretext-ignore=""
           >
             <button
               type="button"
@@ -185,47 +199,93 @@ export default function RoomHelp() {
 
             {room ? (
               <>
+                {/* no wrapper role: "group" is also a room key, and §1 of the
+                    mirror test bans every room key from this file's literals;
+                    the two aria-pressed buttons announce themselves */}
+                <div className="oda-help-voice">
+                  <button
+                    type="button"
+                    className="t-mono oda-help-voice-option"
+                    aria-pressed={voice === "plain"}
+                    onClick={() => writeGuideVoice("plain")}
+                  >
+                    plain words
+                  </button>
+                  <button
+                    type="button"
+                    className="t-mono oda-help-voice-option"
+                    aria-pressed={voice === "field"}
+                    onClick={() => writeGuideVoice("field")}
+                  >
+                    field notes
+                  </button>
+                </div>
+
                 <p className="t-mono oda-help-eyebrow">field guide</p>
                 <h2 id={TITLE_ID} className="t-h3 oda-help-title">
                   <em>{room.title}</em>
                 </h2>
-                {room.scale ? <p className="t-mono oda-help-scale">{room.scale}</p> : null}
-                <p className="t-body oda-help-essence">{room.essence}</p>
 
-                <details className="oda-help-section" open>
-                  <summary className="t-mono oda-help-summary">moves</summary>
-                  <ul className="oda-help-moves">
-                    {room.moves.map((move) => {
-                      const [gesture, ...rest] = move.split("→");
-                      return (
-                        <li key={move}>
-                          <span className="t-mono oda-help-gesture">{gesture.trim()}</span>
-                          <span className="t-body oda-help-answer">{rest.join("→").trim()}</span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </details>
+                {plain ? (
+                  <>
+                    <p className="t-body oda-help-essence">{plain.what}</p>
 
-                {room.finds.length > 0 ? (
-                  <details className="oda-help-section" open>
-                    <summary className="t-mono oda-help-summary">for the patient hand</summary>
-                    <ul className="oda-help-finds">
-                      {room.finds.map((find) => (
-                        <li key={find} className="t-body oda-help-answer">
-                          {find}
-                        </li>
-                      ))}
-                    </ul>
-                  </details>
-                ) : null}
+                    <details className="oda-help-section" open>
+                      <summary className="t-mono oda-help-summary">do this</summary>
+                      <ul className="oda-help-moves">
+                        {plain.how.map((line) => {
+                          const [gesture, ...rest] = line.split("→");
+                          return (
+                            <li key={line}>
+                              <span className="t-mono oda-help-gesture">{gesture.trim()}</span>
+                              <span className="t-body oda-help-answer">{rest.join("→").trim()}</span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </details>
+                  </>
+                ) : (
+                  <>
+                    {room.scale ? <p className="t-mono oda-help-scale">{room.scale}</p> : null}
+                    <p className="t-body oda-help-essence">{room.essence}</p>
 
-                {room.keeps ? (
-                  <details className="oda-help-section" open>
-                    <summary className="t-mono oda-help-summary">it keeps</summary>
-                    <p className="t-body oda-help-answer oda-help-keeps">{room.keeps}</p>
-                  </details>
-                ) : null}
+                    <details className="oda-help-section" open>
+                      <summary className="t-mono oda-help-summary">moves</summary>
+                      <ul className="oda-help-moves">
+                        {room.moves.map((move) => {
+                          const [gesture, ...rest] = move.split("→");
+                          return (
+                            <li key={move}>
+                              <span className="t-mono oda-help-gesture">{gesture.trim()}</span>
+                              <span className="t-body oda-help-answer">{rest.join("→").trim()}</span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </details>
+
+                    {room.finds.length > 0 ? (
+                      <details className="oda-help-section" open>
+                        <summary className="t-mono oda-help-summary">for the patient hand</summary>
+                        <ul className="oda-help-finds">
+                          {room.finds.map((find) => (
+                            <li key={find} className="t-body oda-help-answer">
+                              {find}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    ) : null}
+
+                    {room.keeps ? (
+                      <details className="oda-help-section" open>
+                        <summary className="t-mono oda-help-summary">it keeps</summary>
+                        <p className="t-body oda-help-answer oda-help-keeps">{room.keeps}</p>
+                      </details>
+                    ) : null}
+                  </>
+                )}
 
                 <details className="oda-help-section">
                   <summary className="t-mono oda-help-summary">anywhere</summary>
@@ -233,7 +293,9 @@ export default function RoomHelp() {
                     {(data?.bindings ?? []).map((binding) => (
                       <li key={binding.gesture}>
                         <span className="t-mono oda-help-gesture">{binding.gesture}</span>
-                        <span className="t-body oda-help-answer">{binding.meaning}</span>
+                        <span className="t-body oda-help-answer">
+                          {voice === "plain" ? binding.plain : binding.meaning}
+                        </span>
                       </li>
                     ))}
                   </ul>
@@ -318,8 +380,55 @@ export default function RoomHelp() {
           box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
           padding: 22px 20px 24px;
           color: var(--ink);
+          text-align: left;
         }
         .oda-help-panel:focus { outline: none; }
+
+        /* The sheet is a reading surface, and data-pretext-ignore keeps
+           GlobalPretextText from wrapping its words. Without it, every word
+           became an inline-block span on the per-word breathe animation —
+           adjacent words drifting up to ±0.26em out of phase — and Cormorant's
+           ~0.22em space at this size was swallowed whole or stretched double
+           ("ofpale", "dwellplantsa" on a 390px phone). These rules also pin
+           any span wrapped before the attribute was seen, so the metrics of
+           the prose can never be bent by an ambient experiment again. */
+        .oda-help-panel .global-pretext-text {
+          display: inline;
+          animation: none !important;
+          transform: none !important;
+        }
+        .oda-help-essence, .oda-help-answer, .oda-help-keeps {
+          word-spacing: normal;
+          letter-spacing: normal;
+        }
+
+        .oda-help-voice {
+          display: inline-flex;
+          border: 1px solid var(--rule);
+          margin: 0 44px 12px 0;
+        }
+        .oda-help-voice-option {
+          appearance: none;
+          -webkit-appearance: none;
+          background: transparent;
+          border: 0;
+          color: var(--ink-2);
+          font-size: 10px;
+          letter-spacing: 0.10em;
+          line-height: 1;
+          padding: 0 12px;
+          min-height: 32px;
+          cursor: pointer;
+          transition: color var(--t), background var(--t);
+        }
+        .oda-help-voice-option + .oda-help-voice-option { border-left: 1px solid var(--rule); }
+        .oda-help-voice-option[aria-pressed="true"] {
+          background: var(--ink);
+          color: var(--paper);
+        }
+        .oda-help-voice-option:hover { color: var(--ink); }
+        .oda-help-voice-option[aria-pressed="true"]:hover { color: var(--paper); }
+        .oda-help-voice-option:focus-visible { outline: 2px solid var(--sea); outline-offset: -2px; }
 
         .oda-help-close {
           position: absolute;

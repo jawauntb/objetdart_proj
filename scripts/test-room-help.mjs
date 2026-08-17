@@ -200,8 +200,15 @@ for (const room of GUIDE_ROOMS) {
       `${HELP_PATH}: renders the literal title of "${room.key}" — render room.title instead`,
     );
   }
-  // and the long-form copy, anywhere in the file, comments included
-  for (const line of [room.essence, ...room.moves, ...room.finds, ...(room.keeps ? [room.keeps] : [])]) {
+  // and the long-form copy, anywhere in the file, comments included —
+  // the plain voice is guide data exactly like the field voice
+  for (const line of [
+    room.essence,
+    ...room.moves,
+    ...room.finds,
+    ...(room.keeps ? [room.keeps] : []),
+    ...(room.plain ? [room.plain.what, ...room.plain.how] : []),
+  ]) {
     assert.ok(
       !helpSource.includes(line),
       `${HELP_PATH}: contains copy from "${room.key}" — the modal is a mirror of the guide, not a fork of it`,
@@ -210,10 +217,12 @@ for (const room of GUIDE_ROOMS) {
 }
 
 for (const binding of GUIDE_GLOBAL_BINDINGS) {
-  assert.ok(
-    !helpSource.includes(binding.meaning),
-    `${HELP_PATH}: contains a global binding's copy — render GUIDE_GLOBAL_BINDINGS instead`,
-  );
+  for (const line of [binding.meaning, binding.plain]) {
+    assert.ok(
+      line == null || !helpSource.includes(line),
+      `${HELP_PATH}: contains a global binding's copy — render GUIDE_GLOBAL_BINDINGS instead`,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -251,6 +260,30 @@ assert.match(
   helpSource,
   /binding\.gesture[\s\S]{0,400}binding\.meaning/,
   `${HELP_PATH}: the "anywhere" section must render both halves of each global binding`,
+);
+
+// the plain voice is rendered from the same entry, and the toggle really
+// writes the shared preference — otherwise the switch is decoration and a
+// visitor who asked for plain words keeps reading the room's own register
+assert.match(
+  helpSource,
+  /\{plain\.what\}/,
+  `${HELP_PATH}: never renders plain.what — the plain voice lost its opening idea`,
+);
+assert.match(
+  helpSource,
+  /plain\.how\.map\(/,
+  `${HELP_PATH}: never maps plain.how — the plain voice lost its "do this" lines`,
+);
+assert.match(
+  helpSource,
+  /binding\.plain/,
+  `${HELP_PATH}: the "anywhere" section never reads the plain binding translations`,
+);
+assert.match(
+  helpSource,
+  /writeGuideVoice|GUIDE_VOICE_KEY/,
+  `${HELP_PATH}: the voice toggle must persist through the shared guide-voice preference`,
 );
 
 // ---------------------------------------------------------------------------
