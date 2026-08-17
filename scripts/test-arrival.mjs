@@ -1,8 +1,10 @@
 // The arrival invitation is the one volunteered explanation: a dismissable
-// card on /manifold, remembered at objetdart:arrival:v1, never inside another
-// room and never opening the chrome `?`. These assertions name the bugs they
-// catch — a corrupt flag hiding the door, the card mounting in the wrong
-// tree, RoomHelp growing a first-run fork.
+// card on /manifold, remembered at objetdart:arrival:v2 (bumped from v1 when
+// the copy went plain english, so everyone meets the new card once — old v1
+// records are ignored, never migrated), never inside another room and never
+// opening the chrome `?`. These assertions name the bugs they catch — a
+// corrupt flag hiding the door, the card mounting in the wrong tree, RoomHelp
+// growing a first-run fork.
 //
 // Copy is not snapshotted. Voice lives in the component; a wording change
 // must not turn this file red.
@@ -42,8 +44,8 @@ const { ARRIVAL_STORAGE_KEY, encodeArrivalDismissal, isArrivalDismissed } =
 
 assert.equal(
   ARRIVAL_STORAGE_KEY,
-  "objetdart:arrival:v1",
-  "the remembered key is the one the door writes — renaming it would re-invite everyone, or lose the silence",
+  "objetdart:arrival:v2",
+  "the remembered key is the one the door writes — v2 is the plain-english card; renaming it again would re-invite everyone, or lose the silence",
 );
 
 const encoded = encodeArrivalDismissal();
@@ -121,8 +123,8 @@ assert.match(
 );
 assert.doesNotMatch(
   invitation,
-  /objetdart:arrival:v1/,
-  "the storage key lives in src/lib/arrival.ts so the codec and the write cannot drift",
+  /objetdart:arrival/,
+  "the storage key lives in src/lib/arrival.ts so the codec and the write cannot drift — no version of the literal belongs in the component",
 );
 assert.doesNotMatch(invitation, /\/group|\/eigen/, "the invitation must not name the law-rooms");
 assert.doesNotMatch(

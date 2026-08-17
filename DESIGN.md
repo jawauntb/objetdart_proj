@@ -46,9 +46,12 @@ These two axioms — three registers, water-as-template — predict almost every
 index, and the room keeps its one registry address so chrome, guide, and axis
 all resolve where they always did. The constellation panel ("view all" in the
 header) remains the way to every other room. On a first visit, after a breath
-so the fold is seen, a dismissable invitation (`ArrivalInvitation`) names the
-album and the hand; dismissal is remembered at `objetdart:arrival:v1` and the
-card does not return, nor does it open the chrome `?`.
+so the fold is seen, a dismissable invitation (`ArrivalInvitation`) says in
+plain english what the scale model is, what it is for, how the hand works on a
+phone and on a computer, and where the per-room big ideas live; dismissal is
+remembered at `objetdart:arrival:v2` (v1 records are ignored, so everyone meets
+the plain card once) and the card does not return, nor does it open the
+chrome `?`.
 
 The manifold replaced a scrolling gallery of live route previews
 (`ScrollingGallery`, now unmounted like `Threshold` before it), which itself

@@ -148,8 +148,10 @@ And the laws that no test can reach — hold these yourself:
 
   The second narrowing is the arrival invitation on `/manifold` only
   (`src/components/ArrivalInvitation.tsx`): volunteered once after a short breath
-  so the fold is seen first, dismissable like a modal, remembered at
-  `objetdart:arrival:v1`, never inside another room, and it does not open the `?`.
+  so the fold is seen first, dismissable like a modal, written in plain english
+  by owner decree (v1 read as esoteric — a smart twelve-year-old must understand
+  every sentence on that card), remembered at `objetdart:arrival:v2`, never
+  inside another room, and it does not open the `?`.
   The ban on copy, labels and tooltips *inside* rooms stands exactly where it
   stood; discovery is still physical, and help is still asked for.
 - **Voice**: lowercase product copy, two of the three registers
