@@ -57,6 +57,7 @@ assert.ok(
 );
 
 const nativePackage = readJson("apps/native/package.json");
+const nativeTsconfig = readJson("apps/native/tsconfig.json");
 assert.equal(nativePackage.private, true, "the native app must remain private");
 assert.equal(nativePackage.main, "expo-router/entry", "Expo Router owns the native shell entry point");
 assert.match(nativePackage.dependencies.expo, /^~57\./, "native app must target Expo SDK 57");
@@ -65,11 +66,13 @@ assert.equal(nativePackage.dependencies["react-native"], "0.86.2", "Expo SDK 57 
 assert.match(nativePackage.engines.node, /22\.13/, "native builds must use the supported Node 22 line");
 assert.ok(nativePackage.dependencies["expo-dev-client"], "native development builds need expo-dev-client");
 assert.ok(nativePackage.dependencies["expo-router"], "native shell needs Expo Router");
+assert.equal(nativePackage.dependencies["@objet/universe-contracts"], "*", "native bridge consumes the shared universe contract package directly");
 assert.ok(nativePackage.devDependencies["babel-preset-expo"], "native bundle must declare Expo's Babel preset directly");
 assert.ok(
   !nativePackage.dependencies["react-native-webview"],
   "native shell cannot install a WebView dependency",
 );
+assert.equal(nativeTsconfig.compilerOptions.allowImportingTsExtensions, true, "native TypeScript must accept the contracts package's versioned source imports");
 
 const expoConfig = resolvedExpoConfig();
 assert.equal(expoConfig.ios?.deploymentTarget, "17.0", "iOS 17 is the native deployment floor");
@@ -119,6 +122,36 @@ assert.match(plugin, /native-tests/, "native-root plugin must reserve the UI-tes
 assert.match(plugin, /PrivacyInfo\.xcprivacy/, "native-root plugin must reserve the privacy manifest path for U3 attachment");
 assert.doesNotMatch(plugin, /withXcodeProject/, "U1 must not attach empty native sources to the generated Xcode project");
 
+const universeModule = readText("apps/native/modules/objet-universe/expo-module.config.json");
+const universeBridge = readText("apps/native/modules/objet-universe/src/ObjetUniverseView.tsx");
+const universeView = readText("apps/native/modules/objet-universe/ios/ObjetUniverseView.swift");
+const universeModuleDefinition = readText("apps/native/modules/objet-universe/ios/ObjetUniverseModule.swift");
+const universePodspec = readText("apps/native/modules/objet-universe/ios/ObjetUniverse.podspec");
+const universeHost = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/UniverseHost.swift");
+const universeClock = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/UniverseClock.swift");
+const renderHost = readText("packages/objet-universe-kit/Sources/ObjetUniverseRender/RenderHost.swift");
+assert.match(universeModule, /ObjetUniverseModule/, "the local Expo module must register the native universe module");
+assert.match(universeBridge, /requireNativeViewManager/, "React must use the native universe view rather than recreate a renderer");
+assert.match(universeModuleDefinition, /Name\("ObjetUniverse"\)/, "the native module name must match the JS bridge");
+assert.match(universeView, /UniverseHost/, "the native view must hold the scientific host");
+assert.match(universePodspec, /objet-universe-kit\/Sources/, "the Expo pod must compile the shared Swift authority sources");
+assert.match(universeHost, /func handoff\(to/, "the host must own transactional scene handoff");
+assert.match(universeHost, /pendingCommands/, "semantic commands must wait at the authoritative host boundary");
+assert.match(universeHost, /func shutdown\(\)/, "native teardown must retire the active scientific kernel");
+assert.match(universeClock, /maxStepsPerFrame/, "the authority clock must bound presentation stalls");
+assert.match(universeClock, /maxPendingActions/, "the authority clock must apply bounded command backpressure");
+assert.match(renderHost, /clockStarts/, "the renderer host must expose its one-clock lifecycle");
+assert.match(universeView, /weak var view/, "the display link must not retain the native view");
+assert.match(universeView, /renderHost\.retireAll\(\)/, "native teardown must retire renderer resources");
+assert.match(universeView, /guard window != nil else \{ return \}/, "foreground lifecycle cannot restart a detached native view");
+
+const nativeLayout = readText("apps/native/app/_layout.tsx");
+assert.match(nativeLayout, /<ObjetUniverseView/, "the native universe host must mount behind route overlays");
+assert.ok(
+  nativeLayout.indexOf("<ObjetUniverseView") < nativeLayout.indexOf("<Stack"),
+  "route overlays must mount above the persistent native universe host",
+);
+
 const nativeReadme = readText("apps/native/README.md");
 assert.match(nativeReadme, /apps\/native\/ios\/.*is generated/is, "README must make generated iOS ownership explicit");
 assert.match(nativeReadme, /development build/i, "README must require a development build, not Expo Go");
@@ -131,6 +164,12 @@ assert.match(nativeCi, /runs-on: ubuntu-latest/, "workspace-only native CI must 
 assert.match(nativeCi, /node-version:\s*22\.13\.x/, "native CI must run the Node line declared by the native workspace");
 assert.match(nativeCi, /expo\s+--\s+export\s+--platform ios/, "native CI must execute Metro for an iOS bundle");
 assert.match(nativeCi, /name: Native iOS prebuild/, "native CI must reproduce the generated iOS project on macOS");
+assert.match(nativeCi, /npm run native:host/, "native CI must execute the Swift host lifecycle suite on macOS");
+assert.match(nativeCi, /pod install/, "native CI must resolve the autolinked universe pod");
+// Full xcodebuild + Xcode 26 (Swift 6.2) simulator/device compilation is
+// deferred to the U8/U16 physical-device evidence stage per the native
+// cosmogony plan. See the comment in .github/workflows/native-ci.yml.
+assert.match(nativeCi, /deferred to the U8\/U16/i, "native CI must document that full xcodebuild is deferred to the U8/U16 evidence stage");
 assert.match(nativeCi, /tsconfig\.json/, "native CI must run when native-isolation TypeScript changes");
 assert.match(nativeCi, /\.gitignore/, "native CI must run when generated-tree ownership changes");
 

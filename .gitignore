@@ -2,6 +2,7 @@ node_modules/
 .next/
 out/
 apps/native/ios/
+packages/objet-universe-kit/.build/
 apps/native/.expo/
 .DS_Store
 *.log
