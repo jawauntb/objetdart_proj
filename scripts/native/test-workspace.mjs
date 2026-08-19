@@ -173,6 +173,36 @@ assert.match(nativeCi, /deferred to the U8\/U16/i, "native CI must document that
 assert.match(nativeCi, /tsconfig\.json/, "native CI must run when native-isolation TypeScript changes");
 assert.match(nativeCi, /\.gitignore/, "native CI must run when generated-tree ownership changes");
 
+// U8 evidence harness contract: the fixture regression runner, the cross-
+// language comparator, the scenario trace type, the scenario runner overlay,
+// the performance overlay, and the schema doc must all remain in place.
+import { existsSync } from "node:fs";
+const u8Files = [
+  "scripts/native/run-reference-fixtures.mjs",
+  "scripts/native/compare-cross-language-fixtures.mjs",
+  "packages/objet-universe-kit/Sources/ObjetUniverseCore/ScenarioTrace.swift",
+  "packages/objet-universe-kit/Tests/ObjetUniverseCoreTests/ScenarioTraceTests.swift",
+  "apps/native/src/debug/ScenarioRunner.tsx",
+  "apps/native/src/debug/PerformanceOverlay.tsx",
+  "docs/native/evidence-schema.md",
+];
+for (const relative of u8Files) {
+  assert.ok(existsSync(path.join(root, relative)), `U8 evidence harness requires ${relative}`);
+}
+assert.equal(
+  rootPackage.scripts["native:fixtures:verify"],
+  "node --experimental-strip-types scripts/native/run-reference-fixtures.mjs",
+  "U8 evidence harness requires the fixture regression script to remain independently runnable",
+);
+assert.equal(
+  rootPackage.scripts["native:fixtures:compare"],
+  "node scripts/native/compare-cross-language-fixtures.mjs",
+  "U8 evidence harness requires the cross-language fixture comparator to remain independently runnable",
+);
+const evidenceSchema = readText("docs/native/evidence-schema.md");
+assert.match(evidenceSchema, /bundleVersion/i, "evidence schema doc must document the bundle envelope");
+assert.match(evidenceSchema, /Simulator evidence/i, "evidence schema doc must call out simulator-only deviation policy");
+
 const gitignore = readText(".gitignore");
 assert.match(gitignore, /^apps\/native\/ios\/$/m, "generated apps/native/ios must remain ignored");
 assert.equal(
