@@ -1,0 +1,13 @@
+{
+  "name": "@objet/universe-contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Versioned deterministic contracts shared by the native objet d'art universe.",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit --target ES2022 --module esnext --moduleResolution bundler --allowImportingTsExtensions --strict src/*.ts test/*.ts",
+    "test": "node --experimental-strip-types test/contracts.test.ts"
+  }
+}

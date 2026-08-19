@@ -33,6 +33,11 @@ import {
   detailForTier,
 } from "@/lib/room-runtime";
 import { bakeRadialSprite, drawRadialStamp } from "@/lib/scene/radial-sprite";
+import {
+  advanceString1DInto,
+  advanceWave2DInto,
+  fillRefractionSpeedField,
+} from "@/lib/waves";
 
 /**
  * Waves — a wave-propagation instrument.
@@ -568,12 +573,7 @@ export default function Waves() {
         for (let i = 3; i < image.data.length; i += 4) image.data[i] = 255;
       }
       const speedFld = new Float32Array(n);
-      for (let y = 0; y < gh; y += 1) {
-        // slow band across the lower third bends fronts (refraction)
-        const fy = y / gh;
-        const s = 0.42 + 0.58 * (1 - clamp((fy - 0.3) / 0.6, 0, 1));
-        for (let x = 0; x < gw; x += 1) speedFld[y * gw + x] = s;
-      }
+      fillRefractionSpeedField(speedFld, gw, gh);
       simRef.current = {
         gw,
         gh,
@@ -663,33 +663,6 @@ export default function Waves() {
     const observer = new ResizeObserver(resize);
     observer.observe(root);
     window.addEventListener("resize", resize);
-
-    // 2D finite-difference step. usesField => refraction speed gradient.
-    const step2D = (sim: Sim, c2: number, dampFactor: number, usesField: boolean) => {
-      const { gw, gh, a, b, speedFld } = sim;
-      for (let y = 1; y < gh - 1; y += 1) {
-        const row = y * gw;
-        for (let x = 1; x < gw - 1; x += 1) {
-          const i = row + x;
-          const lap = a[i - 1] + a[i + 1] + a[i - gw] + a[i + gw] - 4 * a[i];
-          const cc = usesField ? c2 * speedFld[i] : c2;
-          b[i] = (2 * a[i] - b[i] + cc * lap) * dampFactor;
-        }
-      }
-      // fixed edges (u=0) reflect the wavefronts back into the tank
-      sim.a = b;
-      sim.b = a;
-    };
-
-    const step1D = (sim: Sim, c2: number, dampFactor: number) => {
-      const { sN, sa, sb } = sim;
-      for (let i = 1; i < sN - 1; i += 1) {
-        const lap = sa[i - 1] + sa[i + 1] - 2 * sa[i];
-        sb[i] = (2 * sa[i] - sb[i] + c2 * lap) * dampFactor;
-      }
-      sim.sa = sb;
-      sim.sb = sa;
-    };
 
     // CPU fallback raster — the exact original per-pixel loop, only reached
     // when WebGL2/WebGL1 are both unavailable or the context has been lost.
@@ -1804,8 +1777,28 @@ export default function Waves() {
       const substeps = Math.floor(stepAcc);
       stepAcc -= substeps;
       for (let s = 0; s < substeps; s += 1) {
-        if (m === "string") step1D(sim, c2, dampFactor);
-        else step2D(sim, c2, dampFactor, m === "refraction");
+        if (m === "string") {
+          advanceString1DInto({
+            current: sim.sa,
+            previous: sim.sb,
+            next: sim.sb,
+            cSquared: c2,
+            damping: dampFactor,
+          });
+          [sim.sa, sim.sb] = [sim.sb, sim.sa];
+        } else {
+          advanceWave2DInto({
+            current: sim.a,
+            previous: sim.b,
+            next: sim.b,
+            width: sim.gw,
+            height: sim.gh,
+            cSquared: c2,
+            damping: dampFactor,
+            speedField: m === "refraction" ? sim.speedFld : undefined,
+          });
+          [sim.a, sim.b] = [sim.b, sim.a];
+        }
       }
 
       if (m === "string") {
