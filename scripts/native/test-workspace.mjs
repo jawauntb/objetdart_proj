@@ -166,6 +166,7 @@ assert.match(nativeCi, /expo\s+--\s+export\s+--platform ios/, "native CI must ex
 assert.match(nativeCi, /name: Native iOS prebuild/, "native CI must reproduce the generated iOS project on macOS");
 assert.match(nativeCi, /npm run native:host/, "native CI must execute the Swift host lifecycle suite on macOS");
 assert.match(nativeCi, /pod install/, "native CI must resolve the autolinked universe pod");
+assert.match(nativeCi, /Xcode_26/, "native CI must select the Swift 6.2 toolchain required by Expo Modules JSI");
 assert.match(nativeCi, /xcodebuild .*objetdart\.xcworkspace/, "native CI must compile the generated iOS binary");
 assert.match(nativeCi, /tsconfig\.json/, "native CI must run when native-isolation TypeScript changes");
 assert.match(nativeCi, /\.gitignore/, "native CI must run when generated-tree ownership changes");

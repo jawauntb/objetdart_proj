@@ -56,4 +56,10 @@ jobs:
       - run: diff --unified /tmp/objet-ios-first.sha /tmp/objet-ios-second.sha
       - run: diff --unified /tmp/objet-ios-first.pbxproj /tmp/objet-ios-second.pbxproj
       - run: cd apps/native/ios && pod install
+      - name: Select the Swift 6.2 Xcode toolchain required by Expo Modules JSI
+        run: |
+          xcode_app="$(find /Applications -maxdepth 1 -type d -name 'Xcode_26*.app' -print | sort | tail -n 1)"
+          test -n "$xcode_app"
+          sudo xcode-select --switch "$xcode_app/Contents/Developer"
+          xcodebuild -version
       - run: xcodebuild -workspace apps/native/ios/objetdart.xcworkspace -scheme objetdart -configuration Debug -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build
