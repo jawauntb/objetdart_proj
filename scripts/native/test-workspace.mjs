@@ -211,4 +211,88 @@ assert.equal(
   "generated apps/native/ios must not become a source tree",
 );
 
+// U7 — native art direction and felt-proof pedagogy.
+// The design tokens, scene-style wrapper, chrome, guide data, and guide sheet
+// must all be present; the reviewer prose must document the six shared
+// sections; the world route must mount the shared chrome; and both U7 test
+// files must be runnable under `node --experimental-strip-types`.
+const designTokens = readText("apps/native/src/design/tokens.ts");
+const designSceneStyle = readText("apps/native/src/design/sceneStyle.ts");
+const nativeChrome = readText("apps/native/src/design/NativeChrome.tsx");
+const guideData = readText("apps/native/src/guide/guideData.ts");
+const guideSheet = readText("apps/native/src/guide/GuideSheet.tsx");
+const artDirection = readText("docs/native/art-direction.md");
+const worldRoute = readText("apps/native/app/world.tsx");
+
+assert.match(designTokens, /export const PALETTE/, "native design tokens must declare a shared palette");
+assert.match(designTokens, /REDUCED_MOTION_EQUIVALENTS/, "native design tokens must declare reduced-motion equivalents that preserve state");
+assert.match(designSceneStyle, /RELEASE_SCENE_MANIFEST/, "sceneStyle.ts must consume RELEASE_SCENE_MANIFEST rather than restate scene briefs");
+assert.doesNotMatch(designSceneStyle, /bannedForms:\s*\[/, "sceneStyle.ts must not restate bannedForms — read them from the settled manifest");
+assert.match(nativeChrome, /GuideSheet/, "NativeChrome must host the GuideSheet as its only writing surface");
+assert.doesNotMatch(nativeChrome, /\bTabs\b[\s\S]*from\s*["']expo-router["']/, "NativeChrome must not introduce a permanent tab bar");
+assert.match(guideData, /NATIVE_GUIDE_VERBS/, "guideData.ts must declare the site-wide verb vocabulary the guide covers");
+assert.match(guideData, /REVEAL_STEPS/, "guideData.ts must declare the Play/Reveal/Name/Transfer/Express choreography");
+assert.match(guideSheet, /allowFontScaling/, "GuideSheet must respect Dynamic Type accessibility sizes");
+assert.match(guideSheet, /reducedMotion/, "GuideSheet must respect prefers-reduced-motion");
+
+for (const section of [
+  /Living scientific sublime/i,
+  /state-to-sense mappings/i,
+  /Scale registers/i,
+  /Typography/i,
+  /Motion language/i,
+  /Banned generic forms/i,
+  /Scene briefs/i,
+  /Post-discovery reveal choreography/i,
+  /Minimal safe-area chrome/i,
+  /iPhone vs iPad/i,
+]) {
+  assert.match(artDirection, section, `art-direction.md is missing required section matching ${section}`);
+}
+
+assert.match(worldRoute, /<NativeChrome/, "the world route must mount NativeChrome above the persistent universe host");
+assert.match(worldRoute, /backgroundColor:\s*["']transparent["']/, "the world route must remain transparent so the persistent universe host renders through");
+
+const nativeGuideVerbs = extractStringArrayLiteral(guideData, "NATIVE_GUIDE_VERBS");
+assert.ok(nativeGuideVerbs.length > 0, "NATIVE_GUIDE_VERBS must declare the guide-covered verbs");
+const webDefaults = readText("src/lib/gesture/defaults.ts");
+const webGlobalVerbs = extractGlobalVerbList(webDefaults);
+assert.ok(webGlobalVerbs.length > 0, "web GLOBAL_VERBS must remain extractable so native coverage can be pinned");
+for (const verb of webGlobalVerbs) {
+  assert.ok(nativeGuideVerbs.includes(verb), `native guide missing coverage for web GLOBAL_VERB "${verb}"`);
+}
+for (const verb of nativeGuideVerbs) {
+  assert.ok(webGlobalVerbs.includes(verb), `native guide declares verb "${verb}" that is not in web GLOBAL_VERBS`);
+}
+assert.equal(nativeGuideVerbs.length, webGlobalVerbs.length, "native guide must map 1:1 to web GLOBAL_VERBS");
+
+// Both U7 test files must remain runnable under node --experimental-strip-types.
+execFileSync("node", ["--experimental-strip-types", "apps/native/src/design/__tests__/sceneStyle.test.ts"], { cwd: root, stdio: "inherit" });
+execFileSync("node", ["--experimental-strip-types", "apps/native/src/guide/__tests__/guideData.test.ts"], { cwd: root, stdio: "inherit" });
+
+function extractStringArrayLiteral(source, identifier) {
+  const marker = `export const ${identifier}`;
+  const start = source.indexOf(marker);
+  if (start === -1) return [];
+  const open = source.indexOf("[", start);
+  const close = source.indexOf("]", open);
+  if (open === -1 || close === -1) return [];
+  const body = source.slice(open + 1, close);
+  return body.split(",").map((entry) => entry.trim().replace(/^["']|["'](?:\s*as\s+const)?$/g, "")).filter((entry) => entry.length > 0 && !entry.includes(" "));
+}
+
+function extractGlobalVerbList(source) {
+  const start = source.indexOf("export const GLOBAL_VERBS");
+  if (start === -1) return [];
+  const open = source.indexOf("[", start);
+  const close = source.indexOf("] as const", open);
+  if (open === -1 || close === -1) return [];
+  const body = source.slice(open, close);
+  const verbs = [];
+  const regex = /verb:\s*"([^"]+)"/g;
+  let match;
+  while ((match = regex.exec(body)) !== null) verbs.push(match[1]);
+  return verbs;
+}
+
 console.log("native workspace contract: ok");
