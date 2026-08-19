@@ -295,4 +295,80 @@ function extractGlobalVerbList(source) {
   return verbs;
 }
 
+// U5 — gesture grammar, vessel bus, and accessibility action assertions.
+const gestureActions = readText("apps/native/src/universe/actions.ts");
+const gestureLabels = readText("apps/native/src/accessibility/actionLabels.ts");
+const gestureRotor = readText("apps/native/src/accessibility/UniverseActions.tsx");
+const gestureRouter = readText("apps/native/modules/objet-universe/ios/GestureRouter.swift");
+const vesselSensors = readText("apps/native/modules/objet-universe/ios/VesselSensors.swift");
+const gestureTest = readText("apps/native/src/accessibility/__tests__/UniverseActions.test.tsx");
+
+for (const [line, name] of [
+  ["dwellMs: 900", "dwellMs"],
+  ["ceremonyMs: 2500", "ceremonyMs"],
+  ["tapMaxMs: 250", "tapMaxMs"],
+  ["tapTrainMs: 280", "tapTrainMs"],
+  ["moveTolPx: 12", "moveTolPx"],
+  ["flickVel: 0.6", "flickVel"],
+  ["scrubWinding: 0.75", "scrubWinding"],
+  ["pinchDeadzone: 0.03", "pinchDeadzone"],
+  ["twistDeadzoneRad: 0.1", "twistDeadzoneRad"],
+  ["shakeThresh: 16", "shakeThresh"],
+  ["knockThresh: 22", "knockThresh"],
+  ["voiceStaggerMs: 80", "voiceStaggerMs"],
+  ["voiceDecideMs: 180", "voiceDecideMs"],
+  ["spanEnterMs: 350", "spanEnterMs"],
+  ["spanTolPx: 16", "spanTolPx"],
+]) {
+  assert.ok(
+    gestureActions.includes(line),
+    `native actions.ts must declare ${name} verbatim as \`${line}\``,
+  );
+}
+for (const line of [
+  "public static let dwellMs: Double = 900",
+  "public static let ceremonyMs: Double = 2500",
+  "public static let tapMaxMs: Double = 250",
+  "public static let tapTrainMs: Double = 280",
+  "public static let moveTolPx: Double = 12",
+  "public static let flickVel: Double = 0.6",
+  "public static let scrubWinding: Double = 0.75",
+  "public static let pinchDeadzone: Double = 0.03",
+  "public static let twistDeadzoneRad: Double = 0.1",
+  "public static let shakeThresh: Double = 16",
+  "public static let knockThresh: Double = 22",
+  "public static let voiceStaggerMs: Double = 80",
+  "public static let voiceDecideMs: Double = 180",
+  "public static let spanEnterMs: Double = 350",
+  "public static let spanTolPx: Double = 16",
+]) {
+  assert.ok(gestureRouter.includes(line), `Swift GestureRouter must declare threshold ${line}`);
+}
+assert.match(gestureRouter, /public final class GestureRouter/, "GestureRouter must remain the free-standing service");
+assert.match(gestureRouter, /public static func resolve\(shape: NativeGestureShape\)/, "GestureRouter must expose a pure verb resolver");
+assert.match(gestureRouter, /public static func intensity\(from shape: NativeGestureShape\)/, "GestureRouter must expose a pure intensity classifier");
+assert.match(gestureRouter, /public func pumpDiscovery/, "GestureRouter must own the discovery clock");
+assert.match(vesselSensors, /public final class VesselSensors/, "VesselSensors must remain the free-standing service");
+assert.match(vesselSensors, /askedThisSession/, "VesselSensors must honour the ask-at-most-once invariant");
+assert.match(vesselSensors, /flipEnterDeg/, "VesselSensors must hysteresis-guard face-down");
+assert.match(vesselSensors, /public func suspend/, "VesselSensors must suspend on backgrounding");
+assert.match(vesselSensors, /public func resume/, "VesselSensors must resume on foreground without prompting");
+assert.match(gestureLabels, /UNIVERSE_ACTION_LABELS/, "actionLabels.ts must expose the VoiceOver rotor registry");
+assert.match(gestureLabels, /buildAssistiveCommands/, "actionLabels.ts must expose the pure assembler shared with the React shell");
+assert.match(gestureRotor, /accessibilityActions/, "UniverseActions.tsx must attach accessibilityActions to its View");
+assert.match(gestureRotor, /commandFromShape/, "UniverseActions.tsx must reuse the same command assembler as touch");
+assert.match(
+  gestureTest,
+  /cross-language threshold pin — Swift GestureRouter constants match TypeScript verbatim/,
+  "accessibility test must pin Swift thresholds against TypeScript",
+);
+
+// Execute the U5 accessibility test suite. It runs under
+// `node --experimental-strip-types`; the wrapper handles the .tsx extension
+// (Node 22 still refuses to interpret .tsx directly).
+execFileSync(process.execPath, ["scripts/native/run-accessibility-test.mjs"], {
+  cwd: root,
+  stdio: "inherit",
+});
+
 console.log("native workspace contract: ok");
