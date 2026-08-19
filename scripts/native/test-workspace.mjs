@@ -371,4 +371,66 @@ execFileSync(process.execPath, ["scripts/native/run-accessibility-test.mjs"], {
   stdio: "inherit",
 });
 
+// U6 — Shared audio, haptic, and sensory clock. The native sensory bus lives
+// in its own SPM target so scenes cannot import it accidentally through
+// ObjetUniverseCore, and its React surface is limited to muting preferences.
+const sensoryPackage = readText("packages/objet-universe-kit/Package.swift");
+assert.match(sensoryPackage, /ObjetUniverseSensory/, "the kit must publish the sensory library as a separate SPM target");
+assert.match(sensoryPackage, /ObjetUniverseSensoryTests/, "the kit must run the sensory test target");
+
+const sensoryEvent = readText("packages/objet-universe-kit/Sources/ObjetUniverseSensory/SensoryEvent.swift");
+assert.match(sensoryEvent, /SensoryClock/, "the sensory event must carry the shared native event clock");
+assert.match(sensoryEvent, /logicalTick/, "the sensory event must accept a logicalTick from the host");
+assert.match(sensoryEvent, /wallOffset/, "the sensory event must accept a wallOffset from the host");
+assert.match(sensoryEvent, /SensoryDerivation/, "state, audio, and haptic must derive from one normalized energy");
+assert.match(sensoryEvent, /SensorySkewBudget/, "the sensory event must declare a skew budget the host can measure against");
+assert.match(sensoryEvent, /SensoryFallbackPolicy/, "the sensory bus must document its restrained fallback policy");
+
+const audioBus = readText("packages/objet-universe-kit/Sources/ObjetUniverseSensory/AudioBus.swift");
+assert.match(audioBus, /public static let shared/, "the audio bus must remain a singleton — one AVAudioSession per app");
+assert.match(audioBus, /interruption/i, "the audio bus must handle interruption + route change recovery");
+assert.match(audioBus, /appliedEventIDs/, "the audio bus must keep an authoritative ledger so recovery cannot duplicate events");
+assert.match(audioBus, /Confirmation/, "the audio bus must expose a clean async completion handle for UniverseHost.promote");
+
+const hapticBus = readText("packages/objet-universe-kit/Sources/ObjetUniverseSensory/HapticBus.swift");
+assert.match(hapticBus, /public static let shared/, "the haptic bus must remain a singleton — one CHHapticEngine per app");
+assert.match(hapticBus, /SensoryFallbackPolicy/, "the haptic bus must respect the restrained fallback policy");
+assert.match(hapticBus, /appliedEventIDs/, "the haptic bus must keep an authoritative ledger so engine reset cannot duplicate events");
+assert.match(hapticBus, /resetHandler/, "the haptic bus must recover from engine reset");
+
+const sensoryTests = readText("packages/objet-universe-kit/Tests/ObjetUniverseSensoryTests/SensoryClockTests.swift");
+assert.match(sensoryTests, /testCollisionEnergyDerivesEverySenseFromOneNumber/, "sensory tests must prove derivation identity from one normalized energy");
+assert.match(sensoryTests, /testAudioInterruptionRecoveryDoesNotDuplicatePastEvents/, "sensory tests must prove interruption recovery is idempotent");
+assert.match(sensoryTests, /testMutingAudioDoesNotSilenceHapticsOrVisualFeedback/, "sensory tests must prove muting isolation across senses");
+assert.match(sensoryTests, /testUnsupportedHapticFallbackNeverFiresAGenericBuzzOnPlainSuccess/, "sensory tests must prove the restrained fallback discipline");
+assert.match(sensoryTests, /testScheduledOnsetsStayWithinDeclaredSkewBudget/, "sensory tests must prove skew stays within the declared budget");
+
+const sensoryModule = readText("apps/native/modules/objet-universe/ios/SensoryModule.swift");
+assert.match(sensoryModule, /Name\("ObjetSensory"\)/, "the native sensory module must register as ObjetSensory");
+assert.match(sensoryModule, /AudioBus\.shared/, "the native sensory module must consult the singleton audio bus");
+assert.match(sensoryModule, /HapticBus\.shared/, "the native sensory module must consult the singleton haptic bus");
+assert.doesNotMatch(sensoryModule, /class\s+ObjetUniverseModule/, "the sensory helper must not redefine the universe module");
+
+const expoModuleConfig = JSON.parse(readText("apps/native/modules/objet-universe/expo-module.config.json"));
+assert.ok(expoModuleConfig.apple?.modules?.includes("ObjetUniverseModule"), "the Expo module config must keep registering the universe module");
+assert.ok(expoModuleConfig.apple?.modules?.includes("SensoryModule"), "the Expo module config must register the new sensory helper module");
+
+const sensoryPreferences = readText("apps/native/src/sensory/preferences.ts");
+assert.match(sensoryPreferences, /DEFAULT_SENSORY_PREFERENCES/, "preferences must publish a frozen default the bridge can seed from");
+assert.match(sensoryPreferences, /enabledSenses/, "preferences must derive the enabled sense set for the bus");
+assert.match(sensoryPreferences, /Visual scientific feedback stays authoritative/, "preferences must document that visual feedback remains authoritative");
+assert.doesNotMatch(sensoryPreferences, /visualMuted/, "preferences must never expose a visual mute — visual feedback is authoritative");
+
+const sensoryPreferencesTest = readText("apps/native/src/sensory/__tests__/preferences.test.ts");
+assert.match(sensoryPreferencesTest, /muting audio does not disable haptics/, "preferences tests must prove audio muting does not silence haptics");
+assert.match(sensoryPreferencesTest, /muting haptics does not disable audio/, "preferences tests must prove haptic muting does not silence audio");
+
+// Run the sensory preferences test with node --experimental-strip-types so
+// the TypeScript source doubles as its own executable spec.
+execFileSync(
+  process.execPath,
+  ["--experimental-strip-types", "--test", "apps/native/src/sensory/__tests__/preferences.test.ts"],
+  { cwd: root, stdio: "inherit" },
+);
+
 console.log("native workspace contract: ok");
