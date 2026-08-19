@@ -125,7 +125,10 @@
     "native:prebuild": "npm --workspace @objet/native-universe run prebuild",
     "native:ios": "npm --workspace @objet/native-universe run ios",
     "native:check": "npm run test:native-workspace && npm --workspace @objet/native-universe run typecheck && npm run native:fixtures:verify",
-    "native:host": "cd packages/objet-universe-kit && swift test"
+    "native:host": "cd packages/objet-universe-kit && swift test",
+    "test:crash-consistency": "node scripts/native/test-crash-consistency.mjs",
+    "test:persistence-unit": "node --experimental-strip-types --test apps/native/src/persistence/__tests__/UniverseRepository.test.ts apps/native/src/persistence/__tests__/recovery.test.ts",
+    "native:persistence": "npm run test:persistence-unit && npm run test:crash-consistency"
   },
   "dependencies": {
     "@chenglou/pretext": "^0.0.8",
