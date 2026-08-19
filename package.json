@@ -120,9 +120,11 @@
     "test:native-scope": "node --experimental-strip-types scripts/test-native-scope.mjs",
     "test:native-fixtures": "node --experimental-strip-types scripts/test-native-fixtures.mjs",
     "native:fixtures": "node --experimental-strip-types scripts/native/generate-reference-fixtures.mjs",
+    "native:fixtures:verify": "node --experimental-strip-types scripts/native/run-reference-fixtures.mjs",
+    "native:fixtures:compare": "node scripts/native/compare-cross-language-fixtures.mjs",
     "native:prebuild": "npm --workspace @objet/native-universe run prebuild",
     "native:ios": "npm --workspace @objet/native-universe run ios",
-    "native:check": "npm run test:native-workspace && npm --workspace @objet/native-universe run typecheck",
+    "native:check": "npm run test:native-workspace && npm --workspace @objet/native-universe run typecheck && npm run native:fixtures:verify",
     "native:host": "cd packages/objet-universe-kit && swift test"
   },
   "dependencies": {
