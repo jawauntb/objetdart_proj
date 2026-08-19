@@ -1,0 +1,11 @@
+{
+  "name": "@objet/objet-universe",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.ts",
+  "peerDependencies": {
+    "expo": "*",
+    "react": "*",
+    "react-native": "*"
+  }
+}

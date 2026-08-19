@@ -46,6 +46,7 @@ jobs:
           node-version: 22.13.x
           cache: npm
       - run: npm ci
+      - run: npm run native:host
       - run: npm run native:prebuild
       - run: find apps/native/ios -type f ! -path '*/project.pbxproj' -print0 | sort -z | xargs -0 shasum > /tmp/objet-ios-first.sha
       - run: sed -E 's/[A-F0-9]{24}/OBJECT_ID/g' apps/native/ios/objetdart.xcodeproj/project.pbxproj > /tmp/objet-ios-first.pbxproj
@@ -54,3 +55,5 @@ jobs:
       - run: sed -E 's/[A-F0-9]{24}/OBJECT_ID/g' apps/native/ios/objetdart.xcodeproj/project.pbxproj > /tmp/objet-ios-second.pbxproj
       - run: diff --unified /tmp/objet-ios-first.sha /tmp/objet-ios-second.sha
       - run: diff --unified /tmp/objet-ios-first.pbxproj /tmp/objet-ios-second.pbxproj
+      - run: cd apps/native/ios && pod install
+      - run: xcodebuild -workspace apps/native/ios/objetdart.xcworkspace -scheme objetdart -configuration Debug -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build

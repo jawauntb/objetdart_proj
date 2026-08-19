@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@objet/universe-contracts": "*",
     "expo": "~57.0.14",
     "expo-build-properties": "~57.0.12",
     "expo-constants": "~57.0.12",

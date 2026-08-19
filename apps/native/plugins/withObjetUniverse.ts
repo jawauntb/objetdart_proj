@@ -16,10 +16,9 @@ const nativeRoots = {
 /**
  * Reserves the source roots that a clean Expo prebuild must know about.
  *
- * U3 fills these roots with the native view and Swift package. Keeping the
- * roots in this source-controlled plugin, rather than under apps/native/ios,
- * makes the generated Xcode tree disposable and gives U3 one place to attach
- * the source, test, package, and privacy resources once they exist.
+ * Keeping these roots in source control, rather than under apps/native/ios,
+ * makes the generated Xcode tree disposable while the native module, Swift
+ * package, UI tests, and privacy resources remain durable project inputs.
  */
 const withObjetUniverse: ConfigPlugin = (config) => {
   config.extra = {
