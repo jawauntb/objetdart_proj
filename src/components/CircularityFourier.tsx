@@ -17,22 +17,17 @@ import { useField } from "@/store/field";
 import MobileInstrumentPanel from "@/components/MobileInstrumentPanel";
 import { onVisibility, onGalleryPause, detailForTier, createFrameGovernor, isEmbeddedFrame } from "@/lib/room-runtime";
 import { onVessel } from "@/lib/vessel";
+import {
+  TAU,
+  clamp,
+  epicycleChain,
+  epicycleTipY,
+  harmonicFor,
+  type FourierPreset,
+} from "@/lib/waves";
 
-type Preset = "square" | "saw" | "triangle" | "pulse";
+type Preset = FourierPreset;
 
-type Harmonic = {
-  n: number;
-  r: number;
-  sign: number;
-  hue: string;
-};
-
-type EpicyclePoint = Harmonic & {
-  x: number;
-  y: number;
-};
-
-const TAU = Math.PI * 2;
 const CENTER_X = 380;
 const CENTER_Y = 372;
 const WAVE_X = 690;
@@ -45,92 +40,10 @@ const PRESETS: Array<{ id: Preset; label: string; tone: string; midi: number }> 
   { id: "pulse", label: "pulse", tone: "#b7a0ff", midi: 62 },
 ];
 
-const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
 
 function pathFromPoints(points: Array<readonly [number, number]>) {
   return points.map(([x, y], index) => `${index === 0 ? "M" : "L"}${x.toFixed(2)} ${y.toFixed(2)}`).join(" ");
-}
-
-function harmonicRadius(preset: Preset, index: number, breath: number): Harmonic {
-  const palette = ["#f1d77c", "#66d4c9", "#ff7f8f", "#92a7ff", "#f0a45e", "#8fe1aa"];
-  const hue = palette[index % palette.length];
-
-  if (preset === "saw") {
-    const n = index + 1;
-    return { n, r: 88 / n, sign: index % 2 ? -1 : 1, hue };
-  }
-
-  if (preset === "triangle") {
-    const n = index * 2 + 1;
-    return { n, r: 112 / (n * n), sign: index % 2 ? -1 : 1, hue };
-  }
-
-  if (preset === "pulse") {
-    const n = index + 1;
-    const duty = 0.34 + Math.sin(breath * TAU) * 0.08;
-    const signed = 108 * (Math.sin(Math.PI * n * duty) / (Math.PI * n));
-    return { n, r: Math.abs(signed), sign: signed < 0 ? -1 : 1, hue };
-  }
-
-  const n = index * 2 + 1;
-  return { n, r: 80 / n, sign: 1, hue };
-}
-
-function epicycle(preset: Preset, terms: number, theta: number, breath: number) {
-  let x = 0;
-  let y = 0;
-  const chain: EpicyclePoint[] = [{ x, y, n: 0, r: 0, sign: 1, hue: "#f1d77c" }];
-
-  for (let i = 0; i < terms; i += 1) {
-    const h = harmonicRadius(preset, i, breath);
-    const drift = Math.sin(breath * TAU + i * 0.7) * 0.035;
-    const angle = theta * h.n * h.sign + drift;
-    x += Math.cos(angle) * h.r;
-    y += Math.sin(angle) * h.r;
-    chain.push({ ...h, x, y });
-  }
-
-  return chain;
-}
-
-// Trace-only fast path: the unrolled wave only ever reads the *y* of the
-// epicycle tip (see the `trace` useMemo below), and each harmonic's angle
-// depends solely on theta/n/sign/drift — never on the running x/y sum. So
-// unlike `epicycle()` above (which the visible circle chain needs in full,
-// with per-term x/y/hue), this skips building any per-term object or array
-// and skips the unused x accumulation entirely — same math, zero garbage
-// per sample, called up to a few hundred times per trace rebuild.
-function epicycleTipY(preset: Preset, terms: number, theta: number, breath: number): number {
-  let y = 0;
-  const duty = preset === "pulse" ? 0.34 + Math.sin(breath * TAU) * 0.08 : 0;
-  for (let i = 0; i < terms; i += 1) {
-    let n: number;
-    let r: number;
-    let sign: number;
-    if (preset === "saw") {
-      n = i + 1;
-      r = 88 / n;
-      sign = i % 2 ? -1 : 1;
-    } else if (preset === "triangle") {
-      n = i * 2 + 1;
-      r = 112 / (n * n);
-      sign = i % 2 ? -1 : 1;
-    } else if (preset === "pulse") {
-      n = i + 1;
-      const signed = 108 * (Math.sin(Math.PI * n * duty) / (Math.PI * n));
-      r = Math.abs(signed);
-      sign = signed < 0 ? -1 : 1;
-    } else {
-      n = i * 2 + 1;
-      r = 80 / n;
-      sign = 1;
-    }
-    const drift = Math.sin(breath * TAU + i * 0.7) * 0.035;
-    const angle = theta * n * sign + drift;
-    y += Math.sin(angle) * r;
-  }
-  return y;
 }
 
 function useLiveRef<T>(value: T) {
@@ -355,7 +268,7 @@ export default function CircularityFourier() {
     };
   }, [energyRef, presetRef, runningRef, speedRef, termsRef, thetaRef]);
 
-  const chain = useMemo(() => epicycle(preset, terms, theta, energy), [energy, preset, terms, theta]);
+  const chain = useMemo(() => epicycleChain(preset, terms, theta, energy), [energy, preset, terms, theta]);
   const tip = chain[chain.length - 1];
   const centerX = compact ? 430 : CENTER_X;
   const centerY = CENTER_Y;
@@ -378,7 +291,7 @@ export default function CircularityFourier() {
   }, [energy, preset, terms, theta, traceDetail, traceStep, waveScale, waveX, waveY]);
 
   const harmonicBars = useMemo(
-    () => Array.from({ length: 12 }, (_, index) => harmonicRadius(preset, index, energy)),
+    () => Array.from({ length: 12 }, (_, index) => harmonicFor(preset, index, energy)),
     [energy, preset],
   );
 
