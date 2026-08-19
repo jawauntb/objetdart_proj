@@ -4,8 +4,12 @@
   "private": true,
   "description": "a gold medal you can hold",
   "engines": {
-    "node": "20.x"
+    "node": ">=20.19.0 <23"
   },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -108,7 +112,11 @@
     "test:city-perf-allocs": "node scripts/test-city-perf-allocs.mjs",
     "test:city-perf-harness": "node scripts/test-city-perf-harness.mjs",
     "test:city-perf-probe": "node scripts/test-city-perf-probe.mjs",
-    "perf:city-first-paint": "node scripts/perf-city-first-paint.mjs"
+    "perf:city-first-paint": "node scripts/perf-city-first-paint.mjs",
+    "test:native-workspace": "node scripts/native/test-workspace.mjs",
+    "native:prebuild": "npm --workspace @objet/native-universe run prebuild",
+    "native:ios": "npm --workspace @objet/native-universe run ios",
+    "native:check": "npm run test:native-workspace && npm --workspace @objet/native-universe run typecheck"
   },
   "dependencies": {
     "@chenglou/pretext": "^0.0.8",
