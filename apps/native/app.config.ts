@@ -18,6 +18,7 @@ const config: ExpoConfig = {
   },
   ios: {
     bundleIdentifier: "com.objetdart.universe",
+    appleTeamId: "58877MPK38",
     buildNumber: "1",
     deploymentTarget: "17.0",
     supportsTablet: true,

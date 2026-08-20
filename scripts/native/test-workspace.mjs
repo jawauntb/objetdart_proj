@@ -60,6 +60,16 @@ const nativePackage = readJson("apps/native/package.json");
 const nativeTsconfig = readJson("apps/native/tsconfig.json");
 assert.equal(nativePackage.private, true, "the native app must remain private");
 assert.equal(nativePackage.main, "expo-router/entry", "Expo Router owns the native shell entry point");
+assert.equal(
+  nativePackage.scripts.prebuild,
+  "expo prebuild --clean --platform ios --no-install",
+  "native prebuild must remain a clean Expo prebuild so the generated ios/ tree is disposable",
+);
+assert.equal(
+  nativePackage.scripts["build:prod"],
+  "npx eas-cli@22.0.0 build --platform ios --profile production",
+  "production TestFlight must pin eas-cli 22 the same way Mapvest does",
+);
 assert.match(nativePackage.dependencies.expo, /^~57\./, "native app must target Expo SDK 57");
 assert.equal(nativePackage.dependencies.react, "19.2.3", "native React is locked independently from web React 18");
 assert.equal(nativePackage.dependencies["react-native"], "0.86.2", "Expo SDK 57 requires React Native 0.86.2");
@@ -108,6 +118,12 @@ const eas = readJson("apps/native/eas.json");
 assert.equal(eas.build.development.developmentClient, true, "development profile must build a real dev client");
 assert.equal(eas.build.development.distribution, "internal", "development builds are installable on physical devices");
 assert.ok(eas.build.production, "a release profile must exist");
+assert.equal(eas.cli.appVersionSource, "remote", "EAS must own iOS buildNumber so every store submit is unique");
+assert.equal(eas.build.production.autoIncrement, true, "production must auto-increment the remote iOS buildNumber");
+assert.equal(eas.build.production.node, "22.13.0", "EAS production must use the native Node 22.13 line");
+assert.equal(eas.submit.production.ios.bundleIdentifier, "com.objetdart.universe", "TestFlight submit must name the store bundle id");
+assert.equal(eas.submit.production.ios.appleTeamId, "58877MPK38", "TestFlight submit must name the Apple team");
+assert.equal(eas.submit.production.ios.ascAppId, "6803362991", "TestFlight submit must name the App Store Connect app so CI can run non-interactive");
 assert.ok(
   Object.values(eas.build).every((profile) => !("channel" in profile)),
   "update channels must wait for an explicit expo-updates integration",
@@ -148,6 +164,7 @@ assert.doesNotMatch(kitPodspec, /ObjetUniversePersistence/, "the Expo kit pod mu
 const appConfig = readText("apps/native/app.config.ts");
 assert.match(appConfig, /name:\s*["']ObjetUniverseKit["']/, "prebuild must extra-pod the Swift kit");
 assert.match(appConfig, /path:\s*["']\.\.\/\.\.\/\.\.\/packages\/objet-universe-kit["']/, "the kit extra pod path must resolve from the generated ios/ tree");
+assert.match(appConfig, /appleTeamId:\s*["']58877MPK38["']/, "the Expo ios config must name the Apple team for EAS credentials");
 assert.match(universeView, /import ObjetUniverseKit/, "the native view must import the shared Swift kit module");
 assert.match(universeHost, /func handoff\(to/, "the host must own transactional scene handoff");
 assert.match(universeHost, /pendingCommands/, "semantic commands must wait at the authoritative host boundary");
@@ -156,6 +173,10 @@ assert.match(universeClock, /maxStepsPerFrame/, "the authority clock must bound 
 assert.match(universeClock, /maxPendingActions/, "the authority clock must apply bounded command backpressure");
 assert.match(renderHost, /clockStarts/, "the renderer host must expose its one-clock lifecycle");
 assert.match(universeView, /weak var view/, "the display link must not retain the native view");
+assert.match(universeView, /nonisolated fileprivate func advanceFrame/, "the display-link tick must be nonisolated so Swift 6.2 will not send CADisplayLink");
+assert.doesNotMatch(universeView, /func display\(_ link: CADisplayLink\)/, "naming the tick display(_:) makes Xcode type the argument as CALayer");
+assert.match(universeView, /nonisolated\(unsafe\)/, "view hosts must be retireable from Swift 6.2's nonisolated UIView deinit");
+assert.match(universeView, /@unchecked Sendable/, "the display-link target must be Sendable so the tick can hop to the view");
 assert.match(universeView, /renderHost\.retireAll\(\)/, "native teardown must retire renderer resources");
 assert.match(universeView, /guard window != nil else \{ return \}/, "foreground lifecycle cannot restart a detached native view");
 
@@ -186,6 +207,15 @@ assert.match(nativeCi, /pod install/, "native CI must resolve the autolinked uni
 assert.match(nativeCi, /deferred to the U8\/U16/i, "native CI must document that full xcodebuild is deferred to the U8/U16 evidence stage");
 assert.match(nativeCi, /tsconfig\.json/, "native CI must run when native-isolation TypeScript changes");
 assert.match(nativeCi, /\.gitignore/, "native CI must run when generated-tree ownership changes");
+assert.match(nativeCi, /ios-eas-production\.yml/, "native CI must run when the TestFlight workflow changes");
+assert.match(nativeCi, /\.easignore/, "native CI must run when the EAS archive rules change");
+
+const easWorkflow = readText(".github/workflows/ios-eas-production.yml");
+assert.match(easWorkflow, /working-directory: apps\/native/, "TestFlight CI must run eas from the Expo app, not the web root");
+assert.match(easWorkflow, /--auto-submit/, "TestFlight CI must hand the IPA to App Store Connect");
+assert.match(easWorkflow, /eas-version: 22\.0\.0/, "TestFlight CI must pin eas-cli 22");
+assert.doesNotMatch(easWorkflow, /^\s*EAS_NO_VCS=1/m, "EAS must keep the git root so packages/objet-universe-kit is on the worker");
+assert.match(easWorkflow, /secrets\.EXPO_TOKEN/, "TestFlight CI needs the Expo token the same way Mapvest does");
 
 // U8 evidence harness contract: the fixture regression runner, the cross-
 // language comparator, the scenario trace type, the scenario runner overlay,
@@ -367,6 +397,7 @@ assert.match(vesselSensors, /askedThisSession/, "VesselSensors must honour the a
 assert.match(vesselSensors, /flipEnterDeg/, "VesselSensors must hysteresis-guard face-down");
 assert.match(vesselSensors, /public func suspend/, "VesselSensors must suspend on backgrounding");
 assert.match(vesselSensors, /public func resume/, "VesselSensors must resume on foreground without prompting");
+assert.match(vesselSensors, /onShake: \(@Sendable/, "Listener callbacks must be Sendable so Swift 6 EAS Xcode can compile the vessel");
 assert.match(gestureLabels, /UNIVERSE_ACTION_LABELS/, "actionLabels.ts must expose the VoiceOver rotor registry");
 assert.match(gestureLabels, /buildAssistiveCommands/, "actionLabels.ts must expose the pure assembler shared with the React shell");
 assert.match(gestureRotor, /accessibilityActions/, "UniverseActions.tsx must attach accessibilityActions to its View");

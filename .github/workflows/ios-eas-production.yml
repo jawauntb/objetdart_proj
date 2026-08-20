@@ -1,0 +1,68 @@
+# TestFlight: EAS production iOS build + App Store Connect auto-submit.
+#
+# Triggers
+# - Green `Native CI` on `main`
+# - Manual: Actions → ios-eas-production → Run workflow
+# - Version tags: `v*`
+#
+# Do not set EAS_NO_VCS=1. The worker git root is /Users/expo/workingdir/build
+# and must contain apps/native/package.json plus packages/objet-universe-kit.
+# A VCS-less pack from apps/native drops the Swift kit extra-pod.
+name: ios-eas-production
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+  workflow_run:
+    workflows: ["Native CI"]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: ios-eas-production-store
+  cancel-in-progress: false
+
+jobs:
+  eas-ios:
+    name: eas build + auto-submit (ios production)
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.x
+          cache: npm
+
+      # eas-cli resolves expo-router locally before it uploads the tarball.
+      - name: Install monorepo dependencies
+        run: npm ci
+
+      - name: Setup EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: 22.0.0
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      # Wait so a PRE_INSTALL / compile failure turns this check red.
+      # --auto-submit uploads to App Store Connect after the IPA is ready.
+      - name: EAS build + submit
+        working-directory: apps/native
+        run: >
+          eas build
+          --platform ios
+          --profile production
+          --auto-submit
+          --non-interactive

@@ -44,3 +44,10 @@ scripts/_*.mjs
 /CLAUDE.md
 /SIDE_FILES_PATCH.md
 /REGISTRY_PATCH.md
+
+# Keep nested EAS app metadata last so these win over any prior ignore.
+# The worker git root looks for apps/native/package.json plus the Swift kit.
+!/apps/native/package.json
+!/apps/native/app.config.ts
+!/apps/native/eas.json
+!/packages/objet-universe-kit/ObjetUniverseKit.podspec

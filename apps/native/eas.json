@@ -19,14 +19,17 @@
       "distribution": "internal"
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "node": "22.13.0"
     }
   },
   "submit": {
     "production": {
       "ios": {
+        "bundleIdentifier": "com.objetdart.universe",
         "appleId": "jawauntb@yahoo.com",
-        "appleTeamId": "58877MPK38"
+        "appleTeamId": "58877MPK38",
+        "ascAppId": "6803362991"
       }
     }
   }
