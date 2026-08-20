@@ -29,6 +29,15 @@ public final class UniverseHost {
     initial.activate()
   }
 
+  /// Whether the active medium says this verb in its own material. The input
+  /// layer asks before it commits: a verb the medium cannot express is
+  /// answered in the hand and the ear instead of being scheduled onto a tick
+  /// that would change nothing.
+  public func expresses(_ verb: SemanticVerb) -> Bool {
+    guard !retired else { return false }
+    return activeKernel.expresses(verb)
+  }
+
   @discardableResult
   public func apply(_ command: SemanticCommand) -> CommandDisposition {
     guard !retired, let ordinal = clock.enqueue(actionAt: command.at) else { return .rejected }

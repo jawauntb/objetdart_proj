@@ -165,8 +165,8 @@ test("finger count decides the semantic layer without crossing it", () => {
   assert.equal(twoFingerTap.verb, "step-back");
   assert.equal(threeFingerTap.verb, "tutti");
 
-  const oneFingerHold = resolveVerbFromShape({ kind: "hold", fingers: 1, elapsedMs: 900, x: 0, y: 0, intensity: 0.5 });
-  const threeFingerHold = resolveVerbFromShape({ kind: "hold", fingers: 3, elapsedMs: 900, x: 0, y: 0, intensity: 0.5 });
+  const oneFingerHold = resolveVerbFromShape({ kind: "hold", fingers: 1, elapsedMs: 900, x: 0, y: 0, intensity: 0.5, phase: "release" });
+  const threeFingerHold = resolveVerbFromShape({ kind: "hold", fingers: 3, elapsedMs: 900, x: 0, y: 0, intensity: 0.5, phase: "release" });
   assert.equal(oneFingerHold.layer, "material");
   assert.equal(threeFingerHold.layer, "world");
   assert.equal(threeFingerHold.verb, "time-dilation");
