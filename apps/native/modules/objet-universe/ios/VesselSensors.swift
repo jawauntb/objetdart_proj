@@ -36,17 +36,17 @@ public final class VesselSensors: @unchecked Sendable {
 
   public struct Listener: Sendable {
     public let id: UUID
-    public let onShake: ((_ intensity: Double) -> Void)?
-    public let onKnock: ((_ intensity: Double) -> Void)?
-    public let onTilt: ((_ event: TiltEvent) -> Void)?
-    public let onFlip: ((_ faceDown: Bool) -> Void)?
+    public let onShake: (@Sendable (_ intensity: Double) -> Void)?
+    public let onKnock: (@Sendable (_ intensity: Double) -> Void)?
+    public let onTilt: (@Sendable (_ event: TiltEvent) -> Void)?
+    public let onFlip: (@Sendable (_ faceDown: Bool) -> Void)?
 
     public init(
       id: UUID = UUID(),
-      onShake: ((Double) -> Void)? = nil,
-      onKnock: ((Double) -> Void)? = nil,
-      onTilt: ((TiltEvent) -> Void)? = nil,
-      onFlip: ((Bool) -> Void)? = nil
+      onShake: (@Sendable (Double) -> Void)? = nil,
+      onKnock: (@Sendable (Double) -> Void)? = nil,
+      onTilt: (@Sendable (TiltEvent) -> Void)? = nil,
+      onFlip: (@Sendable (Bool) -> Void)? = nil
     ) {
       self.id = id
       self.onShake = onShake

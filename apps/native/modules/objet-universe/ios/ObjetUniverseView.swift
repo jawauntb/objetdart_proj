@@ -26,21 +26,24 @@ private final class NativeProbeKernel: SimulationKernel {
   }
 }
 
-private final class DisplayLinkTarget: NSObject {
+private final class DisplayLinkTarget: NSObject, @unchecked Sendable {
   weak var view: ObjetUniverseView?
 
   @objc func tick(_ link: CADisplayLink) {
-    view?.display(link)
+    view?.advanceFrame(at: link.timestamp)
   }
 }
 
 public final class ObjetUniverseView: ExpoView {
-  private let host: UniverseHost
-  private let renderHost = RenderHost()
-  private let displayLinkTarget = DisplayLinkTarget()
-  private var displayLink: CADisplayLink?
-  private var lifecycleObservers: [NSObjectProtocol] = []
-  private var lastAccessibilityTick = -60
+  // UIView deinit is nonisolated under Swift 6.2. These hosts live and die on
+  // the main thread with the view; nonisolated(unsafe) is the UIKit-legal way
+  // to retire them from deinit without sending CADisplayLink / UIKit types.
+  private nonisolated(unsafe) let host: UniverseHost
+  private nonisolated(unsafe) let renderHost = RenderHost()
+  private nonisolated(unsafe) let displayLinkTarget = DisplayLinkTarget()
+  private nonisolated(unsafe) var displayLink: CADisplayLink?
+  private nonisolated(unsafe) var lifecycleObservers: [NSObjectProtocol] = []
+  private nonisolated(unsafe) var lastAccessibilityTick = -60
 
   public required init(appContext: AppContext? = nil) {
     let initial = NativeProbeKernel(scene: .wave)
@@ -96,8 +99,8 @@ public final class ObjetUniverseView: ExpoView {
     }
   }
 
-  @objc private func display(_ link: CADisplayLink) {
-    let frame = host.advance(to: link.timestamp)
+  nonisolated fileprivate func advanceFrame(at timestamp: CFTimeInterval) {
+    let frame = host.advance(to: timestamp)
     renderHost.render(interpolation: frame.interpolation)
     publishAccessibilitySnapshotIfNeeded()
   }
@@ -121,11 +124,13 @@ public final class ObjetUniverseView: ExpoView {
     ]
   }
 
-  private func publishAccessibilitySnapshotIfNeeded() {
+  nonisolated private func publishAccessibilitySnapshotIfNeeded() {
     let tick = host.telemetry.logicalTick
     guard tick - lastAccessibilityTick >= 60 else { return }
     lastAccessibilityTick = tick
-    accessibilityValue = "tick \(tick)"
+    MainActor.assumeIsolated {
+      self.accessibilityValue = "tick \(tick)"
+    }
   }
 
   private func accessibilityDescription(for scene: SceneID) -> String {
