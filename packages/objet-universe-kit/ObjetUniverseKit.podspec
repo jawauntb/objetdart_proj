@@ -17,7 +17,7 @@ Pod::Spec.new do |s|
     "Sources/ObjetUniverseRender/**/*.swift",
     "Sources/ObjetUniverseSensory/**/*.swift",
   ]
-  s.frameworks = "Foundation", "UIKit", "AVFoundation", "CoreHaptics"
+  s.frameworks = "Foundation", "UIKit", "QuartzCore", "Metal", "AVFoundation", "CoreHaptics"
   s.pod_target_xcconfig = {
     "DEFINES_MODULE" => "YES",
   }
