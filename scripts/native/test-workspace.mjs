@@ -180,11 +180,51 @@ assert.match(universeView, /@unchecked Sendable/, "the display-link target must 
 assert.match(universeView, /renderHost\.retireAll\(\)/, "native teardown must retire renderer resources");
 assert.match(universeView, /guard window != nil else \{ return \}/, "foreground lifecycle cannot restart a detached native view");
 
+// The first screen must show the material, not a black rectangle. Each of the
+// three links below has been the whole failure on its own: a kernel with no
+// state to draw, a layer nothing can draw into, and a renderer that counts
+// frames instead of painting them.
+const waveField = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/Wave/WaveField.swift");
+const waveKernel = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/Wave/WaveKernel.swift");
+const waveRenderer = readText("packages/objet-universe-kit/Sources/ObjetUniverseRender/Wave/WaveMaterialRenderer.swift");
+const waveShaders = readText("packages/objet-universe-kit/Sources/ObjetUniverseRender/Wave/WaveShaders.swift");
+assert.match(universeView, /WaveKernel\(/, "the wave scene must run its own kernel; a probe kernel has no material to show");
+assert.match(universeView, /CAMetalLayer/, "the persistent native view must own a Metal layer for the material to draw into");
+assert.match(universeView, /renderHost\.submitField/, "each frame's authoritative field must reach the renderer");
+assert.doesNotMatch(
+  universeView,
+  /renderHost\.install\(RendererProbe/,
+  "a RendererProbe draws nothing: installing one behind the persistent view is the blank first screen",
+);
+assert.match(waveKernel, /SimulationKernel/, "the wave medium must reach the host through the shared kernel protocol");
+assert.match(waveRenderer, /MTLRenderPipelineState/, "the wave material must reach the screen through a Metal pipeline");
+assert.match(waveShaders, /objet_wave_fragment/, "the material is a shader, not a canvas-2D fallback");
+assert.doesNotMatch(
+  waveField,
+  /arc4random|SystemRandomNumberGenerator|\.random\(/,
+  "the wave medium must derive every value from its seed",
+);
+assert.doesNotMatch(
+  waveField,
+  /Date\(\)|CACurrentMediaTime|systemUptime/,
+  "authoritative wave time comes from steps, never from a wall clock",
+);
+
 const nativeLayout = readText("apps/native/app/_layout.tsx");
 assert.match(nativeLayout, /<ObjetUniverseView/, "the native universe host must mount behind route overlays");
 assert.ok(
   nativeLayout.indexOf("<ObjetUniverseView") < nativeLayout.indexOf("<Stack"),
   "route overlays must mount above the persistent native universe host",
+);
+assert.match(
+  nativeLayout,
+  /contentStyle:\s*\{\s*backgroundColor:\s*["']transparent["']/,
+  "each route's content must be transparent or it paints over the persistent universe host",
+);
+assert.match(
+  nativeLayout,
+  /background:\s*["']transparent["']/,
+  "the navigation theme paints the stack container too; leaving it opaque hides the material behind a flat rectangle",
 );
 
 const nativeReadme = readText("apps/native/README.md");

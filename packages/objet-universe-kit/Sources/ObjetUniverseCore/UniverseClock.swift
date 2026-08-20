@@ -24,6 +24,10 @@ private struct ScheduledAction: Comparable, Sendable {
 /// The sole authority clock. Presentation cadence changes interpolation, never the
 /// number or ordering of authoritative integration steps.
 public struct UniverseClock: Sendable {
+  /// The authoritative step. Every kernel that converts ticks into seconds
+  /// reads it from here rather than restating the number.
+  public static let defaultStepSeconds: TimeInterval = 1.0 / 120.0
+
   public private(set) var logicalTick = 0
   public let stepSeconds: TimeInterval
   public let maxStepsPerFrame: Int
@@ -39,7 +43,7 @@ public struct UniverseClock: Sendable {
   private var nextUnappliedAction = 0
 
   public init(
-    stepSeconds: TimeInterval = 1.0 / 120.0,
+    stepSeconds: TimeInterval = UniverseClock.defaultStepSeconds,
     maxStepsPerFrame: Int = 12,
     maxPendingActions: Int = 1_024
   ) {

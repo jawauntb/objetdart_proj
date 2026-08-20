@@ -3,6 +3,10 @@ import ObjetUniverseKit
 import QuartzCore
 import UIKit
 
+/// A kernel for a scene whose lane has not landed yet. It advances a tick
+/// counter and owns no material, so a view showing it has nothing to draw —
+/// which is why the wave scene, the one Release 1 screen a visitor actually
+/// arrives on, runs `WaveKernel` instead.
 private final class NativeProbeKernel: SimulationKernel {
   let scene: SceneID
   private var tick = 0
@@ -26,6 +30,13 @@ private final class NativeProbeKernel: SimulationKernel {
   }
 }
 
+/// Holds whichever wave kernel the host currently owns. The scene factory has
+/// to be built before `super.init`, where `self` does not exist yet, so the
+/// factory writes here instead of capturing the view.
+private final class WaveKernelBox {
+  var kernel: WaveKernel?
+}
+
 private final class DisplayLinkTarget: NSObject, @unchecked Sendable {
   weak var view: ObjetUniverseView?
 
@@ -35,27 +46,59 @@ private final class DisplayLinkTarget: NSObject, @unchecked Sendable {
 }
 
 public final class ObjetUniverseView: ExpoView {
+  /// Drawable ceiling. Native mirror of the web `resolveDpr` tier: past 2× the
+  /// water gains no legibility and the thermal budget notices.
+  private static let maximumDrawableScale: CGFloat = 2
+
+  /// The seed the first universe is built from until U4's persisted identity
+  /// reaches this view. A constant, never entropy: the same launch must return
+  /// the same sea.
+  private static let launchSeed: UInt64 = 0x6F62_6A65_7420_6461
+
+  /// The material draws straight into the view's own layer. Without this the
+  /// view is a black rectangle no renderer can reach.
+  public override class var layerClass: AnyClass { CAMetalLayer.self }
+
   // UIView deinit is nonisolated under Swift 6.2. These hosts live and die on
   // the main thread with the view; nonisolated(unsafe) is the UIKit-legal way
   // to retire them from deinit without sending CADisplayLink / UIKit types.
   private nonisolated(unsafe) let host: UniverseHost
   private nonisolated(unsafe) let renderHost = RenderHost()
+  private nonisolated(unsafe) let waveKernels: WaveKernelBox
   private nonisolated(unsafe) let displayLinkTarget = DisplayLinkTarget()
   private nonisolated(unsafe) var displayLink: CADisplayLink?
   private nonisolated(unsafe) var lifecycleObservers: [NSObjectProtocol] = []
   private nonisolated(unsafe) var lastAccessibilityTick = -60
 
+  private var metalLayer: CAMetalLayer? { layer as? CAMetalLayer }
+
   public required init(appContext: AppContext? = nil) {
-    let initial = NativeProbeKernel(scene: .wave)
-    host = UniverseHost(initial: initial, factory: { NativeProbeKernel(scene: $0) })
+    let box = WaveKernelBox()
+    let initial = WaveKernel(seed: ObjetUniverseView.launchSeed)
+    box.kernel = initial
+    waveKernels = box
+    host = UniverseHost(
+      initial: initial,
+      factory: { scene in
+        guard scene == .wave else {
+          // Nothing may keep reading a kernel the host has retired; the
+          // renderer simply holds its last frame until a scene lane for the
+          // destination lands.
+          box.kernel = nil
+          return NativeProbeKernel(scene: scene)
+        }
+        let kernel = WaveKernel(seed: ObjetUniverseView.launchSeed)
+        box.kernel = kernel
+        return kernel
+      }
+    )
     super.init(appContext: appContext)
     displayLinkTarget.view = self
     backgroundColor = .black
+    isOpaque = true
     isAccessibilityElement = true
     accessibilityLabel = "A living wave field"
-    renderHost.install(RendererProbe(kind: .metal))
-    renderHost.install(RendererProbe(kind: .realityKit))
-    renderHost.install(RendererProbe(kind: .skiaOverlay))
+    installMaterialRenderer()
     observeApplicationLifecycle()
   }
 
@@ -71,6 +114,17 @@ public final class ObjetUniverseView: ExpoView {
     super.didMoveToWindow()
     guard window != nil else { return suspendUniverse() }
     resumeUniverseIfAttached()
+  }
+
+  public override func layoutSubviews() {
+    super.layoutSubviews()
+    guard let metalLayer else { return }
+    let displayScale = traitCollection.displayScale > 0 ? traitCollection.displayScale : 2
+    let scale = min(displayScale, ObjetUniverseView.maximumDrawableScale)
+    let size = CGSize(width: bounds.width * scale, height: bounds.height * scale)
+    guard size.width >= 1, size.height >= 1 else { return }
+    metalLayer.contentsScale = scale
+    if metalLayer.drawableSize != size { metalLayer.drawableSize = size }
   }
 
   private func suspendUniverse() {
@@ -101,8 +155,37 @@ public final class ObjetUniverseView: ExpoView {
 
   nonisolated fileprivate func advanceFrame(at timestamp: CFTimeInterval) {
     let frame = host.advance(to: timestamp)
+    submitActiveSurface()
     renderHost.render(interpolation: frame.interpolation)
     publishAccessibilitySnapshotIfNeeded()
+  }
+
+  /// Hand the frame's authoritative field to the material. The pointer never
+  /// escapes the closure and nothing is copied on the way, so the frame path
+  /// allocates nothing.
+  nonisolated private func submitActiveSurface() {
+    guard let kernel = waveKernels.kernel else { return }
+    kernel.withSurface { values, width, height in
+      renderHost.submitField(
+        FieldSubmission(
+          values: values,
+          width: width,
+          height: height,
+          elapsedSeconds: kernel.elapsedSeconds,
+          secondsPerStep: kernel.secondsPerTick,
+          exposure: kernel.exposure
+        )
+      )
+    }
+  }
+
+  /// The one renderer this view installs. If Metal is unavailable the view
+  /// stays on its ground colour rather than installing a stand-in that counts
+  /// frames and draws nothing.
+  private func installMaterialRenderer() {
+    guard let metalLayer else { return }
+    guard let renderer = WaveMaterialRenderer(layer: metalLayer, breathSeconds: WaveField.breathSeconds) else { return }
+    renderHost.install(renderer)
   }
 
   private func startDisplayLinkIfNeeded() {

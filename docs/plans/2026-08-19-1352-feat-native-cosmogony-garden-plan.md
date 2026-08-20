@@ -845,7 +845,7 @@ After U1-U3 establish the shared contracts and native host, U4-U7 can proceed on
 5. End the felt-proof loop with reconstruction and expressive composition rather than a quiz.
 6. Accept the selected world's bounded equilibrium temperature as a medium parameter and expose its declared effect on propagation or damping without pretending every wave is the same physical medium.
 
-**Execution note:** establish analytical and round-trip reference tests before visual polish.
+**Execution note:** establish analytical and round-trip reference tests before visual polish. The shader ships as Metal source embedded in `WaveShaders.swift` rather than as a `WaveShaders.metal` resource: the kit is packaged both as a Swift package and as a CocoaPod, and a `.metal` file compiles to a `default.metallib` only one of those two paths can locate. The kernel and field landed in `ObjetUniverseCore` for the same packaging reason — the pod flattens the kit into one module, so a `ObjetUniverseWave` target could not `import ObjetUniverseCore`.
 
 **Patterns to follow:** `src/components/Waves.tsx`, `src/components/CircularityFourier.tsx`, `src/lib/audio-register.ts`, `scripts/test-quanta.mjs` interference cases.
 

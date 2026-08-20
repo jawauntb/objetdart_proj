@@ -1,6 +1,7 @@
 public final class RenderHost {
   public private(set) var clockStarts = 0
   public private(set) var renderedFrameCount = 0
+  public private(set) var submittedFieldCount = 0
   public var activeRendererCount: Int { running ? renderers.count : 0 }
 
   private var renderers: [RendererKind: UniverseRenderer] = [:]
@@ -20,6 +21,17 @@ public final class RenderHost {
     running = true
     clockStarts += 1
     renderers.values.forEach { $0.resume() }
+  }
+
+  /// Hand the frame's authoritative field to every renderer whose material is
+  /// that field. Submitting while suspended is a no-op: a suspended renderer
+  /// has released its GPU resources and must not be asked to upload into them.
+  public func submitField(_ submission: FieldSubmission) {
+    guard running else { return }
+    for renderer in renderers.values {
+      (renderer as? FieldSurfaceRenderer)?.submitField(submission)
+    }
+    submittedFieldCount += 1
   }
 
   public func render(interpolation: Double) {
