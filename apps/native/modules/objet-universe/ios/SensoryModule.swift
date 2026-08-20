@@ -1,4 +1,5 @@
 import ExpoModulesCore
+import ObjetUniverseKit
 
 /// Bridges only user preferences and coarse bus state to React Native.
 /// Per-event authority lives entirely on the native side (`AudioBus` and

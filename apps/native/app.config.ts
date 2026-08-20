@@ -41,6 +41,12 @@ const config: ExpoConfig = {
       {
         ios: {
           deploymentTarget: "17.0",
+          extraPods: [
+            {
+              name: "ObjetUniverseKit",
+              path: "../../../packages/objet-universe-kit",
+            },
+          ],
         },
       },
     ],

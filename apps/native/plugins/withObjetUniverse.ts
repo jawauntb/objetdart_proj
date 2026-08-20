@@ -19,6 +19,9 @@ const nativeRoots = {
  * Keeping these roots in source control, rather than under apps/native/ios,
  * makes the generated Xcode tree disposable while the native module, Swift
  * package, UI tests, and privacy resources remain durable project inputs.
+ *
+ * U3 attachment is CocoaPods, not an Xcode project mutation: expo-build-properties
+ * extraPods pulls in ObjetUniverseKit, and the local Expo module pod depends on it.
  */
 const withObjetUniverse: ConfigPlugin = (config) => {
   config.extra = {

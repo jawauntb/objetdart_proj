@@ -67,6 +67,11 @@ assert.match(nativePackage.engines.node, /22\.13/, "native builds must use the s
 assert.ok(nativePackage.dependencies["expo-dev-client"], "native development builds need expo-dev-client");
 assert.ok(nativePackage.dependencies["expo-router"], "native shell needs Expo Router");
 assert.equal(nativePackage.dependencies["@objet/universe-contracts"], "*", "native bridge consumes the shared universe contract package directly");
+assert.equal(
+  nativePackage.dependencies["@objet/objet-universe"],
+  "file:./modules/objet-universe",
+  "native app must autolink the local universe Expo module",
+);
 assert.ok(nativePackage.devDependencies["babel-preset-expo"], "native bundle must declare Expo's Babel preset directly");
 assert.ok(
   !nativePackage.dependencies["react-native-webview"],
@@ -135,6 +140,15 @@ assert.match(universeBridge, /requireNativeViewManager/, "React must use the nat
 assert.match(universeModuleDefinition, /Name\("ObjetUniverse"\)/, "the native module name must match the JS bridge");
 assert.match(universeView, /UniverseHost/, "the native view must hold the scientific host");
 assert.match(universePodspec, /objet-universe-kit\/Sources/, "the Expo pod must compile the shared Swift authority sources");
+assert.match(universePodspec, /s\.dependency ["']ObjetUniverseKit["']/, "the Expo pod must depend on the shared Swift kit pod");
+const kitPodspec = readText("packages/objet-universe-kit/ObjetUniverseKit.podspec");
+assert.match(kitPodspec, /s\.name = ["']ObjetUniverseKit["']/, "the Swift kit must ship a CocoaPods spec for Expo prebuild");
+assert.match(kitPodspec, /Sources\/ObjetUniverseCore/, "the kit pod must compile the host and clock");
+assert.doesNotMatch(kitPodspec, /ObjetUniversePersistence/, "the Expo kit pod must not pull GRDB persistence into the first store build");
+const appConfig = readText("apps/native/app.config.ts");
+assert.match(appConfig, /name:\s*["']ObjetUniverseKit["']/, "prebuild must extra-pod the Swift kit");
+assert.match(appConfig, /path:\s*["']\.\.\/\.\.\/\.\.\/packages\/objet-universe-kit["']/, "the kit extra pod path must resolve from the generated ios/ tree");
+assert.match(universeView, /import ObjetUniverseKit/, "the native view must import the shared Swift kit module");
 assert.match(universeHost, /func handoff\(to/, "the host must own transactional scene handoff");
 assert.match(universeHost, /pendingCommands/, "semantic commands must wait at the authoritative host boundary");
 assert.match(universeHost, /func shutdown\(\)/, "native teardown must retire the active scientific kernel");
