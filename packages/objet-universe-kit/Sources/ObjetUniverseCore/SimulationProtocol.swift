@@ -115,6 +115,21 @@ public protocol SimulationKernel: AnyObject {
   func expresses(_ verb: SemanticVerb) -> Bool
 }
 
+/// A simulation that can hand one scalar material field to the shared native
+/// renderer. The field is a projection of the kernel state; it is never the
+/// authority itself and it never crosses into React Native.
+public protocol SurfaceSimulationKernel: SimulationKernel {
+  var secondsPerTick: TimeInterval { get }
+  var elapsedSeconds: Double { get }
+  var exposure: Double { get }
+  var materialKind: Int { get }
+  /// Integer projection index consumed by the shared renderer. Concrete
+  /// kernels may expose a richer enum internally (the wave kernel does).
+  var representationIndex: Int { get }
+  func setRepresentation(_ rawValue: Int)
+  func withSurface<T>(_ body: (UnsafePointer<Float>, Int, Int) -> T) -> T
+}
+
 extension SimulationKernel {
   /// A kernel that has not declared its vocabulary expresses nothing. Saying
   /// so is the safe default: an undeclared verb lands as a sensory answer

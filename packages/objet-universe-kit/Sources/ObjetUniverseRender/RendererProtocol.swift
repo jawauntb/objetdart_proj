@@ -34,6 +34,9 @@ public struct FieldSubmission {
   /// 2 spectrum, 3 felt. It changes how the same authoritative field is
   /// drawn; it never changes the solver.
   public let representation: Int
+  /// Stable material family: 0 wave, 1 cell, 2 solar. The scalar field stays
+  /// the renderer boundary while the shader chooses a legible palette.
+  public let materialKind: Int
 
   public init(
     values: UnsafePointer<Float>,
@@ -42,7 +45,8 @@ public struct FieldSubmission {
     elapsedSeconds: Double,
     secondsPerStep: Double,
     exposure: Double,
-    representation: Int = 0
+    representation: Int = 0,
+    materialKind: Int = 0
   ) {
     self.values = values
     self.width = width
@@ -51,6 +55,7 @@ public struct FieldSubmission {
     self.secondsPerStep = secondsPerStep
     self.exposure = exposure
     self.representation = representation
+    self.materialKind = materialKind
   }
 }
 

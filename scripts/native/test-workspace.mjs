@@ -192,6 +192,8 @@ const waveField = readText("packages/objet-universe-kit/Sources/ObjetUniverseCor
 const waveKernel = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/Wave/WaveKernel.swift");
 const waveRenderer = readText("packages/objet-universe-kit/Sources/ObjetUniverseRender/Wave/WaveMaterialRenderer.swift");
 const waveShaders = readText("packages/objet-universe-kit/Sources/ObjetUniverseRender/Wave/WaveShaders.swift");
+const cellKernel = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/Cell/CellKernel.swift");
+const solarKernel = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/Solar/SolarKernel.swift");
 assert.match(universeView, /WaveKernel\(/, "the wave scene must run its own kernel; a probe kernel has no material to show");
 assert.match(universeView, /CAMetalLayer/, "the persistent native view must own a Metal layer for the material to draw into");
 assert.match(universeView, /renderHost\.submitField/, "each frame's authoritative field must reach the renderer");
@@ -203,10 +205,20 @@ assert.doesNotMatch(
 assert.match(waveKernel, /SimulationKernel/, "the wave medium must reach the host through the shared kernel protocol");
 assert.match(waveKernel, /Representation/, "the wave kernel must expose a bounded representation lens");
 assert.match(waveKernel, /case \.lens/, "twist-lens commands must change the wave representation");
+assert.doesNotMatch(universeView, /NativeProbeKernel/, "every first-release destination must own a drawable kernel");
+assert.match(universeView, /CellKernel\(/, "the cell scene must hand off to a real reaction-diffusion kernel");
+assert.match(universeView, /SolarKernel\(/, "the solar scene must hand off to a real orbital kernel");
+assert.match(universeView, /materialKind: kernel\.materialKind/, "the active material family must reach the shared renderer");
+assert.match(cellKernel, /SurfaceSimulationKernel/, "the cell lane must provide a shared scalar surface");
+assert.match(cellKernel, /reaction.diffusion|Gray.Scott/i, "the cell lane must be governed by a reaction-diffusion law");
+assert.match(solarKernel, /SurfaceSimulationKernel/, "the solar lane must provide a shared scalar surface");
+assert.match(solarKernel, /symplectic|integrat/i, "the solar lane must advance bodies with a bounded integrator");
 assert.match(waveRenderer, /MTLRenderPipelineState/, "the wave material must reach the screen through a Metal pipeline");
 assert.match(waveRenderer, /representation/, "the renderer must receive the selected wave representation");
+assert.match(waveRenderer, /materialKind/, "the renderer must receive the active material family");
 assert.match(waveShaders, /objet_wave_fragment/, "the material is a shader, not a canvas-2D fallback");
 assert.match(waveShaders, /spectrumSampler/, "the spectrum projection must derive bars from the field texture");
+assert.match(waveShaders, /materialKind/, "the shader must select a material palette from the active scene");
 assert.doesNotMatch(
   waveField,
   /arc4random|SystemRandomNumberGenerator|\.random\(/,
@@ -219,7 +231,15 @@ assert.doesNotMatch(
 );
 
 const nativeLayout = readText("apps/native/app/_layout.tsx");
+const cellRoute = readText("apps/native/app/cell.tsx");
+const solarRoute = readText("apps/native/app/solar.tsx");
+const proofRoute = readText("apps/native/src/scenes/ProofSceneRoute.tsx");
 assert.match(nativeLayout, /<ObjetUniverseView/, "the native universe host must mount behind route overlays");
+assert.match(nativeLayout, /useSegments/, "the persistent host must follow the active native scene route");
+assert.match(cellRoute, /ProofSceneRoute/, "cell must be a real route over the persistent native host");
+assert.match(solarRoute, /ProofSceneRoute/, "solar must be a real route over the persistent native host");
+assert.match(proofRoute, /ObjetUniverseSurface/, "every proof scene must expose the same native touch surface");
+assert.match(proofRoute, /appendSessionTrail/, "every proof scene must keep the trail affordance honest");
 assert.ok(
   nativeLayout.indexOf("<ObjetUniverseView") < nativeLayout.indexOf("<Stack"),
   "route overlays must mount above the persistent native universe host",
@@ -316,13 +336,13 @@ const guideSheet = readText("apps/native/src/guide/GuideSheet.tsx");
 const artDirection = readText("docs/native/art-direction.md");
 const worldRoute = readText("apps/native/app/world.tsx");
 const sessionTrail = readText("apps/native/src/persistence/SessionTrail.ts");
-assert.match(worldRoute, /onOpenFold=/, "world route must wire the fold affordance to a real surface");
-assert.match(worldRoute, /onOpenTrail=/, "world route must wire the trail affordance to a real surface");
-assert.match(worldRoute, /<FoldSheet/, "world route must render the fold surface when requested");
-assert.match(worldRoute, /<TrailSheet/, "world route must render the trail surface when requested");
-assert.match(worldRoute, /representation=\{representation\}/, "world route must pass the selected lens to the native surface");
-assert.match(worldRoute, /loadSessionTrail/, "world route must recover the local trail before enabling touch");
-assert.match(worldRoute, /trailReady\s*&&/, "world route must not accept a gesture before trail recovery completes");
+assert.match(proofRoute, /onOpenFold=/, "proof scenes must wire the fold affordance to a real surface");
+assert.match(proofRoute, /onOpenTrail=/, "proof scenes must wire the trail affordance to a real surface");
+assert.match(proofRoute, /<FoldSheet/, "proof scenes must render the fold surface when requested");
+assert.match(proofRoute, /<TrailSheet/, "proof scenes must render the trail surface when requested");
+assert.match(proofRoute, /representation=\{representation\}/, "proof scenes must pass the selected lens to the native surface");
+assert.match(proofRoute, /loadSessionTrail/, "proof scenes must recover the local trail before enabling touch");
+assert.match(proofRoute, /trailReady\s*&&/, "proof scenes must not accept a gesture before trail recovery completes");
 assert.match(sessionTrail, /SESSION_TRAIL_VERSION = 1/, "session trail storage must be versioned");
 assert.match(sessionTrail, /SESSION_TRAIL_LIMIT = 120/, "session trail storage must remain bounded");
 assert.match(sessionTrail, /writeQueue/, "session trail writes must serialize rapid gesture appends");
@@ -353,8 +373,8 @@ for (const section of [
   assert.match(artDirection, section, `art-direction.md is missing required section matching ${section}`);
 }
 
-assert.match(worldRoute, /<NativeChrome/, "the world route must mount NativeChrome above the persistent universe host");
-assert.match(worldRoute, /backgroundColor:\s*["']transparent["']/, "the world route must remain transparent so the persistent universe host renders through");
+assert.match(proofRoute, /<NativeChrome/, "proof scenes must mount NativeChrome above the persistent universe host");
+assert.match(proofRoute, /backgroundColor:\s*["']transparent["']/, "proof scenes must remain transparent so the persistent universe host renders through");
 
 const nativeGuideVerbs = extractStringArrayLiteral(guideData, "NATIVE_GUIDE_VERBS");
 assert.ok(nativeGuideVerbs.length > 0, "NATIVE_GUIDE_VERBS must declare the guide-covered verbs");
@@ -542,16 +562,16 @@ assert.match(universeRuntime, /commitAssistive/, "assistive commands must enter 
 // The world route mounts the surface below the chrome and keeps the reveal
 // state the guide gates on. A route that mounts chrome alone is the screen
 // that could not be touched.
-assert.match(worldRoute, /<ObjetUniverseSurface/, "the world route must mount the touch surface over the persistent universe");
+assert.match(proofRoute, /<ObjetUniverseSurface/, "proof scenes must mount the touch surface over the persistent universe");
 assert.ok(
-  worldRoute.indexOf("<ObjetUniverseSurface") < worldRoute.indexOf("<NativeChrome"),
+  proofRoute.indexOf("<ObjetUniverseSurface") < proofRoute.indexOf("<NativeChrome"),
   "the chrome sits above the surface so the `?` keeps its own taps",
 );
-assert.match(worldRoute, /revealAfter/, "the route must keep what the visitor has caused, not a frozen placeholder");
-assert.match(worldRoute, /onGuideVisibilityChange/, "intervention pauses while a reading surface is open");
-assert.match(worldRoute, /enabled=\{trailReady\s*&&\s*!reading/, "the surface waits for trail recovery and closes while any reading surface has focus");
-assert.match(worldRoute, /<UniverseActions/, "the world route must mount the VoiceOver action surface");
-assert.match(worldRoute, /onAssistiveCommand/, "assistive commands must be forwarded to the native surface");
+assert.match(proofRoute, /revealAfter/, "proof scenes must keep what the visitor has caused, not a frozen placeholder");
+assert.match(proofRoute, /onGuideVisibilityChange/, "intervention pauses while a reading surface is open");
+assert.match(proofRoute, /enabled=\{trailReady\s*&&\s*!reading/, "the surface waits for trail recovery and closes while any reading surface has focus");
+assert.match(proofRoute, /<UniverseActions/, "proof scenes must mount the VoiceOver action surface");
+assert.match(proofRoute, /onAssistiveCommand/, "assistive commands must be forwarded to the native surface");
 
 // No affordance that leads nowhere: a chip answering a press with nothing is
 // friction wearing the costume of a feature.
