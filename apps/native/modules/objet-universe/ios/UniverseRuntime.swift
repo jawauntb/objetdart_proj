@@ -30,6 +30,7 @@ final class UniverseRuntime {
   private weak var universe: ObjetUniverseView?
   private var committed = 0
   private var representation = 0
+  private var maximumRepresentation = 3
 
   /// The vessel is the device itself — tilt, shake, knock, flip — and it
   /// belongs here rather than to either view: it outlives the route, it has
@@ -61,8 +62,16 @@ final class UniverseRuntime {
   /// registry as touch. Keeping this seam native avoids a React render loop in
   /// the frame path and keeps the persistent host authoritative.
   func setRepresentation(_ rawValue: Int) {
-    representation = min(max(rawValue, 0), 3)
+    representation = min(max(rawValue, 0), maximumRepresentation)
     universe?.setRepresentation(representation)
+  }
+
+  func setMaximumRepresentation(_ rawValue: Int) {
+    maximumRepresentation = min(max(rawValue, 0), 3)
+    if representation > maximumRepresentation {
+      representation = maximumRepresentation
+      universe?.setRepresentation(representation)
+    }
   }
 
   /// Assistive actions enter at the same semantic boundary as touch. They
@@ -76,9 +85,10 @@ final class UniverseRuntime {
     origin: SemanticOrigin
   ) -> Bool {
     let boundedIntensity = min(max(intensity, 0), 1)
-    let expressed = universe?.expresses(verb) ?? false
+    let expressed = canApplyRepresentation(verb) && (universe?.expresses(verb) ?? false)
     committed += 1
     if expressed {
+      advanceRepresentation(for: verb)
       universe?.commit(
         SemanticCommand(id: id, verb: verb, at: CACurrentMediaTime(), intensity: boundedIntensity, origin: origin)
       )
@@ -100,11 +110,12 @@ final class UniverseRuntime {
   func commit(_ routed: RoutedCommand, origin: SemanticOrigin?) -> Bool {
     let verb = GestureRouter.semanticVerb(for: routed.verb)
     let intensity = min(max(routed.intensity, 0), 1)
-    let expressed = universe?.expresses(verb) ?? false
+    let expressed = canApplyRepresentation(verb) && (universe?.expresses(verb) ?? false)
     committed += 1
     let id = "\(routed.source.rawValue)-\(routed.verb.rawValue)-\(committed)"
 
     if expressed {
+      advanceRepresentation(for: verb)
       universe?.commit(
         SemanticCommand(id: id, verb: verb, at: CACurrentMediaTime(), intensity: intensity, origin: origin)
       )
@@ -117,6 +128,22 @@ final class UniverseRuntime {
     // asked before it was touched would be asking for nothing.
     if routed.source == .touch { vessel.request { _ in } }
     return expressed
+  }
+
+  private func canApplyRepresentation(_ verb: SemanticVerb) -> Bool {
+    switch verb {
+    case .lens: return maximumRepresentation == 3 || representation < maximumRepresentation
+    case .stepBack: return representation > 0
+    default: return true
+    }
+  }
+
+  private func advanceRepresentation(for verb: SemanticVerb) {
+    switch verb {
+    case .lens: representation = representation == maximumRepresentation ? 0 : representation + 1
+    case .stepBack: representation -= 1
+    default: break
+    }
   }
 
   private func subscribeVesselIfNeeded() {

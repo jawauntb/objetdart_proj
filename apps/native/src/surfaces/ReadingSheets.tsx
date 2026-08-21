@@ -1,88 +1,101 @@
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import type { NativeSceneId } from "@objet/universe-contracts";
 import { PALETTE, SPACING, TYPOGRAPHY, Z_ORDER } from "../design/tokens";
 import type { TrailEntry } from "../persistence/SessionTrail";
+import type { LensIndex } from "../progression/UniverseProgress";
 
-export type WaveRepresentation = 0 | 1 | 2 | 3;
+export type SceneLensIndex = LensIndex;
 
-const REPRESENTATIONS: ReadonlyArray<{
-  id: WaveRepresentation;
+const LENSES_BY_SCENE: Record<NativeSceneId, ReadonlyArray<{
+  id: SceneLensIndex;
   label: string;
   notation: string;
   note: string;
-}> = [
-  {
-    id: 0,
-    label: "surface",
-    notation: "u(x, y, t)",
-    note: "height and slope across the living field.",
-  },
-  {
-    id: 1,
-    label: "equation",
-    notation: "u(x, t)",
-    note: "one line through the same field, so motion becomes a signal.",
-  },
-  {
-    id: 2,
-    label: "spectrum",
-    notation: "|U(k)|",
-    note: "frequency components computed from the signal, not a decorative graph.",
-  },
-  {
-    id: 3,
-    label: "felt",
-    notation: "phase → colour",
-    note: "the same amplitude returned to a slower, warmer material reading.",
-  },
-];
+}>> = {
+  wave: [
+    { id: 0, label: "surface", notation: "u(x, y, t)", note: "height and slope across the living field." },
+    { id: 1, label: "equation", notation: "u(x, t)", note: "one line through the same field, so motion becomes a signal." },
+    { id: 2, label: "spectrum", notation: "|U(k)|", note: "frequency components computed from the signal, not a decorative graph." },
+    { id: 3, label: "felt", notation: "phase → colour", note: "the same amplitude returned to a slower, warmer material reading." },
+  ],
+  cell: [
+    { id: 0, label: "colony", notation: "A + B", note: "reaction and diffusion make living patterns from a shared field." },
+    { id: 1, label: "membrane", notation: "∇B", note: "the boundary where a cell exchanges matter with its neighbourhood." },
+    { id: 2, label: "genome", notation: "DNA → trait", note: "a derived inheritance lens: pattern becomes a readable double helix." },
+    { id: 3, label: "protein", notation: "sequence → form", note: "a derived fold: local expression gathers into a working shape." },
+  ],
+  solar: [
+    { id: 0, label: "galaxy", notation: "ρ(r, θ)", note: "many stellar births gathered into one rotating cosmic field." },
+    { id: 1, label: "star", notation: "M, L", note: "mass gathers at the centre while orbits keep their history." },
+    { id: 2, label: "planet", notation: "Tₑq", note: "a body condenses into a world with terrain and a causal temperature." },
+    { id: 3, label: "Earth", notation: "air · sea · life", note: "a derived biosphere lens: atmosphere, ocean, and the possibility of life." },
+  ],
+};
 
 export function FoldSheet({
+  scene = "wave",
   representation,
   onSelect,
   onClose,
+  unlockedRepresentations,
+  nextHint,
   onOpenCell,
   onOpenSolar,
   onOpenWave,
 }: Readonly<{
-  representation: WaveRepresentation;
-  onSelect: (representation: WaveRepresentation) => void;
+  scene?: NativeSceneId;
+  representation: SceneLensIndex;
+  onSelect: (representation: SceneLensIndex) => void;
   onClose: () => void;
+  unlockedRepresentations?: readonly SceneLensIndex[];
+  nextHint?: string;
   onOpenCell?: () => void;
   onOpenSolar?: () => void;
   onOpenWave?: () => void;
 }>) {
+  const representations = LENSES_BY_SCENE[scene];
   return (
     <ReadingSheet title="fold / one field, four readings" onClose={onClose}>
       <Text style={styles.intro} allowFontScaling maxFontSizeMultiplier={2}>
         This is a lens, not a new simulation. Choose how the active field speaks
-        while the same sources keep propagating underneath.
+        while the same sources keep propagating underneath. The next register
+        opens when the material answers your care.
       </Text>
-      {REPRESENTATIONS.map((item) => (
-        <Pressable
-          key={item.id}
-          accessibilityRole="button"
-          accessibilityState={{ selected: representation === item.id }}
-          accessibilityLabel={`Show the wave as ${item.label}`}
-          onPress={() => onSelect(item.id)}
-          style={({ pressed }) => [
-            styles.option,
-            representation === item.id ? styles.optionSelected : null,
-            pressed ? styles.optionPressed : null,
-          ]}
-        >
-          <View style={styles.optionHeading}>
-            <Text style={styles.optionLabel} allowFontScaling maxFontSizeMultiplier={2}>
-              {item.label}
+      {representations.map((item) => {
+        const unlocked = unlockedRepresentations?.includes(item.id) ?? true;
+        return (
+          <Pressable
+            key={item.id}
+            accessibilityRole="button"
+            accessibilityState={{ selected: representation === item.id, disabled: !unlocked }}
+            accessibilityLabel={`${unlocked ? "Show" : "Locked"} the ${scene} as ${item.label}`}
+            onPress={unlocked ? () => onSelect(item.id) : undefined}
+            style={({ pressed }) => [
+              styles.option,
+              representation === item.id ? styles.optionSelected : null,
+              !unlocked ? styles.optionLocked : null,
+              pressed ? styles.optionPressed : null,
+            ]}
+          >
+            <View style={styles.optionHeading}>
+              <Text style={styles.optionLabel} allowFontScaling maxFontSizeMultiplier={2}>
+                {item.label}
+              </Text>
+              <Text style={styles.notation} allowFontScaling maxFontSizeMultiplier={2}>
+                {item.notation}
+              </Text>
+            </View>
+            <Text style={styles.optionNote} allowFontScaling maxFontSizeMultiplier={2}>
+              {unlocked ? item.note : "locked — keep tending the material to open this register."}
             </Text>
-            <Text style={styles.notation} allowFontScaling maxFontSizeMultiplier={2}>
-              {item.notation}
-            </Text>
-          </View>
-          <Text style={styles.optionNote} allowFontScaling maxFontSizeMultiplier={2}>
-            {item.note}
-          </Text>
-        </Pressable>
-      ))}
+          </Pressable>
+        );
+      })}
+      {nextHint ? (
+        <Text style={styles.nextHint} allowFontScaling maxFontSizeMultiplier={2}>
+          {nextHint}
+        </Text>
+      ) : null}
       {onOpenCell || onOpenSolar || onOpenWave ? (
         <View style={styles.sceneLinks}>
           <Text style={styles.sceneHeading} allowFontScaling maxFontSizeMultiplier={2}>
@@ -95,8 +108,12 @@ export function FoldSheet({
               onPress={onOpenCell}
               style={({ pressed }) => [styles.option, pressed ? styles.optionPressed : null]}
             >
-              <Text style={styles.optionLabel} allowFontScaling maxFontSizeMultiplier={2}>cell / colony</Text>
-              <Text style={styles.optionNote} allowFontScaling maxFontSizeMultiplier={2}>reaction, diffusion, and the first living patterns.</Text>
+              <Text style={styles.optionLabel} allowFontScaling maxFontSizeMultiplier={2}>
+                cell / colony
+              </Text>
+              <Text style={styles.optionNote} allowFontScaling maxFontSizeMultiplier={2}>
+                reaction, diffusion, and the first living patterns.
+              </Text>
             </Pressable>
           ) : null}
           {onOpenSolar ? (
@@ -106,8 +123,12 @@ export function FoldSheet({
               onPress={onOpenSolar}
               style={({ pressed }) => [styles.option, pressed ? styles.optionPressed : null]}
             >
-              <Text style={styles.optionLabel} allowFontScaling maxFontSizeMultiplier={2}>solar / nursery</Text>
-              <Text style={styles.optionNote} allowFontScaling maxFontSizeMultiplier={2}>gravity, orbits, and a system taking shape.</Text>
+              <Text style={styles.optionLabel} allowFontScaling maxFontSizeMultiplier={2}>
+                solar / nursery
+              </Text>
+              <Text style={styles.optionNote} allowFontScaling maxFontSizeMultiplier={2}>
+                gravity, orbits, and a system taking shape.
+              </Text>
             </Pressable>
           ) : null}
           {onOpenWave ? (
@@ -117,8 +138,12 @@ export function FoldSheet({
               onPress={onOpenWave}
               style={({ pressed }) => [styles.option, pressed ? styles.optionPressed : null]}
             >
-              <Text style={styles.optionLabel} allowFontScaling maxFontSizeMultiplier={2}>wave / surface</Text>
-              <Text style={styles.optionNote} allowFontScaling maxFontSizeMultiplier={2}>ripples, signals, spectra, and felt colour.</Text>
+              <Text style={styles.optionLabel} allowFontScaling maxFontSizeMultiplier={2}>
+                wave / surface
+              </Text>
+              <Text style={styles.optionNote} allowFontScaling maxFontSizeMultiplier={2}>
+                ripples, signals, spectra, and felt colour.
+              </Text>
             </Pressable>
           ) : null}
         </View>
@@ -294,6 +319,9 @@ const styles = StyleSheet.create({
   optionPressed: {
     backgroundColor: "rgba(20, 28, 46, 0.9)",
   },
+  optionLocked: {
+    opacity: 0.52,
+  },
   sceneLinks: {
     marginTop: SPACING.large,
   },
@@ -304,6 +332,14 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     letterSpacing: 1,
     marginBottom: SPACING.small,
+  },
+  nextHint: {
+    color: PALETTE.sea.glimmer,
+    fontFamily: TYPOGRAPHY.editorial.family,
+    fontSize: TYPOGRAPHY.editorial.sizes.body,
+    lineHeight: TYPOGRAPHY.editorial.sizes.body * 1.35,
+    marginTop: SPACING.small,
+    marginBottom: SPACING.medium,
   },
   optionHeading: {
     flexDirection: "row",

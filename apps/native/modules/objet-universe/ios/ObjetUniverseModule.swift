@@ -28,6 +28,10 @@ public final class ObjetUniverseModule: Module {
         view.setRepresentation(representation)
       }
 
+      Prop("maxRepresentation") { (view: ObjetUniverseSurfaceView, representation: Int) in
+        view.setMaxRepresentation(representation)
+      }
+
       Prop("assistiveVerb") { (view: ObjetUniverseSurfaceView, verb: String?) in
         view.setAssistiveVerb(verb)
       }

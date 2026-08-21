@@ -69,6 +69,23 @@ public enum WaveShaderSource {
     // simulation can remain a compact scalar projection without adding a
     // second entity renderer or per-frame geometry allocation.
     if (uniforms.materialKind > 0.5 && uniforms.materialKind < 1.5) {
+      if (uniforms.representation > 1.5 && uniforms.representation < 2.5) {
+        float phase = in.uv.y * 31.0 + uniforms.elapsed * 0.55;
+        float strandA = 1.0 - smoothstep(0.0, 0.045, abs(in.uv.x - (0.5 + 0.18 * sin(phase))));
+        float strandB = 1.0 - smoothstep(0.0, 0.045, abs(in.uv.x - (0.5 - 0.18 * sin(phase))));
+        float rung = (1.0 - smoothstep(0.0, 0.035, abs(in.uv.x - 0.5))) * (0.35 + 0.65 * abs(sin(phase)));
+        float3 genome = mix(kNightDeep, float3(0.10, 0.07, 0.25), 0.45 + 0.35 * amplitude);
+        genome += float3(0.36, 0.18, 0.78) * max(strandA, strandB);
+        genome += kSeaGlimmer * rung * 0.35;
+        return float4(genome, 1.0);
+      }
+      if (uniforms.representation > 2.5) {
+        float fold = abs(sin(in.uv.x * 12.0 + in.uv.y * 8.0 + uniforms.elapsed * 0.18));
+        float pocket = 1.0 - smoothstep(0.0, 0.2, abs(fold - 0.62));
+        float3 protein = mix(float3(0.025, 0.045, 0.06), float3(0.64, 0.29, 0.12), amplitude * 0.72);
+        protein += float3(0.86, 0.63, 0.28) * pocket * 0.45;
+        return float4(protein, 1.0);
+      }
       float colony = smoothstep(0.04, 0.55, amplitude);
       float edge = smoothstep(0.04, 0.0, abs(amplitude - 0.36));
       float breathing = 0.5 + 0.5 * sin(uniforms.elapsed * 1.7 + in.uv.x * 9.0 + in.uv.y * 7.0);
@@ -82,15 +99,41 @@ public enum WaveShaderSource {
     }
 
     if (uniforms.materialKind > 1.5) {
-      float density = smoothstep(0.015, 0.22, amplitude);
-      float star = smoothstep(0.42, 0.98, amplitude);
-      float2 centred = in.uv - 0.5;
-      float nebula = 0.5 + 0.5 * sin(centred.x * 14.0 + centred.y * 10.0 + uniforms.elapsed * 0.12);
-      float3 space = mix(kNightDeep, float3(0.07, 0.08, 0.22), density * 0.75);
-      space += float3(0.20, 0.10, 0.38) * density * nebula * 0.45;
-      space = mix(space, kEmberWarm, star);
-      space += kSeaGlimmer * smoothstep(0.18, 0.36, amplitude) * 0.2;
-      return float4(space, 1.0);
+      if (uniforms.representation < 0.5) {
+        float density = smoothstep(0.01, 0.35, amplitude);
+        float3 galaxy = mix(kNightDeep, float3(0.08, 0.06, 0.20), density * 0.8);
+        galaxy += float3(0.46, 0.24, 0.68) * smoothstep(0.35, 0.9, amplitude);
+        galaxy += kSeaGlimmer * smoothstep(0.75, 1.0, amplitude) * 0.4;
+        return float4(galaxy, 1.0);
+      }
+      if (uniforms.representation < 1.5) {
+        float core = smoothstep(0.08, 0.75, amplitude);
+        float halo = smoothstep(0.02, 0.18, amplitude) * 0.38;
+        float3 starColour = mix(kNightDeep, float3(0.28, 0.10, 0.025), halo);
+        starColour = mix(starColour, kEmberWarm, core);
+        starColour += float3(1.0, 0.75, 0.35) * smoothstep(0.72, 1.0, amplitude) * 0.35;
+        return float4(starColour, 1.0);
+      }
+      if (uniforms.representation < 2.5) {
+        float2 centred = (in.uv - 0.5) * 2.0;
+        float radius = length(centred);
+        float disc = 1.0 - smoothstep(0.78, 0.88, radius);
+        float land = smoothstep(0.45, 0.75, amplitude);
+        float3 planet = mix(float3(0.02, 0.10, 0.18), float3(0.24, 0.48, 0.22), land);
+        planet = mix(kNightDeep, planet, disc);
+        planet += kEmberWarm * smoothstep(0.70, 0.95, amplitude) * 0.22;
+        return float4(planet, 1.0);
+      }
+      float2 earthCentre = (in.uv - 0.5) * 2.0;
+      float earthRadius = length(earthCentre);
+      float earthDisc = 1.0 - smoothstep(0.78, 0.88, earthRadius);
+      float ocean = smoothstep(0.12, 0.52, amplitude);
+      float cloud = smoothstep(0.62, 0.92, amplitude);
+      float3 earth = mix(float3(0.025, 0.14, 0.25), float3(0.18, 0.52, 0.28), ocean);
+      earth = mix(earth, kSeaGlimmer, cloud * 0.45);
+      earth += float3(0.16, 0.28, 0.52) * (1.0 - smoothstep(0.78, 0.95, earthRadius)) * 0.3;
+      earth = mix(kNightDeep, earth, earthDisc);
+      return float4(earth, 1.0);
     }
 
     // Slope of the surface, read from the same texture: the medium lights
