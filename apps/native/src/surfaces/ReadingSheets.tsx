@@ -1,7 +1,6 @@
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import type { NativeSceneId } from "@objet/universe-contracts";
 import { PALETTE, SPACING, TYPOGRAPHY, Z_ORDER } from "../design/tokens";
-import type { TrailEntry } from "../persistence/SessionTrail";
 import type { LensIndex } from "../progression/UniverseProgress";
 
 export type SceneLensIndex = LensIndex;
@@ -135,48 +134,6 @@ export function FoldSheet({
           ))}
         </View>
       ) : null}
-    </ReadingSheet>
-  );
-}
-
-export function TrailSheet({
-  events,
-  onClose,
-  scene = "field",
-}: Readonly<{
-  events: readonly TrailEntry[];
-  onClose: () => void;
-  scene?: string;
-}>) {
-  return (
-    <ReadingSheet title={`trail / what you caused in ${scene}`} onClose={onClose}>
-      <Text style={styles.intro} allowFontScaling maxFontSizeMultiplier={2}>
-        A quiet record kept on this device. It names causes, not achievements;
-        the larger natural history can grow from these same semantic events.
-      </Text>
-      {events.length === 0 ? (
-        <Text style={styles.empty} allowFontScaling maxFontSizeMultiplier={2}>
-          touch the field first. your first disturbance will appear here.
-        </Text>
-      ) : (
-        <View style={styles.eventList}>
-          {events.map((event, index) => (
-            <View key={`${event.verb}-${index}`} style={styles.event}>
-              <View style={styles.optionHeading}>
-                <Text style={styles.optionLabel} allowFontScaling maxFontSizeMultiplier={2}>
-                  {index + 1}. {event.semanticVerb}
-                </Text>
-                <Text style={styles.notation} allowFontScaling maxFontSizeMultiplier={2}>
-                  {Math.round(event.intensity * 100)}%
-                </Text>
-              </View>
-              <Text style={styles.optionNote} allowFontScaling maxFontSizeMultiplier={2}>
-                {event.answered ? `the ${scene} material answered.` : "the gesture answered in hand and sound."}
-              </Text>
-            </View>
-          ))}
-        </View>
-      )}
     </ReadingSheet>
   );
 }
@@ -351,22 +308,5 @@ const styles = StyleSheet.create({
     fontSize: TYPOGRAPHY.system.sizes.caption,
     lineHeight: TYPOGRAPHY.system.sizes.caption * 1.45,
     marginTop: SPACING.small,
-  },
-  eventList: {
-    paddingBottom: SPACING.section,
-  },
-  event: {
-    borderLeftWidth: 2,
-    borderLeftColor: PALETTE.sea.lit,
-    paddingLeft: SPACING.medium,
-    marginBottom: SPACING.medium,
-  },
-  empty: {
-    color: PALETTE.ink.quiet,
-    fontFamily: TYPOGRAPHY.editorial.family,
-    fontSize: TYPOGRAPHY.editorial.sizes.body,
-    lineHeight: TYPOGRAPHY.editorial.sizes.body * 1.45,
-    textAlign: "center",
-    padding: SPACING.section,
   },
 });

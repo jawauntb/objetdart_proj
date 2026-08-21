@@ -5,8 +5,9 @@
  * The persistent `<ObjetUniverseView>` renders below the entire chrome
  * layer; `NativeChrome` never paints over the active material. It provides
  * the sought affordances (fold, trail, `?`) in the safe-area corners and
- * a small guide sheet host — all volunteered, never auto-opened. There is
- * no tab bar, no first-launch modal, no coach mark, no HUD.
+ * a sought guide destination (with the earlier sheet retained as a fallback)
+ * — all volunteered, never auto-opened. There is no tab bar, no first-launch
+ * modal, no coach mark, no HUD.
  *
  * An affordance appears only when it leads somewhere. `fold` and `trail`
  * belong to lanes that have not landed, and a chip that answers a press with
@@ -54,6 +55,7 @@ export type NativeChromeProps = Readonly<{
   reducedMotion?: boolean;
   onOpenFold?: () => void;
   onOpenTrail?: () => void;
+  onOpenGuide?: (reason: "direct-seeking" | "accessibility") => void;
   /**
    * Announces the guide sheet opening and closing. The route closes the
    * touch surface while it is open — the documented state contract pauses
@@ -68,6 +70,7 @@ export function NativeChrome({
   reducedMotion = false,
   onOpenFold,
   onOpenTrail,
+  onOpenGuide,
   onGuideVisibilityChange,
 }: NativeChromeProps) {
   const [guideOpen, setGuideOpen] = useState(false);
@@ -80,9 +83,13 @@ export function NativeChrome({
   }, [reveal.causedVerbs]);
 
   const openGuide = useCallback(() => {
+    if (onOpenGuide) {
+      onOpenGuide("direct-seeking");
+      return;
+    }
     setGuideOpen(true);
     onGuideVisibilityChange?.(true);
-  }, [onGuideVisibilityChange]);
+  }, [onGuideVisibilityChange, onOpenGuide]);
   const closeGuide = useCallback(() => {
     setGuideOpen(false);
     onGuideVisibilityChange?.(false);
@@ -123,6 +130,11 @@ export function NativeChrome({
             label="?"
             accessibilityLabel={`Open the ${scene} scene guide`}
             onPress={openGuide}
+            accessibilityActionLabel="Open the guide as an accessibility action"
+            onAccessibilityPress={() => {
+              if (onOpenGuide) onOpenGuide("accessibility");
+              else openGuide();
+            }}
             variant="trailing"
           />
         </View>
@@ -150,11 +162,15 @@ function ChromeAffordance({
   label,
   accessibilityLabel,
   onPress,
+  accessibilityActionLabel,
+  onAccessibilityPress,
   variant,
 }: Readonly<{
   label: string;
   accessibilityLabel: string;
   onPress: () => void;
+  accessibilityActionLabel?: string;
+  onAccessibilityPress?: () => void;
   variant: AffordanceVariant;
 }>) {
   const align: ViewStyle = { alignSelf: variant === "leading" ? "flex-start" : "flex-end" };
@@ -162,6 +178,10 @@ function ChromeAffordance({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
+      accessibilityActions={accessibilityActionLabel ? [{ name: "open-guide", label: accessibilityActionLabel }] : undefined}
+      onAccessibilityAction={onAccessibilityPress ? ({ nativeEvent }) => {
+        if (nativeEvent.actionName === "open-guide") onAccessibilityPress();
+      } : undefined}
       onPress={onPress}
       hitSlop={SPACING.small}
       style={({ pressed }) => [styles.affordance, align, pressed ? styles.affordancePressed : null]}

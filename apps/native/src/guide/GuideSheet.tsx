@@ -27,10 +27,10 @@ import {
   GUIDE_ENTRIES,
   REVEAL_STEPS,
   type GuideEntry,
-  type GuideVerb,
   type GuideRevealStep,
 } from "./guideData";
 import type { SceneReveal } from "./reveal";
+import { ConceptReveal } from "./ConceptReveal";
 
 export type GuideSheetProps = Readonly<{
   scene: NativeSceneId;
@@ -48,6 +48,7 @@ const REGULAR_WIDTH_POINTS = 768;
 export function GuideSheet({
   scene,
   sceneField,
+  reveal,
   revealedEntries,
   reducedMotion,
   onClose,
@@ -115,29 +116,12 @@ export function GuideSheet({
                   {step}
                 </Text>
                 {entries.map((entry) => (
-                  <View key={entry.verb} style={styles.entry}>
-                    <Text
-                      style={styles.plain}
-                      allowFontScaling
-                      maxFontSizeMultiplier={3}
-                    >
-                      {entry.plain}
-                    </Text>
-                    <Text
-                      style={styles.notation}
-                      allowFontScaling
-                      maxFontSizeMultiplier={3}
-                    >
-                      {entry.notation}
-                    </Text>
-                    <Text
-                      style={styles.sceneNote}
-                      allowFontScaling
-                      maxFontSizeMultiplier={3}
-                    >
-                      {entry.sceneNotes[scene] ?? chemistryNote(scene, entry.verb)}
-                    </Text>
-                  </View>
+                  <ConceptReveal
+                    key={entry.verb}
+                    entry={entry}
+                    scene={scene}
+                    access={{ reason: "discovery", causedVerbs: reveal.causedVerbs }}
+                  />
                 ))}
               </View>
             );
@@ -158,12 +142,6 @@ export function GuideSheet({
       </View>
     </View>
   );
-}
-
-function chemistryNote(scene: NativeSceneId, verb: GuideVerb): string {
-  if (scene === "molecules") return `the molecule field answers ${verb} as a change in compound identity, bond, or vibration.`;
-  if (scene === "atoms") return `the atomic field answers ${verb} as a change in shell, bond, or fusion energy.`;
-  return "the material answers in its own declared relationship.";
 }
 
 function groupByStep(entries: readonly GuideEntry[]): Map<GuideRevealStep, GuideEntry[]> {
@@ -261,26 +239,6 @@ const styles = StyleSheet.create({
     letterSpacing: 1.6,
     textTransform: "uppercase",
     marginBottom: SPACING.medium,
-  },
-  entry: {
-    marginBottom: SPACING.medium,
-  },
-  plain: {
-    color: PALETTE.ink.plain,
-    fontFamily: TYPOGRAPHY.editorial.family,
-    fontSize: TYPOGRAPHY.editorial.sizes.body,
-    marginBottom: SPACING.small,
-  },
-  notation: {
-    color: PALETTE.ink.quiet,
-    fontFamily: TYPOGRAPHY.notation.family,
-    fontSize: TYPOGRAPHY.notation.sizes.body,
-    marginBottom: SPACING.small,
-  },
-  sceneNote: {
-    color: PALETTE.sea.lit,
-    fontFamily: TYPOGRAPHY.system.family,
-    fontSize: TYPOGRAPHY.system.sizes.body,
   },
   empty: {
     padding: SPACING.section,

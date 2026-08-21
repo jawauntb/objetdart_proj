@@ -1,4 +1,4 @@
-import { DarkTheme, Stack, ThemeProvider, useSegments, type Theme } from "expo-router";
+import { DarkTheme, Stack, ThemeProvider, useGlobalSearchParams, useSegments, type Theme } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { StyleSheet, View } from "react-native";
 import { NATIVE_SCENE_IDS, type NativeSceneId } from "@objet/universe-contracts";
@@ -23,7 +23,8 @@ const TRANSPARENT_OVER_UNIVERSE: Theme = {
 
 export default function RootLayout() {
   const segments = useSegments();
-  const scene = sceneFromSegment(segments[0]);
+  const params = useGlobalSearchParams<{ scene?: string }>();
+  const scene = sceneFromRoute(segments[0], params.scene);
   return (
     <View style={styles.root}>
       <ObjetUniverseView scene={scene} style={StyleSheet.absoluteFill} />
@@ -41,7 +42,10 @@ export default function RootLayout() {
   );
 }
 
-function sceneFromSegment(segment: string | undefined): NativeSceneId {
+function sceneFromRoute(segment: string | undefined, soughtScene: string | undefined): NativeSceneId {
+  if ((segment === "trail" || segment === "guide") && NATIVE_SCENE_IDS.some((scene) => scene === soughtScene)) {
+    return soughtScene as NativeSceneId;
+  }
   return NATIVE_SCENE_IDS.find((scene) => scene === segment) ?? "wave";
 }
 

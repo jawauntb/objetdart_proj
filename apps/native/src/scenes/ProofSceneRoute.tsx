@@ -1,4 +1,4 @@
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import type { NativeSceneId } from "@objet/universe-contracts";
@@ -7,11 +7,7 @@ import { UniverseActions } from "../accessibility/UniverseActions";
 import type { NativeSemanticCommand } from "../universe/actions";
 import { NativeChrome } from "../design/NativeChrome";
 import { EMPTY_REVEAL, revealAfter, type SceneReveal } from "../guide/reveal";
-import {
-  FoldSheet,
-  TrailSheet,
-  type SceneLensIndex,
-} from "../surfaces/ReadingSheets";
+import { FoldSheet, type SceneLensIndex } from "../surfaces/ReadingSheets";
 import {
   appendSessionTrail,
   loadSessionTrail,
@@ -47,13 +43,12 @@ const SCENE_LABEL: Record<NativeSceneId, string> = {
 export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
   const router = useRouter();
   const [reveal, setReveal] = useState<SceneReveal>(EMPTY_REVEAL);
-  const [reading, setReading] = useState(false);
+  const [routeFocused, setRouteFocused] = useState(true);
   const [foldOpen, setFoldOpen] = useState(false);
-  const [trailOpen, setTrailOpen] = useState(false);
   const [representation, setRepresentation] = useState<SceneLensIndex>(0);
-  const [trail, setTrail] = useState<readonly TrailEntry[]>([]);
   const [progress, setProgress] = useState<UniverseProgress>(EMPTY_UNIVERSE_PROGRESS);
   const progressRef = useRef(progress);
+  const trailRef = useRef<readonly TrailEntry[]>([]);
   const trailSequence = useRef(0);
   const [assistiveCommand, setAssistiveCommand] = useState<{
     id: string;
@@ -64,12 +59,19 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
   } | null>(null);
   const unlockedRepresentations = unlockedLenses(progress, scene);
 
+  useFocusEffect(useCallback(() => {
+    setRouteFocused(true);
+    return () => {
+      setRouteFocused(false);
+    };
+  }, []));
+
   useEffect(() => {
     let mounted = true;
     void Promise.all([loadSessionTrail(), loadUniverseProgress()]).then(([entries, savedProgress]) => {
       if (!mounted) return;
       trailSequence.current = entries.length;
-      setTrail(entries);
+      trailRef.current = entries;
       setProgress(savedProgress);
       progressRef.current = savedProgress;
     });
@@ -92,10 +94,16 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
   const onSemanticCommand = useCallback((event: { nativeEvent: SurfaceCommand }) => {
     const command = event.nativeEvent;
     setReveal((current) => revealAfter(current, command));
-    const entry = makeTrailEntry(command, trailSequence.current + 1);
-    trailSequence.current += 1;
-    setTrail((current) => [...current, entry].slice(-SESSION_TRAIL_LIMIT));
-    void appendSessionTrail(entry);
+    if (command.answered) {
+      const entry = makeTrailEntry(command, trailSequence.current + 1, Date.now(), {
+        scene,
+        branchId: "local-main",
+        parentEventId: trailRef.current[trailRef.current.length - 1]?.id ?? null,
+      });
+      trailSequence.current += 1;
+      trailRef.current = [...trailRef.current, entry].slice(-SESSION_TRAIL_LIMIT);
+      void appendSessionTrail(entry);
+    }
     const nextProgress = recordProgress(progressRef.current, scene, command);
     if (nextProgress !== progressRef.current) {
       progressRef.current = nextProgress;
@@ -111,7 +119,6 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
 
   const closeReadings = useCallback(() => {
     setFoldOpen(false);
-    setTrailOpen(false);
   }, []);
   const openScene = useCallback((destination: NativeSceneId) => {
     closeReadings();
@@ -131,7 +138,7 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
           // Persistence hydrates beside the material; it must never gate the
           // first touch. The native kernel is deterministic from launch and
           // the trail/progression files are convenience state, not authority.
-          enabled={!reading && !foldOpen && !trailOpen}
+          enabled={routeFocused && !foldOpen}
           representation={representation}
           maxRepresentation={unlockedRepresentations[unlockedRepresentations.length - 1]}
           assistiveVerb={assistiveCommand?.verb}
@@ -146,14 +153,10 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
         scene={scene}
         reveal={reveal}
         onOpenFold={() => {
-          setTrailOpen(false);
           setFoldOpen(true);
         }}
-        onOpenTrail={() => {
-          setFoldOpen(false);
-          setTrailOpen(true);
-        }}
-        onGuideVisibilityChange={setReading}
+        onOpenTrail={() => router.push(`/trail?scene=${scene}`)}
+        onOpenGuide={(access) => router.push(`/guide?scene=${scene}&access=${access}`)}
       />
       {foldOpen ? (
         <FoldSheet
@@ -166,7 +169,6 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
           onOpenScene={openScene}
         />
       ) : null}
-      {trailOpen ? <TrailSheet scene={SCENE_LABEL[scene]} events={trail} onClose={closeReadings} /> : null}
     </View>
   );
 }
