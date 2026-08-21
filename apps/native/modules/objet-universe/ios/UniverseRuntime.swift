@@ -65,6 +65,33 @@ final class UniverseRuntime {
     universe?.setWaveRepresentation(representation)
   }
 
+  /// Assistive actions enter at the same semantic boundary as touch. They
+  /// have no UIKit gesture shape, so the route supplies a deterministic
+  /// synthetic origin and this method supplies the same sensory answer.
+  @discardableResult
+  func commitAssistive(
+    id: String,
+    verb: SemanticVerb,
+    intensity: Double,
+    origin: SemanticOrigin
+  ) -> Bool {
+    let boundedIntensity = min(max(intensity, 0), 1)
+    let expressed = universe?.expresses(verb) ?? false
+    committed += 1
+    if expressed {
+      universe?.commit(
+        SemanticCommand(id: id, verb: verb, at: CACurrentMediaTime(), intensity: boundedIntensity, origin: origin)
+      )
+    }
+    answer(
+      id: id,
+      grammarVerb: Self.grammarVerb(for: verb),
+      intensity: boundedIntensity,
+      expressed: expressed
+    )
+    return expressed
+  }
+
   /// Commit one routed gesture. Returns whether the medium expressed it, so
   /// the surface can tell React which phenomena the visitor has actually
   /// caused — the guide gates its entries on that, and an entry whose
@@ -167,6 +194,28 @@ final class UniverseRuntime {
     case .tap2, .hold3, .twist3, .pinch, .pan2: .detent
     case .twist: .lens
     case .flip: .crossing
+    }
+  }
+
+  static func grammarVerb(for semanticVerb: SemanticVerb) -> NativeGrammarVerb {
+    switch semanticVerb {
+    case .material: return .tap
+    case .stepBack: return .tap2
+    case .tutti: return .tap3
+    case .grow: return .holdDwell
+    case .ceremony: return .holdCeremony
+    case .timeDilation: return .hold3
+    case .weather: return .drag3
+    case .lens: return .twist
+    case .agitate: return .shake
+    case .gravity: return .tilt
+    case .wake: return .knock
+    case .night: return .flip
+    case .breath: return .breath
+    case .train: return .rhythm
+    case .scale: return .pinch
+    case .pan: return .pan2
+    case .season: return .twist3
     }
   }
 }

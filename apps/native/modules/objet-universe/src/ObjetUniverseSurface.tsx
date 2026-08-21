@@ -33,6 +33,12 @@ export type ObjetUniverseSurfaceProps = {
   enabled?: boolean;
   /** Current wave lens detent: surface, equation, spectrum, or felt. */
   representation?: 0 | 1 | 2 | 3;
+  /** A VoiceOver/keyboard semantic command assembled by the shared action layer. */
+  assistiveVerb?: SemanticVerb;
+  assistiveCommandId?: string;
+  assistiveIntensity?: number;
+  assistiveOriginX?: number;
+  assistiveOriginY?: number;
   onSemanticCommand?: (event: { nativeEvent: SurfaceCommand }) => void;
 };
 
