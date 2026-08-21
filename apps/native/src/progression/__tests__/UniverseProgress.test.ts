@@ -56,6 +56,8 @@ test("old, malformed, and partial envelopes recover to safe state", () => {
   const partial = normalizeUniverseProgress({ version: 1, wave: { answeredActs: 4 }, cell: {}, solar: {} });
   assert.equal(partial.wave.answeredActs, 4);
   assert.equal(partial.wave.growthActs, 0);
+  assert.equal(partial.molecules.answeredActs, 0);
+  assert.equal(partial.atoms.answeredActs, 0);
   assert.equal(nextLensHint(partial, "solar"), "3 more answered acts open the next register.");
 });
 
@@ -76,4 +78,15 @@ test("every keeper threshold and hint is scene-local", () => {
   for (let index = 0; index < 9; index += 1) answeredOnly = recordProgress(answeredOnly, "solar", command("material"));
   assert.deepEqual(unlockedLenses(answeredOnly, "solar"), [0, 1, 3]);
   assert.deepEqual(unlockedLenses(answeredOnly, "cell"), [0]);
+});
+
+test("chemistry scenes use the same keeper thresholds and remain isolated", () => {
+  let progress = EMPTY_UNIVERSE_PROGRESS;
+  for (let index = 0; index < 3; index += 1) progress = recordProgress(progress, "molecules", command("material"));
+  assert.deepEqual(unlockedLenses(progress, "molecules"), [0, 1]);
+  progress = recordProgress(progress, "molecules", command("ceremony"));
+  assert.deepEqual(unlockedLenses(progress, "molecules"), [0, 1, 2]);
+  for (let index = 0; index < 5; index += 1) progress = recordProgress(progress, "atoms", command("grow"));
+  assert.deepEqual(unlockedLenses(progress, "atoms"), [0, 1, 3]);
+  assert.deepEqual(unlockedLenses(progress, "molecules"), [0, 1, 2]);
 });

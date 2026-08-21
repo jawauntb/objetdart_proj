@@ -1,6 +1,7 @@
 import { DarkTheme, Stack, ThemeProvider, useSegments, type Theme } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { StyleSheet, View } from "react-native";
+import { NATIVE_SCENE_IDS, type NativeSceneId } from "@objet/universe-contracts";
 import { ObjetUniverseView } from "../modules/objet-universe";
 
 /**
@@ -22,7 +23,7 @@ const TRANSPARENT_OVER_UNIVERSE: Theme = {
 
 export default function RootLayout() {
   const segments = useSegments();
-  const scene = segments[0] === "cell" || segments[0] === "solar" ? segments[0] : "wave";
+  const scene = sceneFromSegment(segments[0]);
   return (
     <View style={styles.root}>
       <ObjetUniverseView scene={scene} style={StyleSheet.absoluteFill} />
@@ -38,6 +39,10 @@ export default function RootLayout() {
       </ThemeProvider>
     </View>
   );
+}
+
+function sceneFromSegment(segment: string | undefined): NativeSceneId {
+  return NATIVE_SCENE_IDS.find((scene) => scene === segment) ?? "wave";
 }
 
 const styles = StyleSheet.create({

@@ -2,7 +2,7 @@
 
 export const SCALE_CONTRACT_VERSION = 1 as const;
 
-export type NativeScaleId = "wave-medium" | "cellular-colony" | "solar-formation";
+export type NativeScaleId = "wave-medium" | "cellular-colony" | "molecular-bond" | "atomic-shell" | "solar-formation";
 export type ScaleLens = "material" | "surface" | "signal" | "phase" | "spectrum" | "lineage" | "orbital";
 
 export type PhysicalScale = Readonly<{
@@ -30,10 +30,12 @@ export type PassageAnchor = Readonly<{
 export const NATIVE_SCALE_ADDRESSES: Readonly<Record<NativeScaleId, ScaleAddress>> = {
   "wave-medium": { version: SCALE_CONTRACT_VERSION, physical: { id: "wave-medium", log10Metres: -1, label: "the wave medium" }, lens: "surface" },
   "cellular-colony": { version: SCALE_CONTRACT_VERSION, physical: { id: "cellular-colony", log10Metres: -5, label: "the cellular colony" }, lens: "material" },
+  "molecular-bond": { version: SCALE_CONTRACT_VERSION, physical: { id: "molecular-bond", log10Metres: -9, label: "the molecular bond" }, lens: "material" },
+  "atomic-shell": { version: SCALE_CONTRACT_VERSION, physical: { id: "atomic-shell", log10Metres: -10, label: "the atomic shell" }, lens: "material" },
   "solar-formation": { version: SCALE_CONTRACT_VERSION, physical: { id: "solar-formation", log10Metres: 12, label: "the forming solar system" }, lens: "orbital" },
 };
 
-const SCALE_IDS: readonly NativeScaleId[] = ["wave-medium", "cellular-colony", "solar-formation"];
+const SCALE_IDS: readonly NativeScaleId[] = ["wave-medium", "cellular-colony", "molecular-bond", "atomic-shell", "solar-formation"];
 const LENSES: readonly ScaleLens[] = ["material", "surface", "signal", "phase", "spectrum", "lineage", "orbital"];
 
 export function isScaleAddress(value: unknown): value is ScaleAddress {

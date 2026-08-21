@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
+import type { NativeSceneId } from "@objet/universe-contracts";
 
 /**
  * U8 scenario runner: shows what the native host is currently doing without
@@ -19,10 +20,10 @@ export type ScenarioRunnerState =
   | { state: "unbound" }
   | {
       state: "bound";
-      activeScene: "wave" | "cell" | "solar";
+      activeScene: NativeSceneId;
       logicalTick: number;
       pendingActions: number;
-      committedScenes: readonly ("wave" | "cell" | "solar")[];
+      committedScenes: readonly NativeSceneId[];
       droppedFrameDebt: number;
       quarantinedOutputs: number;
       lastBoundary:

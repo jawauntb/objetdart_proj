@@ -4,6 +4,8 @@ public enum SceneID: String, CaseIterable, Codable, Sendable {
   case wave
   case cell
   case solar
+  case molecules
+  case atoms
 }
 
 /// Mirrors `SemanticVerb` in the versioned TypeScript contracts. Renderer details

@@ -27,6 +27,7 @@ import {
   GUIDE_ENTRIES,
   REVEAL_STEPS,
   type GuideEntry,
+  type GuideVerb,
   type GuideRevealStep,
 } from "./guideData";
 import type { SceneReveal } from "./reveal";
@@ -134,7 +135,7 @@ export function GuideSheet({
                       allowFontScaling
                       maxFontSizeMultiplier={3}
                     >
-                      {entry.sceneNotes[scene]}
+                      {entry.sceneNotes[scene] ?? chemistryNote(scene, entry.verb)}
                     </Text>
                   </View>
                 ))}
@@ -157,6 +158,12 @@ export function GuideSheet({
       </View>
     </View>
   );
+}
+
+function chemistryNote(scene: NativeSceneId, verb: GuideVerb): string {
+  if (scene === "molecules") return `the molecule field answers ${verb} as a change in compound identity, bond, or vibration.`;
+  if (scene === "atoms") return `the atomic field answers ${verb} as a change in shell, bond, or fusion energy.`;
+  return "the material answers in its own declared relationship.";
 }
 
 function groupByStep(entries: readonly GuideEntry[]): Map<GuideRevealStep, GuideEntry[]> {

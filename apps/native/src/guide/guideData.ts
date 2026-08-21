@@ -72,7 +72,14 @@ export type GuideLayer = "material" | "representation" | "world" | "vessel" | "c
 
 export type GuideRevealStep = "Play" | "Reveal" | "Name" | "Transfer" | "Express";
 
-export type SceneNote = Readonly<{ wave: string; cell: string; solar: string }>;
+export type SceneNote = Readonly<{
+  wave: string;
+  cell: string;
+  solar: string;
+  /** Chemistry scenes inherit the shared gesture grammar until a verb earns a dedicated phrase. */
+  molecules?: string;
+  atoms?: string;
+}>;
 
 export type GuideEntry = Readonly<{
   verb: GuideVerb;

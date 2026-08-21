@@ -113,7 +113,7 @@ final class ProofKernelTests: XCTestCase {
   }
 
   func testEveryProofKernelUsesTheSharedProjectionVocabulary() {
-    for kernel in [CellKernel(seed: 1) as any SurfaceSimulationKernel, SolarKernel(seed: 1)] {
+    for kernel in [CellKernel(seed: 1) as any SurfaceSimulationKernel, SolarKernel(seed: 1), MoleculeKernel(seed: 1), AtomKernel(seed: 1)] {
       XCTAssertTrue(kernel.expresses(.lens))
       XCTAssertEqual(kernel.representationIndex, 0)
       kernel.setRepresentation(3)
@@ -121,5 +121,110 @@ final class ProofKernelTests: XCTestCase {
       kernel.setRepresentation(99)
       XCTAssertEqual(kernel.representationIndex, 3, "lens detents are bounded")
     }
+  }
+
+  func testAtomKernelIsDeterministicAndBounded() {
+    let first = AtomKernel(seed: 77)
+    let second = AtomKernel(seed: 77)
+    XCTAssertEqual(first.materialKind, 3)
+    XCTAssertEqual(first.atoms, second.atoms)
+    XCTAssertTrue(first.atoms.allSatisfy { $0.element.shells.reduce(0, +) == $0.element.z })
+    XCTAssertTrue(first.atoms.allSatisfy { $0.nucleons >= $0.element.z })
+    XCTAssertTrue(first.atoms.allSatisfy { $0.element.z >= 1 && $0.element.z <= 26 })
+    XCTAssertEqual(AtomKernel.elements.count, 26)
+    XCTAssertEqual(AtomKernel.elements.last?.symbol, "Fe")
+    XCTAssertGreaterThan(AtomKernel.bindingEnergyPerNucleon(2), AtomKernel.bindingEnergyPerNucleon(1))
+    XCTAssertGreaterThan(AtomKernel.bindingEnergyPerNucleon(26), AtomKernel.bindingEnergyPerNucleon(2))
+    XCTAssertLessThan(AtomKernel.bindingEnergyPerNucleon(30), AtomKernel.bindingEnergyPerNucleon(26))
+    XCTAssertLessThan(AtomKernel.bindingEnergyPerNucleon(80), 0)
+    let before = surface(first)
+    _ = first.apply(SemanticCommand(id: "atom-strike", verb: .material, at: 0, intensity: 1, origin: .centre))
+    XCTAssertNotEqual(before, surface(first))
+    for lens in 0 ... 3 { first.setRepresentation(lens) }
+    XCTAssertLessThanOrEqual(first.atoms.count, 8)
+  }
+
+  func testAtomLensesAndFusionLedgerRemainDistinct() {
+    let kernel = AtomKernel(seed: 5)
+    var projections = [[Float]]()
+    for lens in 0 ... 3 {
+      kernel.setRepresentation(lens)
+      projections.append(surface(kernel))
+    }
+    for first in 0 ..< 4 {
+      for second in (first + 1) ..< 4 {
+        XCTAssertNotEqual(projections[first], projections[second], "atom lens \(first) and \(second) must remain distinct")
+      }
+    }
+    let before = kernel.fusionEnergy
+    _ = kernel.apply(SemanticCommand(id: "atom-fusion", verb: .ceremony, at: 0, intensity: 1))
+    XCTAssertTrue(kernel.fusionEnergy.isFinite)
+    XCTAssertNotEqual(kernel.fusionEnergy, before, "fusion ceremony must update its energy ledger")
+  }
+
+  func testMoleculeKernelUsesRealCompoundsAndOrderIndependentReactions() {
+    let first = MoleculeKernel(seed: 12)
+    let second = MoleculeKernel(seed: 12)
+    XCTAssertEqual(first.materialKind, 4)
+    XCTAssertEqual(first.molecules, second.molecules)
+    XCTAssertTrue(first.molecules.allSatisfy { MoleculeKernel.compounds.contains($0.compound) })
+    XCTAssertEqual(first.reactionFor("H2", "O2"), first.reactionFor("O2", "H2"))
+    XCTAssertEqual(first.reactionFor("H2", "O2").reactants, ["H2", "H2", "O2"])
+    XCTAssertEqual(first.reactionFor("H2", "O2").products, ["H2O", "H2O"])
+    XCTAssertEqual(first.reactionFor("CH4", "O2").products, ["CO2", "H2O", "H2O"])
+    XCTAssertEqual(first.reactionFor("N2", "H2").reactants, ["H2", "H2", "H2", "N2"])
+    XCTAssertEqual(MoleculeKernel.compounds.first(where: { $0.key == "H2O" })?.shape, .bent)
+    XCTAssertEqual(MoleculeKernel.compounds.first(where: { $0.key == "CH4" })?.shape, .tetrahedral)
+    XCTAssertEqual(MoleculeKernel.compounds.first(where: { $0.key == "H2O" })?.atomCount, 3)
+    XCTAssertEqual(MoleculeKernel.compounds.first(where: { $0.key == "CH4" })?.atomCount, 5)
+    let fallback = first.reactionFor("H2O", "NaCl")
+    XCTAssertEqual(fallback, first.reactionFor("NaCl", "H2O"))
+    XCTAssertTrue(fallback.products.isEmpty)
+    XCTAssertEqual(fallback.energy, 0)
+    for index in 0 ..< 100 {
+      _ = first.apply(SemanticCommand(id: "molecule-\(index)", verb: .ceremony, at: Double(index), intensity: 1))
+    }
+    XCTAssertLessThanOrEqual(first.molecules.count, 18)
+  }
+
+  func testMoleculeLensesAndReactionChangeTheField() {
+    let kernel = MoleculeKernel(seed: 31)
+    let before = surface(kernel)
+    _ = kernel.apply(SemanticCommand(id: "molecule-grow", verb: .grow, at: 0, intensity: 1, origin: .centre))
+    XCTAssertNotEqual(before, surface(kernel))
+    var projections = [[Float]]()
+    for lens in 0 ... 3 {
+      kernel.setRepresentation(lens)
+      projections.append(surface(kernel))
+    }
+    for first in 0 ..< 4 {
+      for second in (first + 1) ..< 4 {
+        XCTAssertNotEqual(projections[first], projections[second], "molecule lens \(first) and \(second) must remain distinct")
+      }
+    }
+  }
+
+  func testChemistryPopulationCapsAndLedgersStayBoundedAtTheEdges() {
+    let atoms = AtomKernel(seed: 123)
+    for index in 0 ..< 20 {
+      _ = atoms.apply(SemanticCommand(id: "atom-grow-(index)", verb: .grow, at: Double(index), intensity: 1, origin: .centre))
+    }
+    XCTAssertEqual(atoms.atoms.count, 8)
+    _ = atoms.apply(SemanticCommand(id: "atom-edge-fusion", verb: .ceremony, at: 21, intensity: 1))
+    XCTAssertLessThanOrEqual(atoms.atoms.count, 8)
+    XCTAssertTrue(atoms.fusionEnergy.isFinite)
+
+    let molecules = MoleculeKernel(seed: 321)
+    for index in 0 ..< 24 {
+      _ = molecules.apply(SemanticCommand(id: "molecule-grow-(index)", verb: .grow, at: Double(index), intensity: 1, origin: .centre))
+    }
+    XCTAssertEqual(molecules.molecules.count, 18)
+    for index in 0 ..< 40 {
+      _ = molecules.apply(SemanticCommand(id: "molecule-ceremony-(index)", verb: .ceremony, at: Double(index), intensity: 1))
+    }
+    XCTAssertLessThanOrEqual(molecules.molecules.count, 18)
+    XCTAssertLessThanOrEqual(molecules.reactions.count, 32)
+    _ = molecules.apply(SemanticCommand(id: "molecule-one-item", verb: .ceremony, at: 99, intensity: 1))
+    XCTAssertGreaterThanOrEqual(molecules.molecules.count, 1)
   }
 }

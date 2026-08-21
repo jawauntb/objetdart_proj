@@ -113,6 +113,7 @@ export const UniverseActions = forwardRef<View, UniverseActionsProps>(function U
     <View
       ref={ref}
       accessible
+      pointerEvents="box-none"
       accessibilityRole="adjustable"
       accessibilityLabel={accessibilityLabel}
       accessibilityActions={accessibilityActions}

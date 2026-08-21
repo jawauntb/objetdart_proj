@@ -1,6 +1,8 @@
 import * as assert from "node:assert/strict";
 import {
   RELEASE_SCENE_MANIFEST,
+  NATIVE_SCENE_MANIFEST,
+  CHEMISTRY_SCENE_MANIFEST,
   deserializeAction,
   serializeAction,
   serializeContinuousGesture,
@@ -15,6 +17,7 @@ import {
   isVersionedAction,
   NATIVE_SCALE_ADDRESSES,
   validateReleaseSceneManifest,
+  validateNativeSceneManifest,
   validateSceneStyle,
   validateSimulationContract,
   type GestureWindow,
@@ -85,6 +88,26 @@ assert.equal(deserializeContinuousGesture('{"version":2}').supported, false);
 const release = validateReleaseSceneManifest(RELEASE_SCENE_MANIFEST);
 assert.equal(release.valid, true, release.errors.join("\n"));
 assert.deepEqual(RELEASE_SCENE_MANIFEST.map((scene) => scene.id), ["wave", "cell", "solar"]);
+assert.equal(validateNativeSceneManifest(NATIVE_SCENE_MANIFEST).valid, true);
+assert.deepEqual(NATIVE_SCENE_MANIFEST.map((scene) => scene.id), ["wave", "cell", "solar", "molecules", "atoms"]);
+assert.deepEqual(CHEMISTRY_SCENE_MANIFEST.map((scene) => scene.version), [2, 2]);
+const wrongChemistrySource = [...NATIVE_SCENE_MANIFEST.slice(0, 4), {
+  ...NATIVE_SCENE_MANIFEST[4],
+  requirements: {
+    ...NATIVE_SCENE_MANIFEST[4].requirements,
+    science: {
+      ...NATIVE_SCENE_MANIFEST[4].requirements.science,
+      evidence: {
+        ...NATIVE_SCENE_MANIFEST[4].requirements.science.evidence,
+        sourceIds: ["solar-murray-dermott-1999"],
+      },
+    },
+  },
+}];
+assert.equal(validateNativeSceneManifest(wrongChemistrySource).valid, false);
+const wrongChemistryRelease = [...NATIVE_SCENE_MANIFEST.slice(0, 4), { ...NATIVE_SCENE_MANIFEST[4], release: "v1" }];
+assert.equal(validateNativeSceneManifest(wrongChemistryRelease).valid, false);
+assert.equal(validateNativeSceneManifest(NATIVE_SCENE_MANIFEST.slice(0, 4)).valid, false);
 const fabricatedScaleManifest = [{ ...RELEASE_SCENE_MANIFEST[0], scale: { ...RELEASE_SCENE_MANIFEST[0].scale, physical: { ...RELEASE_SCENE_MANIFEST[0].scale.physical, log10Metres: 99 } } }, ...RELEASE_SCENE_MANIFEST.slice(1)] as unknown as typeof RELEASE_SCENE_MANIFEST;
 assert.equal(validateReleaseSceneManifest(fabricatedScaleManifest).valid, false);
 const unreviewedManifest = [{ ...RELEASE_SCENE_MANIFEST[0], requirements: { ...RELEASE_SCENE_MANIFEST[0].requirements, science: { ...RELEASE_SCENE_MANIFEST[0].requirements.science, evidence: { ...RELEASE_SCENE_MANIFEST[0].requirements.science.evidence, sourceIds: [] } } } }, ...RELEASE_SCENE_MANIFEST.slice(1)];

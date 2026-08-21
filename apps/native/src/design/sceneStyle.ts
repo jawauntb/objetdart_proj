@@ -1,10 +1,10 @@
 /**
  * Native scene style — the one source of truth for the perceptual axis of
- * every Release 1 scene, re-exported from the settled contract.
+ * every native scene, re-exported from the settled contract.
  *
  * The scene briefs (wave, cell, solar) live in
- * `packages/universe-contracts/src/manifest.ts` and are frozen at U2.
- * This module wraps `RELEASE_SCENE_MANIFEST[i].style` so that the native
+ * `packages/universe-contracts/src/manifest.ts` and are frozen at their
+ * respective release. This module wraps `NATIVE_SCENE_MANIFEST[i].style` so that the native
  * app never invents a second copy of a scene's palette, forms, motion, or
  * sensory mapping. `validateSceneStyle` remains the gate; every brief we
  * expose passes it or the test suite fails.
@@ -14,7 +14,7 @@
  */
 
 import {
-  RELEASE_SCENE_MANIFEST,
+  NATIVE_SCENE_MANIFEST,
   validateSceneStyle,
   type ContractValidation,
   type NativeSceneId,
@@ -24,25 +24,25 @@ import {
 export type NativeSceneStyle = SceneStyle;
 
 /**
- * The three scene briefs, keyed by scene id. Consumers must read from this
+ * Native scene briefs, keyed by scene id. Consumers must read from this
  * map (or the ordered array below) rather than restating the values. Every
  * value is `Object.freeze`d to make accidental mutation loud.
  */
 export const SCENE_STYLES: Readonly<Record<NativeSceneId, NativeSceneStyle>> = Object.freeze(
-  RELEASE_SCENE_MANIFEST.reduce<Record<NativeSceneId, NativeSceneStyle>>((acc, scene) => {
+  NATIVE_SCENE_MANIFEST.reduce<Record<NativeSceneId, NativeSceneStyle>>((acc, scene) => {
     acc[scene.id] = Object.freeze(scene.style) as NativeSceneStyle;
     return acc;
   }, {} as Record<NativeSceneId, NativeSceneStyle>),
 );
 
-/** The three scene briefs in the settled release order. */
+/** Native scene briefs in release order. */
 export const SCENE_STYLE_LIST: readonly NativeSceneStyle[] = Object.freeze(
-  RELEASE_SCENE_MANIFEST.map((scene) => SCENE_STYLES[scene.id]),
+  NATIVE_SCENE_MANIFEST.map((scene) => SCENE_STYLES[scene.id]),
 );
 
-/** Ids of the three Release 1 scenes, in the settled release order. */
+/** Ids of the native scenes in the settled release order. */
 export const NATIVE_SCENE_IDS: readonly NativeSceneId[] = Object.freeze(
-  RELEASE_SCENE_MANIFEST.map((scene) => scene.id),
+  NATIVE_SCENE_MANIFEST.map((scene) => scene.id),
 );
 
 /**
@@ -61,7 +61,7 @@ export function sceneStyle(id: NativeSceneId): NativeSceneStyle {
 /**
  * Validate a brief. Every brief we ship must pass; the test suite calls
  * this against every entry in `SCENE_STYLES` and every entry in
- * `RELEASE_SCENE_MANIFEST[i].style` — a drift between the two is a defect.
+ * `NATIVE_SCENE_MANIFEST[i].style` — a drift between the two is a defect.
  */
 export function validateNativeSceneStyle(style: NativeSceneStyle): ContractValidation {
   return validateSceneStyle(style);

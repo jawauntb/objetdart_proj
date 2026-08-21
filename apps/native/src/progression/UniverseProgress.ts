@@ -7,20 +7,37 @@ import {
 
 export * from "./UniverseProgressLogic";
 
-const FILE_NAME = "objet-universe-progress-v1.json";
+const FILE_NAME = "objet-universe-progress-v2.json";
+const LEGACY_FILE_NAME = "objet-universe-progress-v1.json";
 
-function progressUri(): string | null {
+function progressUri(fileName = FILE_NAME): string | null {
   const root = FileSystem.documentDirectory ?? FileSystem.cacheDirectory;
-  return root ? `${root}${FILE_NAME}` : null;
+  return root ? `${root}${fileName}` : null;
+}
+
+function parseProgressEnvelope(raw: string): UniverseProgress {
+  const value = JSON.parse(raw) as { version?: unknown };
+  if (!value || typeof value !== "object" || (value.version !== 1 && value.version !== 2)) {
+    throw new Error("unsupported progression envelope");
+  }
+  return normalizeUniverseProgress(value);
 }
 
 /** A damaged or old progression file is safe to replace, never a reason to block play. */
 export async function loadUniverseProgress(): Promise<UniverseProgress> {
   const uri = progressUri();
+  const legacyUri = progressUri(LEGACY_FILE_NAME);
   if (!uri) return EMPTY_UNIVERSE_PROGRESS;
   try {
     await writeQueue;
-    return normalizeUniverseProgress(JSON.parse(await FileSystem.readAsStringAsync(uri)));
+    try {
+      return parseProgressEnvelope(await FileSystem.readAsStringAsync(uri));
+    } catch {
+      if (!legacyUri) return EMPTY_UNIVERSE_PROGRESS;
+      const migrated = parseProgressEnvelope(await FileSystem.readAsStringAsync(legacyUri));
+      void saveUniverseProgress(migrated);
+      return migrated;
+    }
   } catch {
     return EMPTY_UNIVERSE_PROGRESS;
   }

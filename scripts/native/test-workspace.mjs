@@ -169,6 +169,8 @@ const appConfig = readText("apps/native/app.config.ts");
 assert.match(appConfig, /name:\s*["']ObjetUniverseKit["']/, "prebuild must extra-pod the Swift kit");
 assert.match(appConfig, /path:\s*["']\.\.\/\.\.\/\.\.\/packages\/objet-universe-kit["']/, "the kit extra pod path must resolve from the generated ios/ tree");
 assert.match(appConfig, /appleTeamId:\s*["']58877MPK38["']/, "the Expo ios config must name the Apple team for EAS credentials");
+assert.match(appConfig, /runtimeVersion:\s*\{\s*policy:\s*["']appVersion["']\s*\}/, "OTA updates must not cross native runtime versions");
+assert.match(appConfig, /version:\s*["']0\.2\.0["']/, "the chemistry native slice must ship a new app runtime version");
 assert.match(universeView, /import ObjetUniverseKit/, "the native view must import the shared Swift kit module");
 assert.match(universeHost, /func handoff\(to/, "the host must own transactional scene handoff");
 assert.match(universeHost, /pendingCommands/, "semantic commands must wait at the authoritative host boundary");
@@ -194,6 +196,8 @@ const waveRenderer = readText("packages/objet-universe-kit/Sources/ObjetUniverse
 const waveShaders = readText("packages/objet-universe-kit/Sources/ObjetUniverseRender/Wave/WaveShaders.swift");
 const cellKernel = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/Cell/CellKernel.swift");
 const solarKernel = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/Solar/SolarKernel.swift");
+const atomKernel = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/Atoms/AtomKernel.swift");
+const moleculeKernel = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/Molecules/MoleculeKernel.swift");
 assert.match(universeView, /WaveKernel\(/, "the wave scene must run its own kernel; a probe kernel has no material to show");
 assert.match(universeView, /CAMetalLayer/, "the persistent native view must own a Metal layer for the material to draw into");
 assert.match(universeView, /renderHost\.submitField/, "each frame's authoritative field must reach the renderer");
@@ -208,6 +212,8 @@ assert.match(waveKernel, /case \.lens/, "twist-lens commands must change the wav
 assert.doesNotMatch(universeView, /NativeProbeKernel/, "every first-release destination must own a drawable kernel");
 assert.match(universeView, /CellKernel\(/, "the cell scene must hand off to a real reaction-diffusion kernel");
 assert.match(universeView, /SolarKernel\(/, "the solar scene must hand off to a real orbital kernel");
+assert.match(universeView, /AtomKernel\(/, "the atoms scene must hand off to a real atomic kernel");
+assert.match(universeView, /MoleculeKernel\(/, "the molecules scene must hand off to a real molecular kernel");
 assert.match(universeView, /materialKind: kernel\.materialKind/, "the active material family must reach the shared renderer");
 assert.match(cellKernel, /SurfaceSimulationKernel/, "the cell lane must provide a shared scalar surface");
 assert.match(cellKernel, /reaction.diffusion|Gray.Scott/i, "the cell lane must be governed by a reaction-diffusion law");
@@ -215,6 +221,10 @@ assert.match(solarKernel, /SurfaceSimulationKernel/, "the solar lane must provid
 assert.match(solarKernel, /symplectic|integrat/i, "the solar lane must advance bodies with a bounded integrator");
 assert.match(solarKernel, /maximumBodyCount = 48/, "the solar lane must bound ceremony-created bodies");
 assert.match(solarKernel, /maximumCentralMass = 4\.0/, "the solar lane must bound central growth");
+assert.match(atomKernel, /maximumAtoms = 8/, "the atomic lane must bound atom growth");
+assert.match(atomKernel, /fusionEnergy/, "the atomic lane must retain a fusion ledger");
+assert.match(moleculeKernel, /maximumMolecules = 18/, "the molecular lane must bound molecule growth");
+assert.match(moleculeKernel, /reactionFor/, "the molecular lane must expose a deterministic reaction table");
 assert.match(waveRenderer, /MTLRenderPipelineState/, "the wave material must reach the screen through a Metal pipeline");
 assert.match(waveRenderer, /representation/, "the renderer must receive the selected wave representation");
 assert.match(waveRenderer, /materialKind/, "the renderer must receive the active material family");
@@ -235,6 +245,8 @@ assert.doesNotMatch(
 const nativeLayout = readText("apps/native/app/_layout.tsx");
 const cellRoute = readText("apps/native/app/cell.tsx");
 const solarRoute = readText("apps/native/app/solar.tsx");
+const moleculesRoute = readText("apps/native/app/molecules.tsx");
+const atomsRoute = readText("apps/native/app/atoms.tsx");
 const proofRoute = readText("apps/native/src/scenes/ProofSceneRoute.tsx");
 const progression = readText("apps/native/src/progression/UniverseProgress.ts");
 const progressionLogic = readText("apps/native/src/progression/UniverseProgressLogic.ts");
@@ -243,11 +255,13 @@ assert.match(nativeLayout, /<ObjetUniverseView/, "the native universe host must 
 assert.match(nativeLayout, /useSegments/, "the persistent host must follow the active native scene route");
 assert.match(cellRoute, /ProofSceneRoute/, "cell must be a real route over the persistent native host");
 assert.match(solarRoute, /ProofSceneRoute/, "solar must be a real route over the persistent native host");
+assert.match(moleculesRoute, /ProofSceneRoute/, "molecules must be a real route over the persistent native host");
+assert.match(atomsRoute, /ProofSceneRoute/, "atoms must be a real route over the persistent native host");
 assert.match(proofRoute, /ObjetUniverseSurface/, "every proof scene must expose the same native touch surface");
 assert.match(proofRoute, /appendSessionTrail/, "every proof scene must keep the trail affordance honest");
 assert.match(proofRoute, /loadUniverseProgress/, "every proof scene must restore keeper progression before accepting input");
 assert.match(proofRoute, /unlockedLenses/, "every proof scene must gate new agency on caused phenomena");
-assert.match(progressionLogic, /UNIVERSE_PROGRESS_VERSION = 1/, "keeper progression must be versioned");
+assert.match(progressionLogic, /UNIVERSE_PROGRESS_VERSION = 2/, "keeper progression must be versioned");
 assert.match(progression, /writeQueue/, "keeper progression writes must serialize rapid commands");
 assert.match(progressionLogic, /unlockedLenses/, "keeper progression must expose deterministic lens unlocks");
 assert.match(readingSheets, /galaxy/, "the fold must name the cosmic galaxy register");
@@ -255,6 +269,8 @@ assert.match(readingSheets, /star/, "the fold must name the stellar register");
 assert.match(readingSheets, /Earth/, "the fold must name the Earth register");
 assert.match(readingSheets, /genome/, "the fold must name the genome register");
 assert.match(readingSheets, /protein/, "the fold must name the protein register");
+assert.match(readingSheets, /molecules/, "the fold must name the molecular register");
+assert.match(readingSheets, /atoms/, "the fold must name the atomic register");
 assert.ok(
   nativeLayout.indexOf("<ObjetUniverseView") < nativeLayout.indexOf("<Stack"),
   "route overlays must mount above the persistent native universe host",
@@ -356,15 +372,15 @@ assert.match(proofRoute, /onOpenTrail=/, "proof scenes must wire the trail affor
 assert.match(proofRoute, /<FoldSheet/, "proof scenes must render the fold surface when requested");
 assert.match(proofRoute, /<TrailSheet/, "proof scenes must render the trail surface when requested");
 assert.match(proofRoute, /representation=\{representation\}/, "proof scenes must pass the selected lens to the native surface");
-assert.match(proofRoute, /loadSessionTrail/, "proof scenes must recover the local trail before enabling touch");
-assert.match(proofRoute, /trailReady\s*&&/, "proof scenes must not accept a gesture before trail recovery completes");
+assert.match(proofRoute, /loadSessionTrail/, "proof scenes must recover the local trail without blocking the material");
+assert.match(proofRoute, /enabled=\{!reading\s*&&\s*!foldOpen\s*&&\s*!trailOpen\}/, "proof scenes must keep the material touchable while persistence hydrates");
 assert.match(sessionTrail, /SESSION_TRAIL_VERSION = 1/, "session trail storage must be versioned");
 assert.match(sessionTrail, /SESSION_TRAIL_LIMIT = 120/, "session trail storage must remain bounded");
 assert.match(sessionTrail, /writeQueue/, "session trail writes must serialize rapid gesture appends");
 
 assert.match(designTokens, /export const PALETTE/, "native design tokens must declare a shared palette");
 assert.match(designTokens, /REDUCED_MOTION_EQUIVALENTS/, "native design tokens must declare reduced-motion equivalents that preserve state");
-assert.match(designSceneStyle, /RELEASE_SCENE_MANIFEST/, "sceneStyle.ts must consume RELEASE_SCENE_MANIFEST rather than restate scene briefs");
+assert.match(designSceneStyle, /NATIVE_SCENE_MANIFEST/, "sceneStyle.ts must consume NATIVE_SCENE_MANIFEST rather than restate scene briefs");
 assert.doesNotMatch(designSceneStyle, /bannedForms:\s*\[/, "sceneStyle.ts must not restate bannedForms — read them from the settled manifest");
 assert.match(nativeChrome, /GuideSheet/, "NativeChrome must host the GuideSheet as its only writing surface");
 assert.doesNotMatch(nativeChrome, /\bTabs\b[\s\S]*from\s*["']expo-router["']/, "NativeChrome must not introduce a permanent tab bar");
@@ -587,7 +603,7 @@ assert.ok(
 );
 assert.match(proofRoute, /revealAfter/, "proof scenes must keep what the visitor has caused, not a frozen placeholder");
 assert.match(proofRoute, /onGuideVisibilityChange/, "intervention pauses while a reading surface is open");
-assert.match(proofRoute, /enabled=\{trailReady\s*&&\s*progressReady\s*&&\s*!reading/, "the surface waits for trail and keeper recovery and closes while any reading surface has focus");
+assert.match(proofRoute, /enabled=\{!reading\s*&&\s*!foldOpen\s*&&\s*!trailOpen\}/, "the surface stays live while recovery hydrates and closes while any reading surface has focus");
 assert.match(proofRoute, /<UniverseActions/, "proof scenes must mount the VoiceOver action surface");
 assert.match(proofRoute, /onAssistiveCommand/, "assistive commands must be forwarded to the native surface");
 

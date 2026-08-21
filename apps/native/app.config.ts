@@ -5,7 +5,10 @@ const config: ExpoConfig = {
   slug: "objet-universe",
   owner: "jawauntb",
   scheme: "objet",
-  version: "0.1.0",
+  // Native Swift/Metal changes require a new binary. App-version runtime
+  // isolation prevents an OTA JS shell from landing on an older simulator.
+  version: "0.2.0",
+  runtimeVersion: { policy: "appVersion" },
   icon: "./assets/icon.png",
   orientation: "default",
   userInterfaceStyle: "dark",
@@ -19,7 +22,7 @@ const config: ExpoConfig = {
   ios: {
     bundleIdentifier: "com.objetdart.universe",
     appleTeamId: "58877MPK38",
-    buildNumber: "1",
+    buildNumber: "2",
     deploymentTarget: "17.0",
     supportsTablet: true,
     requireFullScreen: false,
