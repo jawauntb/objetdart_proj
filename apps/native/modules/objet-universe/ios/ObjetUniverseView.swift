@@ -61,6 +61,10 @@ public final class ObjetUniverseView: ExpoView {
           kernel = CellKernel(seed: ObjetUniverseView.launchSeed)
         case .solar:
           kernel = SolarKernel(seed: ObjetUniverseView.launchSeed)
+        case .molecules:
+          kernel = MoleculeKernel(seed: ObjetUniverseView.launchSeed)
+        case .atoms:
+          kernel = AtomKernel(seed: ObjetUniverseView.launchSeed)
         }
         box.kernel = kernel
         return kernel
@@ -230,6 +234,8 @@ public final class ObjetUniverseView: ExpoView {
     case .wave: "A living wave field"
     case .cell: "A living cellular colony"
     case .solar: "A forming solar system"
+    case .molecules: "A living molecular field"
+    case .atoms: "A periodic atomic field"
     }
   }
 }

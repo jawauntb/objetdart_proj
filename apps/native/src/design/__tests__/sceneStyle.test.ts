@@ -18,7 +18,7 @@
 import assert from "node:assert/strict";
 import {
   GENERIC_BANNED_FORMS,
-  RELEASE_SCENE_MANIFEST,
+  NATIVE_SCENE_MANIFEST,
   validateSceneStyle,
 } from "@objet/universe-contracts";
 import {
@@ -33,11 +33,11 @@ import {
 function main(): void {
   assert.equal(
     NATIVE_SCENE_IDS.length,
-    3,
-    "Release 1 must expose exactly three native scene ids",
+    5,
+    "native v2.1 must expose five scene ids",
   );
 
-  for (const scene of RELEASE_SCENE_MANIFEST) {
+  for (const scene of NATIVE_SCENE_MANIFEST) {
     const native = sceneStyle(scene.id);
     assert.deepEqual(
       native,
@@ -111,7 +111,7 @@ function main(): void {
     );
   }
 
-  const expectedIds = RELEASE_SCENE_MANIFEST.map((scene) => scene.id);
+  const expectedIds = NATIVE_SCENE_MANIFEST.map((scene) => scene.id);
   assert.deepEqual(
     NATIVE_SCENE_IDS,
     expectedIds,

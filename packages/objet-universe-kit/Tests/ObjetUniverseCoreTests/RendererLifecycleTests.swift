@@ -12,6 +12,7 @@ final class RendererLifecycleTests: XCTestCase {
       case .wave: source
       case .cell: cell
       case .solar: solar
+      case .molecules, .atoms: ProbeKernel(scene: scene)
       }
     })
 
@@ -45,6 +46,24 @@ final class RendererLifecycleTests: XCTestCase {
     XCTAssertEqual(result, .scheduled)
     XCTAssertEqual(host.lastStableCheckpoint, stable)
     XCTAssertGreaterThanOrEqual(host.telemetry.quarantinedOutputs, 1)
+  }
+
+  func testQueuedCommandIsQuarantinedWhenItsSceneIsReplaced() throws {
+    let source = TraceKernel(scene: .wave)
+    let destination = TraceKernel(scene: .cell)
+    let host = UniverseHost(initial: source, factory: { scene in
+      scene == .cell ? destination : source
+    })
+
+    _ = host.advance(to: 0)
+    XCTAssertEqual(host.apply(.init(id: "before-handoff", verb: .material, at: 0)), .scheduled)
+    XCTAssertTrue(try host.handoff(to: .cell))
+    _ = host.advance(to: 1.0 / 60.0)
+
+    XCTAssertTrue(source.appliedAtTicks.isEmpty)
+    XCTAssertTrue(destination.appliedAtTicks.isEmpty)
+    XCTAssertEqual(host.telemetry.quarantinedOutputs, 1)
+    XCTAssertTrue(host.boundaries.contains(.outputQuarantined))
   }
 
   func testObservabilityRetainsTheExactRecentWindow() {

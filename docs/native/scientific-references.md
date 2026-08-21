@@ -33,6 +33,22 @@ the scientific review record and release evidence.
 | `solar-wisdom-holman-1991` | Wisdom, J. & Holman, M. “Symplectic maps for the n-body problem.” *The Astronomical Journal* 102, 1528–1538 (1991). DOI: [10.1086/115978](https://doi.org/10.1086/115978). | the choice and stated error behavior of a symplectic reduced N-body integrator |
 | `solar-hairer-lubich-wanner-2006` | Hairer, E., Lubich, C. & Wanner, G. *Geometric Numerical Integration*, 2nd ed., Springer (2006). DOI: [10.1007/3-540-30666-8](https://doi.org/10.1007/3-540-30666-8). | long-run energy behavior, timestep limits, and why numerical conservation is tolerance-based |
 
+## molecular chemistry
+
+| source ID | reference | release use |
+| --- | --- | --- |
+| `chemistry-iupac-gold-book` | IUPAC. *Compendium of Chemical Terminology (the Gold Book)*, online 5th ed. | canonical terminology for compounds, bonds, geometry, and reaction language |
+| `chemistry-nist-webbook` | NIST. *Chemistry WebBook*, SRD 69. | reference thermochemical values and infrared/vibrational vocabulary for the curated compound register |
+| `chemistry-alberts-2022` | Alberts, B. et al. *Molecular Biology of the Cell*, 7th ed., W. W. Norton (2022). | molecular structure vocabulary and the declared boundary before biological chemistry |
+
+## atomic structure and fusion
+
+| source ID | reference | release use |
+| --- | --- | --- |
+| `atoms-nist-asd` | NIST. *Atomic Spectra Database*, version 5.12. | measured energy levels, shell transitions, and spectral identity |
+| `atoms-iupac-periodic-table` | IUPAC. *Periodic Table of the Elements*, current standard release. | element identity, atomic number, shell register, and periodic naming |
+| `atoms-cowan-1981` | Cowan, R. D. *The Theory of Atomic Structure and Spectra*. University of California Press (1981). | reduced shell, covalence, and binding-energy approximations; not a claim of a full quantum solver |
+
 ## review practice
 
 A reviewer records the source IDs actually used, model version, reference

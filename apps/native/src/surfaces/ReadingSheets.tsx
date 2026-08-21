@@ -30,7 +30,27 @@ const LENSES_BY_SCENE: Record<NativeSceneId, ReadonlyArray<{
     { id: 2, label: "planet", notation: "Tₑq", note: "a body condenses into a world with terrain and a causal temperature." },
     { id: 3, label: "Earth", notation: "air · sea · life", note: "a derived biosphere lens: atmosphere, ocean, and the possibility of life." },
   ],
+  molecules: [
+    { id: 0, label: "mixture", notation: "Σnᵢ", note: "a bounded field of compounds moving and vibrating together." },
+    { id: 1, label: "structure", notation: "atoms · bonds", note: "one compound opened into its formula, shape, and bond order." },
+    { id: 2, label: "reaction", notation: "reactants → products", note: "a curated balanced reaction or an explicit inert fallback." },
+    { id: 3, label: "vibration", notation: "νₙ", note: "the same compounds heard as a changing molecular rhythm." },
+  ],
+  atoms: [
+    { id: 0, label: "orbit", notation: "n, ℓ", note: "excited shells glow around a bounded atomic identity." },
+    { id: 1, label: "periodic", notation: "Z → shells", note: "the same atoms arranged by atomic number and occupied shells." },
+    { id: 2, label: "bond", notation: "Δχ · order", note: "covalent appetite becomes a visible shared interval." },
+    { id: 3, label: "fusion", notation: "ΔE", note: "supported nuclei combine and expose the binding-energy ledger." },
+  ],
 };
+
+const SCENE_LINKS: ReadonlyArray<{ id: NativeSceneId; label: string; note: string }> = [
+  { id: "wave", label: "wave / surface", note: "ripples, signals, spectra, and felt colour." },
+  { id: "cell", label: "cell / colony", note: "reaction, diffusion, and the first living patterns." },
+  { id: "solar", label: "solar / nursery", note: "gravity, orbits, and a system taking shape." },
+  { id: "molecules", label: "molecules / bonds", note: "formulas, geometry, reactions, and vibration." },
+  { id: "atoms", label: "atoms / shells", note: "excitation, covalent bonds, and fusion energy." },
+];
 
 export function FoldSheet({
   scene = "wave",
@@ -39,9 +59,7 @@ export function FoldSheet({
   onClose,
   unlockedRepresentations,
   nextHint,
-  onOpenCell,
-  onOpenSolar,
-  onOpenWave,
+  onOpenScene,
 }: Readonly<{
   scene?: NativeSceneId;
   representation: SceneLensIndex;
@@ -49,9 +67,7 @@ export function FoldSheet({
   onClose: () => void;
   unlockedRepresentations?: readonly SceneLensIndex[];
   nextHint?: string;
-  onOpenCell?: () => void;
-  onOpenSolar?: () => void;
-  onOpenWave?: () => void;
+  onOpenScene?: (scene: NativeSceneId) => void;
 }>) {
   const representations = LENSES_BY_SCENE[scene];
   return (
@@ -96,56 +112,27 @@ export function FoldSheet({
           {nextHint}
         </Text>
       ) : null}
-      {onOpenCell || onOpenSolar || onOpenWave ? (
+      {onOpenScene ? (
         <View style={styles.sceneLinks}>
           <Text style={styles.sceneHeading} allowFontScaling maxFontSizeMultiplier={2}>
             visit another scale
           </Text>
-          {onOpenCell ? (
+          {SCENE_LINKS.filter((link) => link.id !== scene).map((link) => (
             <Pressable
+              key={link.id}
               accessibilityRole="button"
-              accessibilityLabel="Open the living cell scene"
-              onPress={onOpenCell}
+              accessibilityLabel={`Open the ${link.label} scene`}
+              onPress={() => onOpenScene(link.id)}
               style={({ pressed }) => [styles.option, pressed ? styles.optionPressed : null]}
             >
               <Text style={styles.optionLabel} allowFontScaling maxFontSizeMultiplier={2}>
-                cell / colony
+                {link.label}
               </Text>
               <Text style={styles.optionNote} allowFontScaling maxFontSizeMultiplier={2}>
-                reaction, diffusion, and the first living patterns.
+                {link.note}
               </Text>
             </Pressable>
-          ) : null}
-          {onOpenSolar ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Open the forming solar system scene"
-              onPress={onOpenSolar}
-              style={({ pressed }) => [styles.option, pressed ? styles.optionPressed : null]}
-            >
-              <Text style={styles.optionLabel} allowFontScaling maxFontSizeMultiplier={2}>
-                solar / nursery
-              </Text>
-              <Text style={styles.optionNote} allowFontScaling maxFontSizeMultiplier={2}>
-                gravity, orbits, and a system taking shape.
-              </Text>
-            </Pressable>
-          ) : null}
-          {onOpenWave ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Open the living wave scene"
-              onPress={onOpenWave}
-              style={({ pressed }) => [styles.option, pressed ? styles.optionPressed : null]}
-            >
-              <Text style={styles.optionLabel} allowFontScaling maxFontSizeMultiplier={2}>
-                wave / surface
-              </Text>
-              <Text style={styles.optionNote} allowFontScaling maxFontSizeMultiplier={2}>
-                ripples, signals, spectra, and felt colour.
-              </Text>
-            </Pressable>
-          ) : null}
+          ))}
         </View>
       ) : null}
     </ReadingSheet>

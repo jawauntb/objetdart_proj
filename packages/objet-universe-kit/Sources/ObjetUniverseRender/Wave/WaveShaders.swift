@@ -99,6 +99,69 @@ public enum WaveShaderSource {
     }
 
     if (uniforms.materialKind > 1.5) {
+      if (uniforms.materialKind > 2.5 && uniforms.materialKind < 3.5) {
+        if (uniforms.representation < 0.5) {
+          float shell = smoothstep(0.02, 0.42, amplitude);
+          float orbit = 0.5 + 0.5 * sin(length((in.uv - 0.5) * 2.0) * 34.0 - uniforms.elapsed * 1.2);
+          float3 atom = mix(kNightDeep, float3(0.18, 0.08, 0.28), shell * 0.75);
+          atom += float3(0.36, 0.20, 0.82) * shell * orbit * 0.7;
+          atom += kSeaGlimmer * smoothstep(0.55, 1.0, amplitude) * 0.4;
+          return float4(atom, 1.0);
+        }
+        if (uniforms.representation < 1.5) {
+          float grid = step(0.88, fract(in.uv.x * 7.0)) + step(0.88, fract(in.uv.y * 6.0));
+          float periodic = smoothstep(0.08, 0.55, amplitude);
+          float3 table = mix(kNightDeep, float3(0.27, 0.10, 0.18), periodic * 0.65);
+          table += kEmberWarm * grid * 0.35;
+          table += kSeaGlimmer * smoothstep(0.65, 1.0, amplitude) * 0.28;
+          return float4(table, 1.0);
+        }
+        if (uniforms.representation < 2.5) {
+          float bond = smoothstep(0.18, 0.62, amplitude);
+          float strand = 0.5 + 0.5 * sin(in.uv.x * 46.0 + uniforms.elapsed * 0.8);
+          float3 shared = mix(kNightDeep, float3(0.12, 0.32, 0.38), bond);
+          shared += kSeaGlimmer * bond * strand * 0.55;
+          shared += kEmberWarm * smoothstep(0.72, 1.0, amplitude) * 0.3;
+          return float4(shared, 1.0);
+        }
+        float flash = smoothstep(0.18, 0.9, amplitude);
+        float radial = 1.0 - smoothstep(0.0, 0.7, length((in.uv - 0.5) * 2.0));
+        float3 fusion = mix(kNightDeep, float3(0.30, 0.05, 0.08), flash);
+        fusion += kEmberWarm * flash * radial;
+        fusion += kSeaGlimmer * smoothstep(0.78, 1.0, amplitude) * 0.35;
+        return float4(fusion, 1.0);
+      }
+
+      if (uniforms.materialKind > 3.5) {
+        if (uniforms.representation < 0.5) {
+          float mixture = smoothstep(0.02, 0.48, amplitude);
+          float drift = 0.5 + 0.5 * sin(in.uv.x * 9.0 + in.uv.y * 7.0 + uniforms.elapsed * 0.32);
+          float3 field = mix(kNightDeep, float3(0.06, 0.27, 0.30), mixture);
+          field += kSeaGlimmer * mixture * drift * 0.35;
+          return float4(field, 1.0);
+        }
+        if (uniforms.representation < 1.5) {
+          float scaffold = smoothstep(0.16, 0.55, amplitude);
+          float bond = 1.0 - smoothstep(0.0, 0.06, abs(sin(in.uv.x * 16.0) - sin(in.uv.y * 13.0)));
+          float3 structure = mix(kNightDeep, float3(0.08, 0.34, 0.42), scaffold);
+          structure += kEmberWarm * bond * scaffold * 0.65;
+          return float4(structure, 1.0);
+        }
+        if (uniforms.representation < 2.5) {
+          float reaction = smoothstep(0.12, 0.82, amplitude);
+          float pulse = 0.5 + 0.5 * sin(uniforms.elapsed * 2.0);
+          float3 reactionColour = mix(kNightDeep, float3(0.32, 0.10, 0.06), reaction);
+          reactionColour += kEmberWarm * reaction * pulse * 0.7;
+          reactionColour += kSeaGlimmer * smoothstep(0.72, 1.0, amplitude) * 0.2;
+          return float4(reactionColour, 1.0);
+        }
+        float vibration = 0.5 + 0.5 * sin(in.uv.y * 32.0 + uniforms.elapsed * 2.4);
+        float3 vibrational = mix(kNightDeep, float3(0.12, 0.24, 0.40), smoothstep(0.1, 0.6, amplitude));
+        vibrational += kSeaGlimmer * vibration * smoothstep(0.24, 0.9, amplitude) * 0.5;
+        vibrational += kEmberWarm * smoothstep(0.78, 1.0, amplitude) * 0.25;
+        return float4(vibrational, 1.0);
+      }
+
       if (uniforms.representation < 0.5) {
         float density = smoothstep(0.01, 0.35, amplitude);
         float3 galaxy = mix(kNightDeep, float3(0.08, 0.06, 0.20), density * 0.8);

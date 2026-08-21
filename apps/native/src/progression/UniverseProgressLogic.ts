@@ -1,7 +1,7 @@
-import { RELEASE_ONE_SCENE_IDS, type NativeSceneId } from "@objet/universe-contracts";
+import type { NativeSceneId } from "@objet/universe-contracts";
 import type { SurfaceCommand } from "../../modules/objet-universe";
 
-export const UNIVERSE_PROGRESS_VERSION = 1 as const;
+export const UNIVERSE_PROGRESS_VERSION = 2 as const;
 export type LensIndex = 0 | 1 | 2 | 3;
 
 export type SceneProgress = Readonly<{
@@ -15,6 +15,8 @@ export type UniverseProgress = Readonly<{
   wave: SceneProgress;
   cell: SceneProgress;
   solar: SceneProgress;
+  molecules: SceneProgress;
+  atoms: SceneProgress;
 }>;
 
 const EMPTY_SCENE: SceneProgress = Object.freeze({ answeredActs: 0, growthActs: 0, ceremonies: 0 });
@@ -27,6 +29,8 @@ export const EMPTY_UNIVERSE_PROGRESS: UniverseProgress = Object.freeze({
   wave: EMPTY_SCENE,
   cell: EMPTY_SCENE,
   solar: EMPTY_SCENE,
+  molecules: EMPTY_SCENE,
+  atoms: EMPTY_SCENE,
 });
 
 function finiteCount(value: unknown): number {
@@ -43,19 +47,20 @@ function sceneProgress(value: unknown): SceneProgress {
   });
 }
 
-function validProgress(value: unknown): value is UniverseProgress {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<UniverseProgress>;
-  return candidate.version === UNIVERSE_PROGRESS_VERSION && RELEASE_ONE_SCENE_IDS.every((scene) => scene in candidate);
-}
-
 export function normalizeUniverseProgress(value: unknown): UniverseProgress {
-  if (!validProgress(value)) return EMPTY_UNIVERSE_PROGRESS;
+  if (!value || typeof value !== "object") return EMPTY_UNIVERSE_PROGRESS;
+  const version = (value as { version?: unknown }).version;
+  // v1 files are intentionally upgraded in place: existing keeper history is
+  // valuable, while the new chemistry scenes begin at their safe initial lens.
+  if (version !== 1 && version !== UNIVERSE_PROGRESS_VERSION) return EMPTY_UNIVERSE_PROGRESS;
+  const source = value as Partial<UniverseProgress>;
   return Object.freeze({
     version: UNIVERSE_PROGRESS_VERSION,
-    wave: sceneProgress(value.wave),
-    cell: sceneProgress(value.cell),
-    solar: sceneProgress(value.solar),
+    wave: sceneProgress(source.wave),
+    cell: sceneProgress(source.cell),
+    solar: sceneProgress(source.solar),
+    molecules: sceneProgress(source.molecules),
+    atoms: sceneProgress(source.atoms),
   });
 }
 

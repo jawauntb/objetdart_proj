@@ -15,7 +15,11 @@ public final class UniverseHost {
   private let factory: KernelFactory
   private var activeKernel: SimulationKernel
   private var clock = UniverseClock()
-  private var pendingCommands: [Int: SemanticCommand] = [:]
+  private struct PendingCommand {
+    let scene: SceneID
+    let command: SemanticCommand
+  }
+  private var pendingCommands: [Int: PendingCommand] = [:]
   private var suspended = false
   private var retired = false
 
@@ -43,7 +47,7 @@ public final class UniverseHost {
     guard !retired, let ordinal = clock.enqueue(actionAt: command.at) else { return .rejected }
     record(.previewed)
     record(.durablyAppended)
-    pendingCommands[ordinal] = command
+    pendingCommands[ordinal] = PendingCommand(scene: activeScene, command: command)
     return .scheduled
   }
 
@@ -55,12 +59,17 @@ public final class UniverseHost {
     guard !retired else { return frame }
     for step in frame.steps {
       for ordinal in step.actionOrdinals {
-        guard let command = pendingCommands.removeValue(forKey: ordinal) else {
+        guard let pending = pendingCommands.removeValue(forKey: ordinal) else {
           telemetry.quarantinedOutputs += 1
           record(.outputQuarantined)
           continue
         }
-        _ = promote(activeKernel.apply(command))
+        guard pending.scene == activeScene else {
+          telemetry.quarantinedOutputs += 1
+          record(.outputQuarantined)
+          continue
+        }
+        _ = promote(activeKernel.apply(pending.command))
       }
       _ = promote(activeKernel.advance(ticks: 1))
     }

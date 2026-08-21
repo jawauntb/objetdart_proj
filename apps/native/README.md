@@ -3,6 +3,13 @@
 This is the iPhone and iPad development-build shell for the persistent universe.
 It is not an Expo Go surface and it is not a WebView wrapper.
 
+Expo is the shell, not the simulator: routes, chrome, accessibility, and local
+progression run in JavaScript, while the clock, kernels, gesture bridge, haptic
+and audio buses, and Metal material run in the native binary. Any Swift/Metal
+change requires a new TestFlight/EAS binary; an Expo OTA update cannot replace
+those files. `runtimeVersion: appVersion` keeps an OTA bundle from crossing
+that boundary, and this chemistry release is `0.2.0` / iOS build `2`.
+
 ## Run
 
 Use Node 22.13.x, then install from the repository root:

@@ -34,6 +34,8 @@ const SCENE_LABEL: Record<NativeSceneId, string> = {
   wave: "wave field",
   cell: "cell colony",
   solar: "solar nursery",
+  molecules: "molecular field",
+  atoms: "atomic field",
 };
 
 /**
@@ -50,9 +52,7 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
   const [trailOpen, setTrailOpen] = useState(false);
   const [representation, setRepresentation] = useState<SceneLensIndex>(0);
   const [trail, setTrail] = useState<readonly TrailEntry[]>([]);
-  const [trailReady, setTrailReady] = useState(false);
   const [progress, setProgress] = useState<UniverseProgress>(EMPTY_UNIVERSE_PROGRESS);
-  const [progressReady, setProgressReady] = useState(false);
   const progressRef = useRef(progress);
   const trailSequence = useRef(0);
   const [assistiveCommand, setAssistiveCommand] = useState<{
@@ -70,10 +70,8 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
       if (!mounted) return;
       trailSequence.current = entries.length;
       setTrail(entries);
-      setTrailReady(true);
       setProgress(savedProgress);
       progressRef.current = savedProgress;
-      setProgressReady(true);
     });
     return () => {
       mounted = false;
@@ -130,7 +128,10 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
       >
         <ObjetUniverseSurface
           style={StyleSheet.absoluteFill}
-          enabled={trailReady && progressReady && !reading && !foldOpen && !trailOpen}
+          // Persistence hydrates beside the material; it must never gate the
+          // first touch. The native kernel is deterministic from launch and
+          // the trail/progression files are convenience state, not authority.
+          enabled={!reading && !foldOpen && !trailOpen}
           representation={representation}
           maxRepresentation={unlockedRepresentations[unlockedRepresentations.length - 1]}
           assistiveVerb={assistiveCommand?.verb}
@@ -162,9 +163,7 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
           unlockedRepresentations={unlockedRepresentations}
           nextHint={nextLensHint(progress, scene)}
           onClose={closeReadings}
-          onOpenWave={scene === "wave" ? undefined : () => openScene("wave")}
-          onOpenCell={scene === "cell" ? undefined : () => openScene("cell")}
-          onOpenSolar={scene === "solar" ? undefined : () => openScene("solar")}
+          onOpenScene={openScene}
         />
       ) : null}
       {trailOpen ? <TrailSheet scene={SCENE_LABEL[scene]} events={trail} onClose={closeReadings} /> : null}
