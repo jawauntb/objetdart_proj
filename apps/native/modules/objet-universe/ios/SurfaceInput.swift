@@ -6,11 +6,12 @@ import UIKit
 /// layer itself: a press interrupted by a teardown would keep the run loop
 /// awake, deepening a hold nobody is making. Same shape as
 /// `ObjetUniverseView.DisplayLinkTarget`, and the same reason.
+@MainActor
 private final class HoldLinkTarget: NSObject {
   weak var input: SurfaceInput?
 
   @objc func tick(_ link: CADisplayLink) {
-    MainActor.assumeIsolated { input?.deepenHold(at: link.timestamp) }
+    input?.deepenHold(at: link.timestamp)
   }
 }
 
