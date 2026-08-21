@@ -46,7 +46,8 @@ public final class CellKernel: SurfaceSimulationKernel {
   }
 
   public func setRepresentation(_ rawValue: Int) {
-    representation = min(max(rawValue, 0), 3)
+    selectRepresentation(rawValue)
+    projectSurface()
   }
 
   public func prepare() {}
@@ -77,12 +78,13 @@ public final class CellKernel: SurfaceSimulationKernel {
       inject(atX: 0.75, y: 0.25, amount: Float(0.25 + 0.3 * intensity))
       inject(atX: 0.5, y: 0.75, amount: Float(0.25 + 0.3 * intensity))
     case .stepBack:
-      setRepresentation(representation - 1)
+      selectRepresentation(representation - 1)
     case .lens:
-      setRepresentation((representation + 1) % 4)
+      selectRepresentation((representation + 1) % 4)
     case .train, .scale, .season, .pan, .weather, .timeDilation, .gravity, .night, .breath:
       break
     }
+    projectSurface()
     return output()
   }
 
@@ -112,7 +114,7 @@ public final class CellKernel: SurfaceSimulationKernel {
         let valueB = min(1, max(0, b[i] + (diffusionB * lapB + reaction - (kill + feed) * b[i]) * 0.75))
         nextA[i] = valueA
         nextB[i] = valueB
-        surface[i] = valueB
+        if representation == 0 { surface[i] = valueB }
         total += Double(valueB)
       }
     }
@@ -121,6 +123,7 @@ public final class CellKernel: SurfaceSimulationKernel {
     elapsedSeconds += secondsPerTick
     tick += 1
     energy = total / Double(width * height)
+    if representation != 0 { projectSurface() }
   }
 
   private func inject(atX x: Double, y: Double, amount: Float) {
@@ -139,15 +142,62 @@ public final class CellKernel: SurfaceSimulationKernel {
     }
   }
 
+  private func selectRepresentation(_ rawValue: Int) {
+    representation = min(max(rawValue, 0), 3)
+  }
+
   private func seedColony() {
     var random = SplitMix64(seed: seed &+ 0xC011_EC7A_2026)
     for _ in 0 ..< 8 {
       inject(atX: 0.15 + random.nextUnitDouble() * 0.7, y: 0.15 + random.nextUnitDouble() * 0.7, amount: 0.45)
     }
-    surface = b
+    projectSurface()
+  }
+
+  /// The colony remains the authority. These three additional readings are
+  /// material projections for learning: no second genome or molecular solver
+  /// is smuggled in behind the lens.
+  private func projectSurface() {
+    surface.withUnsafeMutableBufferPointer { output in
+      switch representation {
+      case 0:
+        for index in output.indices { output[index] = b[index] }
+      case 1:
+        for index in output.indices {
+          output[index] = min(1, abs(b[index] - a[index]) * 1.35 + b[index] * 0.22)
+        }
+      case 2:
+        for y in 0 ..< height {
+          let ny = Float(y) / Float(max(1, height - 1))
+          let phase = ny * Float.pi * 10 + Float(elapsedSeconds * 0.55)
+          let offset = 0.18 * sin(phase)
+          for x in 0 ..< width {
+            let nx = Float(x) / Float(max(1, width - 1))
+            let strandA = max(0, 1 - abs(nx - (0.5 + offset)) * 34)
+            let strandB = max(0, 1 - abs(nx - (0.5 - offset)) * 34)
+            let rung = max(0, 1 - abs(nx - 0.5) * 22) * (0.25 + 0.75 * abs(sin(phase)))
+            let expression = b[y * width + x] * 0.35
+            output[y * width + x] = min(1, expression + max(strandA, strandB) * 0.72 + rung * 0.22)
+          }
+        }
+      case 3:
+        for y in 0 ..< height {
+          let ny = Float(y) / Float(max(1, height - 1))
+          for x in 0 ..< width {
+            let nx = Float(x) / Float(max(1, width - 1))
+            let fold = abs(sin(nx * 11 + ny * 7 + Float(elapsedSeconds * 0.18)))
+            let pocket = max(0, 1 - abs(fold - 0.62) * 5)
+            let local = b[y * width + x]
+            output[y * width + x] = min(1, local * 0.42 + pocket * 0.58)
+          }
+        }
+      default:
+        break
+      }
+    }
   }
 
   private func output() -> KernelOutput {
-    .init(stable: energy.isFinite, checkpoint: .init(scene: scene, tick: tick, digest: "cell-v1-\(tick)-\(energy.bitPattern)"))
+    .init(stable: energy.isFinite, checkpoint: .init(scene: scene, tick: tick, digest: "cell-v2-\(tick)-\(representation)-\(energy.bitPattern)"))
   }
 }

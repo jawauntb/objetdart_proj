@@ -59,6 +59,10 @@ public final class ObjetUniverseSurfaceView: ExpoView {
     UniverseRuntime.shared.setRepresentation(value)
   }
 
+  public func setMaxRepresentation(_ value: Int) {
+    UniverseRuntime.shared.setMaximumRepresentation(value)
+  }
+
   public func setAssistiveVerb(_ value: String?) {
     assistiveVerb = value
   }

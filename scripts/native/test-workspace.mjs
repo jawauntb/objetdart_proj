@@ -213,6 +213,8 @@ assert.match(cellKernel, /SurfaceSimulationKernel/, "the cell lane must provide 
 assert.match(cellKernel, /reaction.diffusion|Gray.Scott/i, "the cell lane must be governed by a reaction-diffusion law");
 assert.match(solarKernel, /SurfaceSimulationKernel/, "the solar lane must provide a shared scalar surface");
 assert.match(solarKernel, /symplectic|integrat/i, "the solar lane must advance bodies with a bounded integrator");
+assert.match(solarKernel, /maximumBodyCount = 48/, "the solar lane must bound ceremony-created bodies");
+assert.match(solarKernel, /maximumCentralMass = 4\.0/, "the solar lane must bound central growth");
 assert.match(waveRenderer, /MTLRenderPipelineState/, "the wave material must reach the screen through a Metal pipeline");
 assert.match(waveRenderer, /representation/, "the renderer must receive the selected wave representation");
 assert.match(waveRenderer, /materialKind/, "the renderer must receive the active material family");
@@ -234,12 +236,25 @@ const nativeLayout = readText("apps/native/app/_layout.tsx");
 const cellRoute = readText("apps/native/app/cell.tsx");
 const solarRoute = readText("apps/native/app/solar.tsx");
 const proofRoute = readText("apps/native/src/scenes/ProofSceneRoute.tsx");
+const progression = readText("apps/native/src/progression/UniverseProgress.ts");
+const progressionLogic = readText("apps/native/src/progression/UniverseProgressLogic.ts");
+const readingSheets = readText("apps/native/src/surfaces/ReadingSheets.tsx");
 assert.match(nativeLayout, /<ObjetUniverseView/, "the native universe host must mount behind route overlays");
 assert.match(nativeLayout, /useSegments/, "the persistent host must follow the active native scene route");
 assert.match(cellRoute, /ProofSceneRoute/, "cell must be a real route over the persistent native host");
 assert.match(solarRoute, /ProofSceneRoute/, "solar must be a real route over the persistent native host");
 assert.match(proofRoute, /ObjetUniverseSurface/, "every proof scene must expose the same native touch surface");
 assert.match(proofRoute, /appendSessionTrail/, "every proof scene must keep the trail affordance honest");
+assert.match(proofRoute, /loadUniverseProgress/, "every proof scene must restore keeper progression before accepting input");
+assert.match(proofRoute, /unlockedLenses/, "every proof scene must gate new agency on caused phenomena");
+assert.match(progressionLogic, /UNIVERSE_PROGRESS_VERSION = 1/, "keeper progression must be versioned");
+assert.match(progression, /writeQueue/, "keeper progression writes must serialize rapid commands");
+assert.match(progressionLogic, /unlockedLenses/, "keeper progression must expose deterministic lens unlocks");
+assert.match(readingSheets, /galaxy/, "the fold must name the cosmic galaxy register");
+assert.match(readingSheets, /star/, "the fold must name the stellar register");
+assert.match(readingSheets, /Earth/, "the fold must name the Earth register");
+assert.match(readingSheets, /genome/, "the fold must name the genome register");
+assert.match(readingSheets, /protein/, "the fold must name the protein register");
 assert.ok(
   nativeLayout.indexOf("<ObjetUniverseView") < nativeLayout.indexOf("<Stack"),
   "route overlays must mount above the persistent native universe host",
@@ -392,6 +407,7 @@ assert.equal(nativeGuideVerbs.length, webGlobalVerbs.length, "native guide must 
 // Both U7 test files must remain runnable under node --experimental-strip-types.
 execFileSync("node", ["--experimental-strip-types", "apps/native/src/design/__tests__/sceneStyle.test.ts"], { cwd: root, stdio: "inherit" });
 execFileSync("node", ["--experimental-strip-types", "apps/native/src/guide/__tests__/guideData.test.ts"], { cwd: root, stdio: "inherit" });
+execFileSync("node", ["--experimental-strip-types", "--test", "apps/native/src/progression/__tests__/UniverseProgress.test.ts"], { cwd: root, stdio: "inherit" });
 
 function extractStringArrayLiteral(source, identifier) {
   const marker = `export const ${identifier}`;
@@ -547,6 +563,8 @@ assert.match(universeRuntime, /AudioBus\.shared\.schedule/, "state must land in 
 assert.match(universeRuntime, /vessel\.subscribe/, "tilt, shake, knock and flip must reach the same grammar as touch");
 assert.match(universeRuntime, /vessel\.request/, "the vessel is invited from inside a real gesture, never demanded on launch");
 assert.match(universeRuntime, /vesselRouter\.route\(shape:/, "the vessel must speak through the router like every other source");
+assert.match(universeSurfaceBridge, /maxRepresentation/, "the touch surface must receive the keeper lens ceiling");
+assert.match(universeRuntime, /canApplyRepresentation/, "native gesture commits must enforce the keeper lens ceiling");
 
 assert.ok(
   universeModuleDefinition.indexOf("View(ObjetUniverseView.self)") <
@@ -569,7 +587,7 @@ assert.ok(
 );
 assert.match(proofRoute, /revealAfter/, "proof scenes must keep what the visitor has caused, not a frozen placeholder");
 assert.match(proofRoute, /onGuideVisibilityChange/, "intervention pauses while a reading surface is open");
-assert.match(proofRoute, /enabled=\{trailReady\s*&&\s*!reading/, "the surface waits for trail recovery and closes while any reading surface has focus");
+assert.match(proofRoute, /enabled=\{trailReady\s*&&\s*progressReady\s*&&\s*!reading/, "the surface waits for trail and keeper recovery and closes while any reading surface has focus");
 assert.match(proofRoute, /<UniverseActions/, "proof scenes must mount the VoiceOver action surface");
 assert.match(proofRoute, /onAssistiveCommand/, "assistive commands must be forwarded to the native surface");
 

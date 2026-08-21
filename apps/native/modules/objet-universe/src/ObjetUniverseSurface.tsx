@@ -31,8 +31,10 @@ export type ObjetUniverseSurfaceProps = {
    * sheet opening would keep charging the water behind it.
    */
   enabled?: boolean;
-  /** Current wave lens detent: surface, equation, spectrum, or felt. */
+  /** Current scene lens detent; the route supplies the scene's vocabulary. */
   representation?: 0 | 1 | 2 | 3;
+  /** Highest keeper-unlocked lens detent; native gestures cannot skip locks. */
+  maxRepresentation?: 0 | 1 | 2 | 3;
   /** A VoiceOver/keyboard semantic command assembled by the shared action layer. */
   assistiveVerb?: SemanticVerb;
   assistiveCommandId?: string;

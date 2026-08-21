@@ -10,14 +10,25 @@ import { EMPTY_REVEAL, revealAfter, type SceneReveal } from "../guide/reveal";
 import {
   FoldSheet,
   TrailSheet,
-  type WaveRepresentation,
+  type SceneLensIndex,
 } from "../surfaces/ReadingSheets";
 import {
   appendSessionTrail,
   loadSessionTrail,
   makeTrailEntry,
+  SESSION_TRAIL_LIMIT,
   type TrailEntry,
 } from "../persistence/SessionTrail";
+import {
+  EMPTY_UNIVERSE_PROGRESS,
+  cycleLens,
+  loadUniverseProgress,
+  nextLensHint,
+  recordProgress,
+  saveUniverseProgress,
+  unlockedLenses,
+  type UniverseProgress,
+} from "../progression/UniverseProgress";
 
 const SCENE_LABEL: Record<NativeSceneId, string> = {
   wave: "wave field",
@@ -37,9 +48,12 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
   const [reading, setReading] = useState(false);
   const [foldOpen, setFoldOpen] = useState(false);
   const [trailOpen, setTrailOpen] = useState(false);
-  const [representation, setRepresentation] = useState<WaveRepresentation>(0);
+  const [representation, setRepresentation] = useState<SceneLensIndex>(0);
   const [trail, setTrail] = useState<readonly TrailEntry[]>([]);
   const [trailReady, setTrailReady] = useState(false);
+  const [progress, setProgress] = useState<UniverseProgress>(EMPTY_UNIVERSE_PROGRESS);
+  const [progressReady, setProgressReady] = useState(false);
+  const progressRef = useRef(progress);
   const trailSequence = useRef(0);
   const [assistiveCommand, setAssistiveCommand] = useState<{
     id: string;
@@ -48,14 +62,18 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
     originX: number;
     originY: number;
   } | null>(null);
+  const unlockedRepresentations = unlockedLenses(progress, scene);
 
   useEffect(() => {
     let mounted = true;
-    void loadSessionTrail().then((entries) => {
+    void Promise.all([loadSessionTrail(), loadUniverseProgress()]).then(([entries, savedProgress]) => {
       if (!mounted) return;
       trailSequence.current = entries.length;
       setTrail(entries);
       setTrailReady(true);
+      setProgress(savedProgress);
+      progressRef.current = savedProgress;
+      setProgressReady(true);
     });
     return () => {
       mounted = false;
@@ -78,14 +96,20 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
     setReveal((current) => revealAfter(current, command));
     const entry = makeTrailEntry(command, trailSequence.current + 1);
     trailSequence.current += 1;
-    setTrail((current) => [...current, entry].slice(-120));
+    setTrail((current) => [...current, entry].slice(-SESSION_TRAIL_LIMIT));
     void appendSessionTrail(entry);
-    if (command.semanticVerb === "lens") {
-      setRepresentation((current) => (current === 3 ? 0 : ((current + 1) as WaveRepresentation)));
-    } else if (command.semanticVerb === "step-back") {
-      setRepresentation((current) => (current === 0 ? 0 : ((current - 1) as WaveRepresentation)));
+    const nextProgress = recordProgress(progressRef.current, scene, command);
+    if (nextProgress !== progressRef.current) {
+      progressRef.current = nextProgress;
+      setProgress(nextProgress);
+      void saveUniverseProgress(nextProgress);
     }
-  }, []);
+    if (command.answered && command.semanticVerb === "lens") {
+      setRepresentation((current) => cycleLens(nextProgress, scene, current, 1));
+    } else if (command.answered && command.semanticVerb === "step-back") {
+      setRepresentation((current) => cycleLens(nextProgress, scene, current, -1));
+    }
+  }, [scene]);
 
   const closeReadings = useCallback(() => {
     setFoldOpen(false);
@@ -106,8 +130,9 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
       >
         <ObjetUniverseSurface
           style={StyleSheet.absoluteFill}
-          enabled={trailReady && !reading && !foldOpen && !trailOpen}
+          enabled={trailReady && progressReady && !reading && !foldOpen && !trailOpen}
           representation={representation}
+          maxRepresentation={unlockedRepresentations[unlockedRepresentations.length - 1]}
           assistiveVerb={assistiveCommand?.verb}
           assistiveIntensity={assistiveCommand?.intensity}
           assistiveOriginX={assistiveCommand?.originX}
@@ -131,8 +156,11 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
       />
       {foldOpen ? (
         <FoldSheet
+          scene={scene}
           representation={representation}
           onSelect={setRepresentation}
+          unlockedRepresentations={unlockedRepresentations}
+          nextHint={nextLensHint(progress, scene)}
           onClose={closeReadings}
           onOpenWave={scene === "wave" ? undefined : () => openScene("wave")}
           onOpenCell={scene === "cell" ? undefined : () => openScene("cell")}
