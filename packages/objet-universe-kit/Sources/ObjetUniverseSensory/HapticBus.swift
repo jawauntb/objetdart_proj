@@ -262,14 +262,16 @@ public final class HapticBus: @unchecked Sendable {
 
   private func playRestrainedFallback(_ feedback: SensoryFallbackFeedback) {
     #if canImport(UIKit)
-    let generator = UINotificationFeedbackGenerator()
-    generator.prepare()
-    let style: UINotificationFeedbackGenerator.FeedbackType
-    switch feedback {
-    case .success: style = .success
-    case .warning: style = .warning
+    _ = Task { @MainActor in
+      let generator = UINotificationFeedbackGenerator()
+      generator.prepare()
+      let style: UINotificationFeedbackGenerator.FeedbackType
+      switch feedback {
+      case .success: style = .success
+      case .warning: style = .warning
+      }
+      generator.notificationOccurred(style)
     }
-    generator.notificationOccurred(style)
     #endif
   }
   #endif

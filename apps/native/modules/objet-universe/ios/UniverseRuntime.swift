@@ -40,7 +40,9 @@ final class UniverseRuntime {
   private var vesselDetach: (() -> Void)?
   private lazy var vesselRouter = GestureRouter(
     onCommand: { [weak self] routed in
-      MainActor.assumeIsolated { self?.commit(routed, origin: nil) }
+      MainActor.assumeIsolated {
+        _ = self?.commit(routed, origin: nil)
+      }
     },
     onDiscovery: { _ in }
   )
@@ -151,16 +153,24 @@ final class UniverseRuntime {
     vesselDetach = vessel.subscribe(
       VesselSensors.Listener(
         onShake: { [weak self] intensity in
-          Task { @MainActor in self?.routeVessel(.shake(intensity: intensity)) }
+          _ = Task { @MainActor in
+            self?.routeVessel(NativeGestureShape.shake(intensity: intensity))
+          }
         },
         onKnock: { [weak self] intensity in
-          Task { @MainActor in self?.routeVessel(.knock(intensity: intensity)) }
+          _ = Task { @MainActor in
+            self?.routeVessel(NativeGestureShape.knock(intensity: intensity))
+          }
         },
         onTilt: { [weak self] event in
-          Task { @MainActor in self?.routeVessel(.tilt(beta: event.beta, gamma: event.gamma)) }
+          _ = Task { @MainActor in
+            self?.routeVessel(NativeGestureShape.tilt(beta: event.beta, gamma: event.gamma))
+          }
         },
         onFlip: { [weak self] faceDown in
-          Task { @MainActor in self?.routeVessel(.flip(faceDown: faceDown)) }
+          _ = Task { @MainActor in
+            self?.routeVessel(NativeGestureShape.flip(faceDown: faceDown))
+          }
         }
       )
     )
@@ -169,7 +179,9 @@ final class UniverseRuntime {
   /// The vessel delivers on its own queue; the hop above is why this is
   /// ordinary main-thread code by the time it runs.
   private func routeVessel(_ shape: NativeGestureShape) {
-    vesselRouter.route(shape: shape, source: .vessel, logicalTimeMs: CACurrentMediaTime() * 1_000)
+    vesselRouter.route(shape: shape, source: NativeActionSource.vessel,
+      logicalTimeMs: CACurrentMediaTime() * 1_000
+    )
   }
 
   /// Which shapes reach the hand and the ear at all.
