@@ -16,6 +16,7 @@ export function TrailView({
   activeBranchId = "local-main",
   offline = true,
   onSwitchBranch,
+  onForkBranch,
   onRetireBranch,
   onRestoreBranch,
 }: Readonly<{
@@ -24,6 +25,7 @@ export function TrailView({
   activeBranchId?: string;
   offline?: boolean;
   onSwitchBranch?: (branchId: string) => void;
+  onForkBranch?: (branchId: string) => void;
   onRetireBranch?: (branchId: string) => void;
   onRestoreBranch?: (branchId: string) => void;
 }>) {
@@ -90,6 +92,7 @@ export function TrailView({
                 branch={branch}
                 current={branch.id === activeBranchId}
                 onSwitch={onSwitchBranch}
+                onFork={onForkBranch}
                 onRetire={onRetireBranch}
                 onRestore={onRestoreBranch}
               />

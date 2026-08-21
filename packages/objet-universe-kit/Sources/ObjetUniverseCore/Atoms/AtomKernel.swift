@@ -147,6 +147,7 @@ public final class AtomKernel: SurfaceSimulationKernel {
   public func apply(_ command: SemanticCommand) -> KernelOutput {
     let intensity = min(max(command.intensity, 0), 1)
     let point = command.origin ?? .centre
+    let priorAtomCount = atoms.count
     switch command.verb {
     case .material:
       strikeNearest(x: point.x * 2 - 1, y: point.y * 2 - 1, intensity: intensity)
@@ -167,7 +168,14 @@ public final class AtomKernel: SurfaceSimulationKernel {
     }
     rebuildBonds()
     projectSurface()
-    return output()
+    let historyKind: NaturalHistoryKind? = if command.verb == .grow && atoms.count > priorAtomCount {
+      .birth
+    } else if command.verb == .ceremony && atoms.count < priorAtomCount {
+      .merge
+    } else {
+      nil
+    }
+    return output(historyKind: historyKind)
   }
 
   public func advance(ticks: Int) -> KernelOutput {
@@ -332,7 +340,7 @@ public final class AtomKernel: SurfaceSimulationKernel {
     ScalarFieldPainter.gaussian(x: x, y: y, radius: radius, value: value, width: width, height: height, into: &output)
   }
 
-  private func output() -> KernelOutput {
-    .init(stable: energy.isFinite && fusionEnergy.isFinite, checkpoint: .init(scene: scene, tick: tick, digest: "atoms-v1-\(tick)-\(representation)-\(atoms.count)-\(fusionEnergy.bitPattern)"))
+  private func output(historyKind: NaturalHistoryKind? = nil) -> KernelOutput {
+    .init(stable: energy.isFinite && fusionEnergy.isFinite, checkpoint: .init(scene: scene, tick: tick, digest: "atoms-v1-\(tick)-\(representation)-\(atoms.count)-\(fusionEnergy.bitPattern)"), historyKind: historyKind)
   }
 }

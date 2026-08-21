@@ -1,9 +1,11 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { useEffect, useState } from "react";
 import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { NATIVE_SCENE_IDS, type NativeSceneId } from "@objet/universe-contracts";
 import { PALETTE, SPACING, TYPOGRAPHY } from "../src/design/tokens";
 import { ConceptReveal } from "../src/guide/ConceptReveal";
-import { GUIDE_ENTRIES, REVEAL_STEPS } from "../src/guide/guideData";
+import { GUIDE_ENTRIES, NATIVE_GUIDE_VERBS, REVEAL_STEPS, type GuideVerb } from "../src/guide/guideData";
+import { loadSessionTrailState } from "../src/persistence/SessionTrail";
 import { dismissOverlay } from "../src/trail/navigation";
 
 export default function GuideRoute() {
@@ -12,7 +14,24 @@ export default function GuideRoute() {
   const scene = validScene(params.scene) ? params.scene : "wave";
   const { width } = useWindowDimensions();
   const regular = width >= 768;
-  const reason = params.access === "accessibility" ? "accessibility" : "direct-seeking";
+  const reason = params.access === "accessibility"
+    ? "accessibility"
+    : params.access === "discovery"
+      ? "discovery"
+      : "direct-seeking";
+  const [causedVerbs, setCausedVerbs] = useState<readonly GuideVerb[]>([]);
+
+  useEffect(() => {
+    let mounted = true;
+    void loadSessionTrailState().then((trail) => {
+      if (!mounted) return;
+      const caused = Array.from(new Set(trail.entries
+        .filter((entry) => entry.answered && entry.scene === scene && isGuideVerb(entry.verb))
+        .map((entry) => entry.verb as GuideVerb)));
+      setCausedVerbs(caused);
+    });
+    return () => { mounted = false; };
+  }, [scene]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -60,7 +79,7 @@ export default function GuideRoute() {
                     key={entry.verb}
                     entry={entry}
                     scene={scene}
-                    access={{ reason, causedVerbs: [] }}
+                    access={{ reason, causedVerbs }}
                   />
                 ))}
               </View>
@@ -74,6 +93,10 @@ export default function GuideRoute() {
 
 function validScene(value: string | undefined): value is NativeSceneId {
   return NATIVE_SCENE_IDS.some((scene) => scene === value);
+}
+
+function isGuideVerb(value: string): value is GuideVerb {
+  return NATIVE_GUIDE_VERBS.some((verb) => verb === value);
 }
 
 const styles = StyleSheet.create({

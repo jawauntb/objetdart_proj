@@ -27,6 +27,8 @@ export type TrailEntry = Readonly<ProjectableTrailEntry & {
   scaleId: ReturnType<typeof scaleIdForScene>;
   historyKind: TrailHistoryKind;
   historyAuthority: "interaction" | "domain";
+  logicalTick: number | null;
+  checkpointDigest: string | null;
   branchId: string;
   parentEventId: string | null;
   cause: string;
@@ -97,6 +99,12 @@ function normalizeEntry(value: unknown): TrailEntry | null {
     scaleId: scaleIdForScene(scene),
     historyKind: description.kind,
     historyAuthority: authoritativeKind ? "domain" : "interaction",
+    logicalTick: typeof entry.logicalTick === "number" && Number.isFinite(entry.logicalTick)
+      ? Math.max(0, Math.floor(entry.logicalTick))
+      : null,
+    checkpointDigest: typeof entry.checkpointDigest === "string" && entry.checkpointDigest.length > 0
+      ? entry.checkpointDigest
+      : null,
     branchId: typeof entry.branchId === "string" && entry.branchId.length > 0 ? entry.branchId : "local-main",
     parentEventId:
       typeof entry.parentEventId === "string" || entry.parentEventId === null
@@ -188,7 +196,7 @@ function persistMutation(
     const prior = await readSessionTrailState();
     resolved = mutate(prior);
     const uri = trailUri();
-    if (!uri) return;
+    if (!uri) throw new Error("trail storage unavailable");
     const envelope: TrailEnvelope = {
       version: SESSION_TRAIL_VERSION,
       entries: resolved.entries,
@@ -196,11 +204,10 @@ function persistMutation(
       activeBranchId: resolved.activeBranchId,
     };
     await FileSystem.writeAsStringAsync(uri, JSON.stringify(envelope));
-  }).catch(() => {
-    // Persistence is a return-value feature, never a reason to drop a live
-    // command or surface an unhandled rejection.
   });
-  writeQueue = operation.then(() => undefined);
+  // Keep later writes live after a failed mutation, while returning the
+  // original rejection to the UI that requested this specific change.
+  writeQueue = operation.then(() => undefined, () => undefined);
   return operation.then(() => resolved);
 }
 
@@ -227,6 +234,19 @@ export function restoreSessionBranch(branchId: string): Promise<SessionTrailStat
   return changeBranch({ type: "restore", branchId });
 }
 
+export function forkSessionBranch(parentBranchId: string): Promise<SessionTrailState> {
+  return persistMutation((prior) => {
+    const parent = prior.branches.find((branch) => branch.id === parentBranchId && !branch.retired);
+    if (!parent) return prior;
+    const id = `local-${Date.now()}-${prior.branches.length}`;
+    return Object.freeze({
+      entries: prior.entries,
+      branches: Object.freeze([...prior.branches, Object.freeze({ id, parentId: parent.id, retired: false })]),
+      activeBranchId: id,
+    });
+  });
+}
+
 function changeBranch(action: BranchStateAction): Promise<SessionTrailState> {
   return persistMutation((prior) => Object.freeze({
     entries: prior.entries,
@@ -246,22 +266,25 @@ export function makeTrailEntry(
   }> = {},
 ): TrailEntry {
   const scene = context.scene ?? "wave";
+  const historyKind = command.historyKind ?? context.historyKind;
   const description = describeHistoryEvent({
     scene,
     verb: command.verb,
     semanticVerb: command.semanticVerb,
     answered: command.answered,
-    historyKind: context.historyKind,
+    historyKind,
   });
   return Object.freeze({
     ...command,
     version: SESSION_TRAIL_VERSION,
-    id: `trail-${recordedAt}-${sequence}`,
+    id: command.eventId ?? `trail-${recordedAt}-${sequence}`,
     recordedAt,
     scene,
     scaleId: scaleIdForScene(scene),
     historyKind: description.kind,
-    historyAuthority: context.historyKind ? "domain" : "interaction",
+    historyAuthority: historyKind ? "domain" : "interaction",
+    logicalTick: typeof command.logicalTick === "number" ? command.logicalTick : null,
+    checkpointDigest: command.checkpointDigest ?? null,
     branchId: context.branchId ?? "local-main",
     parentEventId: context.parentEventId ?? null,
     cause: description.cause,

@@ -48,6 +48,24 @@ final class RendererLifecycleTests: XCTestCase {
     XCTAssertGreaterThanOrEqual(host.telemetry.quarantinedOutputs, 1)
   }
 
+  func testCommittedCommandReceiptCarriesOnlyKernelAuthoredHistoryAfterCheckpointPromotion() {
+    let kernel = ProbeKernel(scene: .solar)
+    kernel.historyKind = .birth
+    let host = UniverseHost(initial: kernel, factory: { _ in kernel })
+    _ = host.advance(to: 0)
+    let command = SemanticCommand(id: "star-birth", verb: .ceremony, at: 0)
+
+    XCTAssertEqual(host.apply(command), .scheduled)
+    XCTAssertTrue(host.drainCommittedCommandReceipts().isEmpty, "scheduling is not a committed event")
+    _ = host.advance(to: 1.0 / 120.0)
+
+    let receipts = host.drainCommittedCommandReceipts()
+    XCTAssertEqual(receipts.count, 1)
+    XCTAssertEqual(receipts.first?.command.id, "star-birth")
+    XCTAssertEqual(receipts.first?.historyKind, .birth)
+    XCTAssertTrue(host.drainCommittedCommandReceipts().isEmpty)
+  }
+
   func testQueuedCommandIsQuarantinedWhenItsSceneIsReplaced() throws {
     let source = TraceKernel(scene: .wave)
     let destination = TraceKernel(scene: .cell)
@@ -205,6 +223,7 @@ private final class ProbeKernel: SimulationKernel {
   let scene: SceneID
   var nextOutputIsStable = true
   var outputScene: SceneID?
+  var historyKind: NaturalHistoryKind?
   private(set) var prepareCount = 0
   private(set) var activateCount = 0
   private(set) var freezeCount = 0
@@ -225,7 +244,8 @@ private final class ProbeKernel: SimulationKernel {
   private func output() -> KernelOutput {
     .init(
       stable: nextOutputIsStable,
-      checkpoint: .init(scene: outputScene ?? scene, tick: tick, digest: "\(scene.rawValue)-\(tick)")
+      checkpoint: .init(scene: outputScene ?? scene, tick: tick, digest: "\(scene.rawValue)-\(tick)"),
+      historyKind: historyKind
     )
   }
 }

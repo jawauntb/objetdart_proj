@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 
 const files = new Map<string, string>();
 const uri = "memory://objet-universe-trail-v1.json";
+let failWrites = false;
 
 mock.module("expo-file-system/legacy", () => ({
   documentDirectory: "memory://",
@@ -13,6 +14,7 @@ mock.module("expo-file-system/legacy", () => ({
     return value;
   },
   writeAsStringAsync: async (path: string, value: string) => {
+    if (failWrites) throw new Error("injected write failure");
     files.set(path, value);
   },
 }));
@@ -41,6 +43,7 @@ const command = {
 beforeEach(async () => {
   await trail.loadSessionTrailState();
   files.clear();
+  failWrites = false;
 });
 
 describe("session trail persistence", () => {
@@ -65,6 +68,24 @@ describe("session trail persistence", () => {
     const state = await trail.loadSessionTrailState();
     expect(state.entries[0]?.historyKind).toBe("intervention");
     expect(state.entries[0]?.scientificName).toBe("intervention");
+  });
+
+  test("preserves a native checkpointed history kind as domain authority", async () => {
+    const committed = trail.makeTrailEntry({
+      ...command,
+      eventId: "native-star-birth",
+      scene: "solar",
+      logicalTick: 42,
+      checkpointDigest: "solar-checkpoint-42",
+      historyKind: "birth",
+    }, 1, 10, { scene: "solar" });
+    await trail.appendSessionTrail(committed);
+
+    const saved = (await trail.loadSessionTrailState()).entries[0];
+    expect(saved?.historyKind).toBe("birth");
+    expect(saved?.historyAuthority).toBe("domain");
+    expect(saved?.logicalTick).toBe(42);
+    expect(saved?.checkpointDigest).toBe("solar-checkpoint-42");
   });
 
   test("serializes rapid appends so neither interaction is lost", async () => {
@@ -95,5 +116,26 @@ describe("session trail persistence", () => {
     state = await trail.loadSessionTrailState();
     expect(state.branches.find((branch) => branch.id === "local-main")?.retired).toBe(false);
     expect(JSON.parse(files.get(uri) ?? "{}").activeBranchId).toBe("side");
+  });
+
+  test("creates and inhabits a persisted child branch from the trail", async () => {
+    const forked = await trail.forkSessionBranch("local-main");
+    const child = forked.branches.find((branch) => branch.parentId === "local-main");
+    expect(child).toBeDefined();
+    expect(forked.activeBranchId).toBe(child?.id);
+    expect((await trail.loadSessionTrailState()).activeBranchId).toBe(child?.id);
+  });
+
+  test("rejects failed writes and leaves the last saved state authoritative", async () => {
+    await trail.appendSessionTrail(trail.makeTrailEntry(command, 1, 10));
+    failWrites = true;
+    await expect(trail.forkSessionBranch("local-main")).rejects.toThrow("injected write failure");
+    await expect(trail.appendSessionTrail(trail.makeTrailEntry(command, 2, 11))).rejects.toThrow("injected write failure");
+    failWrites = false;
+
+    const state = await trail.loadSessionTrailState();
+    expect(state.entries.map((entry) => entry.id)).toEqual(["trail-10-1"]);
+    expect(state.branches).toEqual([{ id: "local-main", parentId: null, retired: false }]);
+    expect(state.activeBranchId).toBe("local-main");
   });
 });

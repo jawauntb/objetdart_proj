@@ -31,6 +31,15 @@ final class UniverseRuntime {
   private var committed = 0
   private var representation = 0
   private var maximumRepresentation = 3
+  private struct PendingSurfaceEvent {
+    let grammarVerb: String
+    let semanticVerb: String
+    let layer: String
+    let source: String
+    let intensity: Double
+  }
+  private var pendingSurfaceEvents: [String: PendingSurfaceEvent] = [:]
+  private var eventSink: (([String: Any]) -> Void)?
 
   /// The vessel is the device itself — tilt, shake, knock, flip — and it
   /// belongs here rather than to either view: it outlives the route, it has
@@ -48,6 +57,10 @@ final class UniverseRuntime {
   )
 
   private init() {}
+
+  func setEventSink(_ sink: @escaping ([String: Any]) -> Void) {
+    eventSink = sink
+  }
 
   /// The mounted universe. Attaching a second one replaces the first: the
   /// tree is only ever supposed to hold one, and the newest is the one the
@@ -90,6 +103,13 @@ final class UniverseRuntime {
     let expressed = canApplyRepresentation(verb) && (universe?.expresses(verb) ?? false)
     committed += 1
     if expressed {
+      pendingSurfaceEvents[id] = PendingSurfaceEvent(
+        grammarVerb: Self.grammarVerb(for: verb).rawValue,
+        semanticVerb: verb.rawValue,
+        layer: "accessibility",
+        source: "assistive",
+        intensity: boundedIntensity
+      )
       advanceRepresentation(for: verb)
       universe?.commit(
         SemanticCommand(id: id, verb: verb, at: CACurrentMediaTime(), intensity: boundedIntensity, origin: origin)
@@ -117,6 +137,13 @@ final class UniverseRuntime {
     let id = "\(routed.source.rawValue)-\(routed.verb.rawValue)-\(committed)"
 
     if expressed {
+      pendingSurfaceEvents[id] = PendingSurfaceEvent(
+        grammarVerb: routed.verb.rawValue,
+        semanticVerb: verb.rawValue,
+        layer: routed.layer.rawValue,
+        source: routed.source.rawValue,
+        intensity: intensity
+      )
       advanceRepresentation(for: verb)
       universe?.commit(
         SemanticCommand(id: id, verb: verb, at: CACurrentMediaTime(), intensity: intensity, origin: origin)
@@ -130,6 +157,28 @@ final class UniverseRuntime {
     // asked before it was touched would be asking for nothing.
     if routed.source == .touch { vessel.request { _ in } }
     return expressed
+  }
+
+  /// Publish only commands the host has applied and checkpointed. Gesture
+  /// recognition alone never assigns a scientific history kind.
+  func publish(_ receipts: [CommittedCommandReceipt]) {
+    for receipt in receipts {
+      guard let metadata = pendingSurfaceEvents.removeValue(forKey: receipt.command.id) else { continue }
+      var payload: [String: Any] = [
+        "eventId": receipt.command.id,
+        "verb": metadata.grammarVerb,
+        "semanticVerb": metadata.semanticVerb,
+        "layer": metadata.layer,
+        "source": metadata.source,
+        "intensity": metadata.intensity,
+        "answered": true,
+        "scene": receipt.scene.rawValue,
+        "logicalTick": receipt.checkpoint.tick,
+        "checkpointDigest": receipt.checkpoint.digest,
+      ]
+      if let historyKind = receipt.historyKind { payload["historyKind"] = historyKind.rawValue }
+      eventSink?(payload)
+    }
   }
 
   private func canApplyRepresentation(_ verb: SemanticVerb) -> Bool {

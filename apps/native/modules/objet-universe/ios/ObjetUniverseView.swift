@@ -166,6 +166,10 @@ public final class ObjetUniverseView: ExpoView {
 
   nonisolated fileprivate func advanceFrame(at timestamp: CFTimeInterval) {
     let frame = host.advance(to: timestamp)
+    let receipts = host.drainCommittedCommandReceipts()
+    if !receipts.isEmpty {
+      Task { @MainActor in UniverseRuntime.shared.publish(receipts) }
+    }
     submitActiveSurface()
     renderHost.render(interpolation: frame.interpolation)
     publishAccessibilitySnapshotIfNeeded()

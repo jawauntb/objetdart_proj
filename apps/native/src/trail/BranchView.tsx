@@ -7,12 +7,14 @@ export function BranchView({
   branch,
   current,
   onSwitch,
+  onFork,
   onRetire,
   onRestore,
 }: Readonly<{
   branch: TrailBranchSummary;
   current: boolean;
   onSwitch?: (branchId: string) => void;
+  onFork?: (branchId: string) => void;
   onRetire?: (branchId: string) => void;
   onRestore?: (branchId: string) => void;
 }>) {
@@ -46,9 +48,21 @@ export function BranchView({
           : "the local root of this universe"}
       </Text>
       {current ? (
-        <Text style={styles.notice} allowFontScaling maxFontSizeMultiplier={3}>
-          leave this branch before retiring it.
-        </Text>
+        <>
+          <Text style={styles.notice} allowFontScaling maxFontSizeMultiplier={3}>
+            leave this branch before retiring it.
+          </Text>
+          {onFork ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityHint="Preserves this branch and inhabits a new child branch"
+              onPress={() => onFork(branch.id)}
+              style={styles.action}
+            >
+              <Text style={styles.actionLabel}>fork from here</Text>
+            </Pressable>
+          ) : null}
+        </>
       ) : null}
       {!current && !branch.retired && onSwitch ? (
         <Pressable

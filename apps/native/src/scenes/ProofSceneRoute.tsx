@@ -47,6 +47,7 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
   const [reveal, setReveal] = useState<SceneReveal>(EMPTY_REVEAL);
   const [routeFocused, setRouteFocused] = useState(true);
   const [foldOpen, setFoldOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
   const [representation, setRepresentation] = useState<SceneLensIndex>(0);
   const [progress, setProgress] = useState<UniverseProgress>(EMPTY_UNIVERSE_PROGRESS);
   const progressRef = useRef(progress);
@@ -97,20 +98,25 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
         // The first touch is authoritative for the branch the visitor already
         // inhabited. Persist that choice after the disk read instead of
         // silently moving subsequent gestures to a different saved branch.
-        void switchSessionBranch(activeBranchRef.current);
+        void switchSessionBranch(activeBranchRef.current).catch(() => {
+          activeBranchRef.current = trailState.activeBranchId;
+        });
       } else {
         activeBranchRef.current = trailState.activeBranchId;
       }
       trailHydratedRef.current = true;
       let mergedProgress = savedProgress;
       for (const command of pendingProgressCommandsRef.current) {
-        mergedProgress = recordProgress(mergedProgress, scene, command);
+        mergedProgress = recordProgress(mergedProgress, command.scene ?? scene, command);
       }
       pendingProgressCommandsRef.current = [];
       progressRef.current = mergedProgress;
       if (mergedProgress !== savedProgress) void saveUniverseProgress(mergedProgress);
       if (!mounted) return;
       setProgress(mergedProgress);
+      setReveal((current) => mergedEntries
+        .filter((entry) => entry.scene === scene && entry.answered)
+        .reduce((next, entry) => revealAfter(next, entry), current));
     });
     return () => {
       mounted = false;
@@ -130,35 +136,39 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
 
   const onSemanticCommand = useCallback((event: { nativeEvent: SurfaceCommand }) => {
     const command = event.nativeEvent;
+    const eventScene = command.scene ?? scene;
     if (!trailHydratedRef.current) {
       interactedBeforeTrailHydrationRef.current = true;
-      pendingProgressCommandsRef.current.push(command);
     }
-    setReveal((current) => revealAfter(current, command));
     if (command.answered) {
       const activeBranchId = activeBranchRef.current;
       const parentEvent = trailRef.current.slice().reverse().find((entry) => entry.branchId === activeBranchId);
       const entry = makeTrailEntry(command, trailSequence.current + 1, Date.now(), {
-        scene,
+        scene: eventScene,
         branchId: activeBranchId,
         parentEventId: parentEvent?.id ?? null,
       });
       trailSequence.current += 1;
       trailRef.current = [...trailRef.current, entry].slice(-SESSION_TRAIL_LIMIT);
-      void appendSessionTrail(entry);
-    }
-    const nextProgress = recordProgress(progressRef.current, scene, command);
-    if (nextProgress !== progressRef.current) {
-      progressRef.current = nextProgress;
-      setProgress(nextProgress);
-      // Before hydration, keep the live delta in memory. Persisting it first
-      // would let the subsequent load read that delta and replay it twice.
-      if (trailHydratedRef.current) void saveUniverseProgress(nextProgress);
-    }
-    if (command.answered && command.semanticVerb === "lens") {
-      setRepresentation((current) => cycleLens(nextProgress, scene, current, 1));
-    } else if (command.answered && command.semanticVerb === "step-back") {
-      setRepresentation((current) => cycleLens(nextProgress, scene, current, -1));
+      void appendSessionTrail(entry).then(() => {
+        // The native host has committed the command, but reveal/progression
+        // acknowledges it only after the local history write also succeeds.
+        if (!trailHydratedRef.current) pendingProgressCommandsRef.current.push(command);
+        if (eventScene === scene) setReveal((current) => revealAfter(current, command));
+        const nextProgress = recordProgress(progressRef.current, eventScene, command);
+        if (nextProgress !== progressRef.current) {
+          progressRef.current = nextProgress;
+          setProgress(nextProgress);
+          if (trailHydratedRef.current) void saveUniverseProgress(nextProgress);
+        }
+        if (eventScene === scene && command.semanticVerb === "lens") {
+          setRepresentation((current) => cycleLens(nextProgress, scene, current, 1));
+        } else if (eventScene === scene && command.semanticVerb === "step-back") {
+          setRepresentation((current) => cycleLens(nextProgress, scene, current, -1));
+        }
+      }).catch(() => {
+        trailRef.current = trailRef.current.filter((candidate) => candidate.id !== entry.id);
+      });
     }
   }, [scene]);
 
@@ -183,7 +193,7 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
           // Persistence hydrates beside the material; it must never gate the
           // first touch. The native kernel is deterministic from launch and
           // the trail/progression files are convenience state, not authority.
-          enabled={routeFocused && !foldOpen}
+          enabled={routeFocused && !foldOpen && !guideOpen}
           representation={representation}
           maxRepresentation={unlockedRepresentations[unlockedRepresentations.length - 1]}
           assistiveVerb={assistiveCommand?.verb}
@@ -202,6 +212,7 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
         }}
         onOpenTrail={() => router.push(`/trail?scene=${scene}`)}
         onOpenGuide={(access) => router.push(`/guide?scene=${scene}&access=${access}`)}
+        onGuideVisibilityChange={setGuideOpen}
       />
       {foldOpen ? (
         <FoldSheet

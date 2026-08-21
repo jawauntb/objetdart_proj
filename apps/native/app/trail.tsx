@@ -5,6 +5,7 @@ import { NATIVE_SCENE_IDS, type NativeSceneId } from "@objet/universe-contracts"
 import { PALETTE, SPACING, TYPOGRAPHY } from "../src/design/tokens";
 import {
   loadSessionTrailState,
+  forkSessionBranch,
   restoreSessionBranch,
   retireSessionBranch,
   switchSessionBranch,
@@ -24,6 +25,7 @@ export default function TrailRoute() {
   const params = useLocalSearchParams<{ scene?: string }>();
   const sourceScene = validScene(params.scene) ? params.scene : "wave";
   const [trail, setTrail] = useState<SessionTrailState>(EMPTY_TRAIL_STATE);
+  const [persistenceError, setPersistenceError] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -36,7 +38,10 @@ export default function TrailRoute() {
   }, []);
 
   const updateBranch = (operation: (branchId: string) => Promise<SessionTrailState>, branchId: string) => {
-    void operation(branchId).then(setTrail);
+    setPersistenceError(null);
+    void operation(branchId).then(setTrail).catch(() => {
+      setPersistenceError("that branch change could not be saved. nothing changed.");
+    });
   };
 
   return (
@@ -59,9 +64,15 @@ export default function TrailRoute() {
         activeBranchId={trail.activeBranchId}
         offline
         onSwitchBranch={(branchId) => updateBranch(switchSessionBranch, branchId)}
+        onForkBranch={(branchId) => updateBranch(forkSessionBranch, branchId)}
         onRetireBranch={(branchId) => updateBranch(retireSessionBranch, branchId)}
         onRestoreBranch={(branchId) => updateBranch(restoreSessionBranch, branchId)}
       />
+      {persistenceError ? (
+        <Text accessibilityRole="alert" style={styles.error} allowFontScaling maxFontSizeMultiplier={3}>
+          {persistenceError}
+        </Text>
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -75,4 +86,5 @@ const styles = StyleSheet.create({
   closeRow: { position: "absolute", top: 0, right: 0, zIndex: 2, padding: SPACING.medium },
   close: { minHeight: 44, justifyContent: "center", paddingHorizontal: SPACING.medium },
   closeLabel: { color: PALETTE.sea.glimmer, fontFamily: TYPOGRAPHY.system.family, fontSize: TYPOGRAPHY.system.sizes.body },
+  error: { position: "absolute", left: SPACING.medium, right: SPACING.medium, bottom: SPACING.medium, color: PALETTE.ember.warm, fontFamily: TYPOGRAPHY.system.family, fontSize: TYPOGRAPHY.system.sizes.body },
 });

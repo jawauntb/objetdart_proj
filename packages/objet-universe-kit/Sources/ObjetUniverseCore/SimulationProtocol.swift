@@ -94,10 +94,36 @@ public struct KernelCheckpoint: Equatable, Codable, Sendable {
 public struct KernelOutput: Equatable, Sendable {
   public let stable: Bool
   public let checkpoint: KernelCheckpoint
+  public let historyKind: NaturalHistoryKind?
 
-  public init(stable: Bool, checkpoint: KernelCheckpoint) {
+  public init(stable: Bool, checkpoint: KernelCheckpoint, historyKind: NaturalHistoryKind? = nil) {
     self.stable = stable
     self.checkpoint = checkpoint
+    self.historyKind = historyKind
+  }
+}
+
+public enum NaturalHistoryKind: String, Codable, Sendable {
+  case birth
+  case division
+  case merge
+  case collision
+  case discovery
+  case branch
+  case intervention
+}
+
+public struct CommittedCommandReceipt: Equatable, Sendable {
+  public let scene: SceneID
+  public let command: SemanticCommand
+  public let checkpoint: KernelCheckpoint
+  public let historyKind: NaturalHistoryKind?
+
+  public init(scene: SceneID, command: SemanticCommand, checkpoint: KernelCheckpoint, historyKind: NaturalHistoryKind?) {
+    self.scene = scene
+    self.command = command
+    self.checkpoint = checkpoint
+    self.historyKind = historyKind
   }
 }
 

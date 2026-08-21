@@ -384,7 +384,8 @@ assert.match(proofRoute, /\/guide\?scene=/, "proof scenes must open the dedicate
 assert.match(proofRoute, /representation=\{representation\}/, "proof scenes must pass the selected lens to the native surface");
 assert.match(proofRoute, /loadSessionTrail/, "proof scenes must recover the local trail without blocking the material");
 assert.match(proofRoute, /useFocusEffect/, "dedicated reading routes must pause intervention when the scene loses focus");
-assert.match(proofRoute, /enabled=\{routeFocused\s*&&\s*!foldOpen\}/, "proof scenes must stay touchable while persistence hydrates and pause beneath every reading route");
+assert.match(proofRoute, /enabled=\{routeFocused\s*&&\s*!foldOpen\s*&&\s*!guideOpen\}/, "proof scenes must stay touchable while persistence hydrates and pause beneath every reading route");
+assert.match(proofRoute, /onGuideVisibilityChange=\{setGuideOpen\}/, "inline guide visibility must close the native touch surface");
 assert.match(sessionTrail, /SESSION_TRAIL_VERSION = 2/, "natural-history trail storage must be versioned");
 assert.match(sessionTrail, /SESSION_TRAIL_LIMIT = 120/, "session trail storage must remain bounded");
 assert.match(sessionTrail, /writeQueue/, "session trail writes must serialize rapid gesture appends");
@@ -626,7 +627,7 @@ assert.ok(
 );
 assert.match(proofRoute, /revealAfter/, "proof scenes must keep what the visitor has caused, not a frozen placeholder");
 assert.match(proofRoute, /useFocusEffect/, "intervention pauses while a dedicated reading route has focus");
-assert.match(proofRoute, /enabled=\{routeFocused\s*&&\s*!foldOpen\}/, "the surface stays live while recovery hydrates and closes while any reading surface has focus");
+assert.match(proofRoute, /enabled=\{routeFocused\s*&&\s*!foldOpen\s*&&\s*!guideOpen\}/, "the surface stays live while recovery hydrates and closes while any reading surface has focus");
 assert.match(proofRoute, /<UniverseActions/, "proof scenes must mount the VoiceOver action surface");
 assert.match(proofRoute, /onAssistiveCommand/, "assistive commands must be forwarded to the native surface");
 
