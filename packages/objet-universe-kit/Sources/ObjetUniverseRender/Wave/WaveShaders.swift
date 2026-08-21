@@ -21,6 +21,7 @@ public enum WaveShaderSource {
     float2 fieldSize;
     float elapsed;
     float exposure;
+    float representation;
     float breathSeconds;
     float pad;
   };
@@ -78,6 +79,42 @@ public enum WaveShaderSource {
     // elapsed time so the ground never steps.
     float breath = 0.55 + 0.45 * sin(6.2831853 * uniforms.elapsed / max(uniforms.breathSeconds, 0.001));
 
+    // The same field can be looked at as a line or as a spectrum. These are
+    // projections of the authoritative surface texture, not decorative
+    // overlays: every bar and every trace is sampled from the wave state.
+    if (uniforms.representation > 0.5 && uniforms.representation < 1.5) {
+      float signal = surface.sample(surfaceSampler, float2(fieldUV.x, 0.5)).r * uniforms.exposure;
+      float traceY = 0.5 - signal * 0.24;
+      float trace = 1.0 - smoothstep(0.004, 0.024, abs(in.uv.y - traceY));
+      float3 equation = mix(kNightDeep, kSeaDeep, 0.35 + 0.35 * breath);
+      equation += kSeaGlimmer * trace;
+      equation += kEmberWarm * smoothstep(0.55, 1.0, abs(signal)) * trace;
+      return float4(equation, 1.0);
+    }
+
+    if (uniforms.representation > 1.5 && uniforms.representation < 2.5) {
+      constexpr sampler spectrumSampler(coord::normalized, address::clamp_to_edge, filter::linear);
+      const int sampleCount = 32;
+      const int binCount = 12;
+      int bin = min(binCount - 1, int(in.uv.x * float(binCount)));
+      float realPart = 0.0;
+      float imaginaryPart = 0.0;
+      for (int k = 0; k < sampleCount; k++) {
+        float sampleX = float(k) / float(sampleCount - 1);
+        float value = surface.sample(spectrumSampler, float2(sampleX, 0.5)).r * uniforms.exposure;
+        float angle = 6.2831853 * float(bin * k) / float(sampleCount);
+        realPart += value * cos(angle);
+        imaginaryPart -= value * sin(angle);
+      }
+      float magnitude = sqrt(realPart * realPart + imaginaryPart * imaginaryPart) / float(sampleCount);
+      float barHeight = clamp(magnitude * 0.75, 0.015, 0.62);
+      float barTop = 0.82 - barHeight;
+      float bar = step(barTop, in.uv.y) * step(in.uv.y, 0.82);
+      float3 spectrum = mix(kNightDeep, kSeaDeep, 0.25 + 0.4 * breath);
+      spectrum += mix(kSeaLit, kEmberWarm, float(bin) / float(binCount - 1)) * bar;
+      return float4(spectrum, 1.0);
+    }
+
     float3 colour = mix(kNightDeep, kSeaDeep, 0.55 + 0.45 * breath);
     colour = mix(colour, kSeaLit, smoothstep(-0.35, 0.85, amplitude));
     colour = mix(colour, kSeaGlimmer, smoothstep(0.55, 1.05, amplitude) * 0.7);
@@ -85,6 +122,14 @@ public enum WaveShaderSource {
     // decisive event: constructive interference, and it burns.
     colour += kEmberWarm * smoothstep(0.82, 1.15, abs(amplitude)) * 0.55;
     colour += kSeaGlimmer * specular * (0.18 + 0.30 * breath);
+
+    if (uniforms.representation > 2.5) {
+      // Felt keeps the water's causal shading but gives the visitor a warmer,
+      // slower reading of the same amplitude, matching the web lens's third
+      // station without inventing another physical state.
+      colour = mix(colour, kEmberWarm, smoothstep(0.15, 0.9, abs(amplitude)) * 0.24);
+      colour += kSeaGlimmer * (0.04 + 0.05 * breath);
+    }
 
     // The tank has edges. A soft fall-off says so without drawing a frame.
     float2 fromCentre = (in.uv - 0.5) * 2.0;

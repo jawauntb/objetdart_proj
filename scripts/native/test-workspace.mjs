@@ -197,8 +197,12 @@ assert.doesNotMatch(
   "a RendererProbe draws nothing: installing one behind the persistent view is the blank first screen",
 );
 assert.match(waveKernel, /SimulationKernel/, "the wave medium must reach the host through the shared kernel protocol");
+assert.match(waveKernel, /Representation/, "the wave kernel must expose a bounded representation lens");
+assert.match(waveKernel, /case \.lens/, "twist-lens commands must change the wave representation");
 assert.match(waveRenderer, /MTLRenderPipelineState/, "the wave material must reach the screen through a Metal pipeline");
+assert.match(waveRenderer, /representation/, "the renderer must receive the selected wave representation");
 assert.match(waveShaders, /objet_wave_fragment/, "the material is a shader, not a canvas-2D fallback");
+assert.match(waveShaders, /spectrumSampler/, "the spectrum projection must derive bars from the field texture");
 assert.doesNotMatch(
   waveField,
   /arc4random|SystemRandomNumberGenerator|\.random\(/,
@@ -307,6 +311,11 @@ const guideData = readText("apps/native/src/guide/guideData.ts");
 const guideSheet = readText("apps/native/src/guide/GuideSheet.tsx");
 const artDirection = readText("docs/native/art-direction.md");
 const worldRoute = readText("apps/native/app/world.tsx");
+assert.match(worldRoute, /onOpenFold=/, "world route must wire the fold affordance to a real surface");
+assert.match(worldRoute, /onOpenTrail=/, "world route must wire the trail affordance to a real surface");
+assert.match(worldRoute, /<FoldSheet/, "world route must render the fold surface when requested");
+assert.match(worldRoute, /<TrailSheet/, "world route must render the trail surface when requested");
+assert.match(worldRoute, /representation=\{representation\}/, "world route must pass the selected lens to the native surface");
 
 assert.match(designTokens, /export const PALETTE/, "native design tokens must declare a shared palette");
 assert.match(designTokens, /REDUCED_MOTION_EQUIVALENTS/, "native design tokens must declare reduced-motion equivalents that preserve state");
@@ -528,7 +537,7 @@ assert.ok(
 );
 assert.match(worldRoute, /revealAfter/, "the route must keep what the visitor has caused, not a frozen placeholder");
 assert.match(worldRoute, /onGuideVisibilityChange/, "intervention pauses while a reading surface is open");
-assert.match(worldRoute, /enabled=\{!reading\}/, "the surface closes while the guide sheet has focus");
+assert.match(worldRoute, /enabled=\{!reading\s*&&/, "the surface closes while any reading surface has focus");
 
 // No affordance that leads nowhere: a chip answering a press with nothing is
 // friction wearing the costume of a feature.

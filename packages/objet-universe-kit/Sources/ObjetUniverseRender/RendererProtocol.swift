@@ -30,6 +30,10 @@ public struct FieldSubmission {
   public let secondsPerStep: Double
   /// Reciprocal of the field's recent peak amplitude. Perceptual gain only.
   public let exposure: Double
+  /// The material's current representation: 0 surface, 1 equation,
+  /// 2 spectrum, 3 felt. It changes how the same authoritative field is
+  /// drawn; it never changes the solver.
+  public let representation: Int
 
   public init(
     values: UnsafePointer<Float>,
@@ -37,7 +41,8 @@ public struct FieldSubmission {
     height: Int,
     elapsedSeconds: Double,
     secondsPerStep: Double,
-    exposure: Double
+    exposure: Double,
+    representation: Int = 0
   ) {
     self.values = values
     self.width = width
@@ -45,6 +50,7 @@ public struct FieldSubmission {
     self.elapsedSeconds = elapsedSeconds
     self.secondsPerStep = secondsPerStep
     self.exposure = exposure
+    self.representation = representation
   }
 }
 

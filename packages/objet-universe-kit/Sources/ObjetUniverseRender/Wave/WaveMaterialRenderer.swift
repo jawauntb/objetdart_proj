@@ -23,6 +23,7 @@ public final class WaveMaterialRenderer: FieldSurfaceRenderer {
     var fieldHeight: Float = 1
     var elapsed: Float = 0
     var exposure: Float = 1
+    var representation: Float = 0
     var breathSeconds: Float = 7
     var pad: Float = 0
   }
@@ -95,6 +96,7 @@ public final class WaveMaterialRenderer: FieldSurfaceRenderer {
     uniforms.fieldHeight = Float(submission.height)
     uniforms.elapsed = Float(submission.elapsedSeconds)
     uniforms.exposure = Float(submission.exposure)
+    uniforms.representation = Float(submission.representation)
     secondsPerStep = submission.secondsPerStep
   }
 

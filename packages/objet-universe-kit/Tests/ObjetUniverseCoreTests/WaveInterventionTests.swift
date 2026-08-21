@@ -111,7 +111,7 @@ final class WaveInterventionTests: XCTestCase {
   func testAVerbTheTankCannotSayChangesNothing() {
     let kernel = quietKernel()
 
-    for verb in [SemanticVerb.season, .weather, .lens, .gravity, .night, .scale, .pan, .stepBack] {
+    for verb in [SemanticVerb.season, .weather, .gravity, .night, .scale, .pan] {
       XCTAssertFalse(kernel.expresses(verb), "a wave tank has no \(verb.rawValue)")
       _ = kernel.apply(command(verb, intensity: 1, at: SemanticOrigin(x: 0.2, y: 0.2)))
     }
@@ -124,14 +124,32 @@ final class WaveInterventionTests: XCTestCase {
     )
   }
 
+  func testTheLensChangesRepresentationWithoutChangingTheField() {
+    let kernel = quietKernel()
+    let before = displacement(kernel)
+
+    XCTAssertEqual(kernel.representation, .surface)
+    _ = kernel.apply(command(.lens, intensity: 1, at: nil))
+
+    XCTAssertEqual(kernel.representation, .equation)
+    XCTAssertEqual(displacement(kernel), before, accuracy: 1e-9)
+
+    _ = kernel.apply(command(.stepBack, intensity: 1, at: nil))
+    XCTAssertEqual(kernel.representation, .surface)
+
+    for _ in 0 ..< 4 { _ = kernel.apply(command(.lens, intensity: 1, at: nil)) }
+    XCTAssertEqual(kernel.representation, .surface, "repeated twists wrap at the same detent as the shell")
+  }
+
   func testTheDeclaredVocabularyIsWhatTheKernelActuallyAnswers() {
     // A driven tank, because the seeded sources are what `tutti` rings: the
     // vocabulary has to be checked against the medium as it actually ships.
     for verb in SemanticVerb.allCases {
       let probe = WaveKernel(seed: 11)
       let before = displacement(probe)
+      let representationBefore = probe.representation
       _ = probe.apply(command(verb, intensity: 1, at: SemanticOrigin(x: 0.6, y: 0.6)))
-      let moved = abs(displacement(probe) - before) > 1e-6
+      let moved = abs(displacement(probe) - before) > 1e-6 || probe.representation != representationBefore
       XCTAssertEqual(
         moved,
         probe.expresses(verb),

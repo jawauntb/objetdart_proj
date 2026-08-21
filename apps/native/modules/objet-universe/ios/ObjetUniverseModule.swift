@@ -23,6 +23,10 @@ public final class ObjetUniverseModule: Module {
       Prop("enabled") { (view: ObjetUniverseSurfaceView, enabled: Bool) in
         view.setEnabled(enabled)
       }
+
+      Prop("representation") { (view: ObjetUniverseSurfaceView, representation: Int) in
+        view.setRepresentation(representation)
+      }
     }
   }
 }
