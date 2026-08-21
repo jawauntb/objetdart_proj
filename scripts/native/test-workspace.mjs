@@ -158,7 +158,11 @@ const universePodspec = readText("apps/native/modules/objet-universe/ios/ObjetUn
 const universeHost = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/UniverseHost.swift");
 const universeClock = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/UniverseClock.swift");
 const renderHost = readText("packages/objet-universe-kit/Sources/ObjetUniverseRender/RenderHost.swift");
+const metalRenderTest = readText("packages/objet-universe-kit/Tests/ObjetUniverseCoreTests/WaveMetalRenderTests.swift");
+const nativeCI = readText(".github/workflows/native-ci.yml");
 assert.match(universeView, /maximum:\s*60,\s*preferred:\s*60/, "native presentation must stay within a 60 Hz frame budget");
+assert.match(metalRenderTest, /environment\["CI"\]\s*==\s*"true"[\s\S]*XCTFail/, "Metal visibility must fail rather than skip in CI");
+assert.match(nativeCI, /swift test -c release --package-path packages\/objet-universe-kit/, "macOS CI must execute the Metal visibility gate");
 assert.match(universeModule, /ObjetUniverseModule/, "the local Expo module must register the native universe module");
 assert.match(universeBridge, /requireNativeViewManager/, "React must use the native universe view rather than recreate a renderer");
 assert.match(universeModuleDefinition, /Name\("ObjetUniverse"\)/, "the native module name must match the JS bridge");

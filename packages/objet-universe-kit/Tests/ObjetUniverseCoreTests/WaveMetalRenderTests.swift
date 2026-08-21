@@ -21,7 +21,11 @@ final class WaveMetalRenderTests: XCTestCase {
 
   func testRestingFieldCompilesAndRendersDeterministicVisibleStructureOffscreen() throws {
     guard let device = MTLCreateSystemDefaultDevice() else {
-      throw XCTSkip("the CI host exposes no Metal device; EAS/Xcode remains the runtime shader gate")
+      if ProcessInfo.processInfo.environment["CI"] == "true" {
+        XCTFail("Native CI must expose Metal; skipping would make the release visibility gate meaningless")
+        return
+      }
+      throw XCTSkip("this local host exposes no Metal device; Native CI remains the mandatory shader gate")
     }
 
     let field = WaveField(seed: 0x6F62_6A65_7420_6461)
