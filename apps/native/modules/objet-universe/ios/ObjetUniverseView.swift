@@ -158,6 +158,12 @@ public final class ObjetUniverseView: ExpoView {
     host.apply(command)
   }
 
+  /// Update only the visual lens. The field remains authoritative and keeps
+  /// advancing; this is the native equivalent of the web wave lens rotation.
+  func setWaveRepresentation(_ rawValue: Int) {
+    waveKernels.kernel?.setRepresentation(rawValue)
+  }
+
   /// The authoritative tick, for the sensory buses: sight, sound, and touch
   /// all read one clock or they are three separate events.
   var logicalTick: Int { host.telemetry.logicalTick }
@@ -194,7 +200,8 @@ public final class ObjetUniverseView: ExpoView {
           height: height,
           elapsedSeconds: kernel.elapsedSeconds,
           secondsPerStep: kernel.secondsPerTick,
-          exposure: kernel.exposure
+          exposure: kernel.exposure,
+          representation: kernel.representation.rawValue
         )
       )
     }

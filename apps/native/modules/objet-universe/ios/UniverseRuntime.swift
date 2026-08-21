@@ -29,6 +29,7 @@ final class UniverseRuntime {
 
   private weak var universe: ObjetUniverseView?
   private var committed = 0
+  private var representation = 0
 
   /// The vessel is the device itself — tilt, shake, knock, flip — and it
   /// belongs here rather than to either view: it outlives the route, it has
@@ -52,7 +53,16 @@ final class UniverseRuntime {
   /// nonisolated and could not call back in here to say so.
   func attach(_ view: ObjetUniverseView) {
     universe = view
+    view.setWaveRepresentation(representation)
     subscribeVesselIfNeeded()
+  }
+
+  /// Shell controls (fold, accessibility) change the lens through the same
+  /// registry as touch. Keeping this seam native avoids a React render loop in
+  /// the frame path and keeps the persistent host authoritative.
+  func setRepresentation(_ rawValue: Int) {
+    representation = min(max(rawValue, 0), 3)
+    universe?.setWaveRepresentation(representation)
   }
 
   /// Commit one routed gesture. Returns whether the medium expressed it, so

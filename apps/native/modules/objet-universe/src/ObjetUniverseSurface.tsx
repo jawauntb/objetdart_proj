@@ -31,6 +31,8 @@ export type ObjetUniverseSurfaceProps = {
    * sheet opening would keep charging the water behind it.
    */
   enabled?: boolean;
+  /** Current wave lens detent: surface, equation, spectrum, or felt. */
+  representation?: 0 | 1 | 2 | 3;
   onSemanticCommand?: (event: { nativeEvent: SurfaceCommand }) => void;
 };
 

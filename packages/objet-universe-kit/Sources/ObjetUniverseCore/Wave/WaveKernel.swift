@@ -11,8 +11,18 @@ import Foundation
 /// beside the fixture that pins them, and the presentation lives in the render
 /// target — this file is only the boundary the host talks to.
 public final class WaveKernel: SimulationKernel {
+  /// A single wave field can be read as a surface, a signal, a spectrum, or
+  /// a felt swell. The representation is a projection, not a second solver.
+  public enum Representation: Int, CaseIterable, Sendable {
+    case surface = 0
+    case equation = 1
+    case spectrum = 2
+    case felt = 3
+  }
+
   public let scene: SceneID = .wave
   public private(set) var tick = 0
+  public private(set) var representation: Representation = .surface
 
   /// Seconds of authoritative time per tick. Defaults to the one clock's step
   /// so the sources and the integrator cannot disagree about how long a tick
@@ -60,9 +70,19 @@ public final class WaveKernel: SimulationKernel {
   public func expresses(_ verb: SemanticVerb) -> Bool {
     switch verb {
     case .material, .grow, .ceremony, .tutti, .agitate, .wake: true
-    case .stepBack, .train, .scale, .lens, .season, .pan, .weather,
+    case .stepBack: representation != .surface
+    case .lens: true
+    case .train, .scale, .season, .pan, .weather,
          .timeDilation, .gravity, .night, .breath: false
     }
+  }
+
+  /// Select a projection from the shell (fold) without round-tripping the
+  /// field through JavaScript. The input is intentionally bounded because a
+  /// fold is an affordance, not an arbitrary renderer command channel.
+  public func setRepresentation(_ rawValue: Int) {
+    let bounded = min(max(rawValue, 0), Representation.allCases.count - 1)
+    representation = Representation(rawValue: bounded) ?? .surface
   }
 
   /// Every intervention is one displacement of the medium: where the hand
@@ -130,7 +150,14 @@ public final class WaveKernel: SimulationKernel {
         amplitude: 0.15 + 0.45 * intensity,
         radiusCells: WaveKernel.radiusCells(base: min(field.width, field.height) / 8, intensity: intensity, spread: 6)
       )
-    case .stepBack, .train, .scale, .lens, .season, .pan, .weather,
+    case .stepBack:
+      setRepresentation(representation.rawValue - 1)
+    case .lens:
+      // A twist advances one detent. Intensity remains available to sound and
+      // haptics, while the visual lens stays legible and deterministic. The
+      // fourth station wraps to the surface so JS and native never diverge.
+      setRepresentation((representation.rawValue + 1) % Representation.allCases.count)
+    case .train, .scale, .season, .pan, .weather,
          .timeDilation, .gravity, .night, .breath:
       break
     }

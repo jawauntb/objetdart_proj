@@ -50,6 +50,10 @@ public final class ObjetUniverseSurfaceView: ExpoView {
     input?.setEnabled(value && window != nil)
   }
 
+  public func setRepresentation(_ value: Int) {
+    UniverseRuntime.shared.setRepresentation(value)
+  }
+
   public override func didMoveToWindow() {
     super.didMoveToWindow()
     input?.setEnabled(enabled && window != nil)
