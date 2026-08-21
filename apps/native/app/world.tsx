@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { ObjetUniverseSurface, type SurfaceCommand } from "../modules/objet-universe";
 import { NativeChrome } from "../src/design/NativeChrome";
@@ -8,6 +8,12 @@ import {
   TrailSheet,
   type WaveRepresentation,
 } from "../src/surfaces/ReadingSheets";
+import {
+  appendSessionTrail,
+  loadSessionTrail,
+  makeTrailEntry,
+  type TrailEntry,
+} from "../src/persistence/SessionTrail";
 
 /**
  * The world route sits above the persistent `<ObjetUniverseView>` and stays
@@ -32,12 +38,30 @@ export default function WorldRoute() {
   const [foldOpen, setFoldOpen] = useState(false);
   const [trailOpen, setTrailOpen] = useState(false);
   const [representation, setRepresentation] = useState<WaveRepresentation>(0);
-  const [trail, setTrail] = useState<readonly SurfaceCommand[]>([]);
+  const [trail, setTrail] = useState<readonly TrailEntry[]>([]);
+  const [trailReady, setTrailReady] = useState(false);
+  const trailSequence = useRef(0);
+
+  useEffect(() => {
+    let mounted = true;
+    void loadSessionTrail().then((entries) => {
+      if (!mounted) return;
+      trailSequence.current = entries.length;
+      setTrail(entries);
+      setTrailReady(true);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const onSemanticCommand = useCallback((event: { nativeEvent: SurfaceCommand }) => {
     const command = event.nativeEvent;
     setReveal((current) => revealAfter(current, command));
-    setTrail((current) => [...current, command].slice(-40));
+    const entry = makeTrailEntry(command, trailSequence.current + 1);
+    trailSequence.current += 1;
+    setTrail((current) => [...current, entry].slice(-120));
+    void appendSessionTrail(entry);
     if (command.semanticVerb === "lens") {
       setRepresentation((current) => (current === 3 ? 0 : ((current + 1) as WaveRepresentation)));
     } else if (command.semanticVerb === "step-back") {
@@ -54,7 +78,7 @@ export default function WorldRoute() {
     <View style={styles.field} accessibilityLabel="A living wave field">
       <ObjetUniverseSurface
         style={StyleSheet.absoluteFill}
-        enabled={!reading && !foldOpen && !trailOpen}
+        enabled={trailReady && !reading && !foldOpen && !trailOpen}
         representation={representation}
         onSemanticCommand={onSemanticCommand}
       />

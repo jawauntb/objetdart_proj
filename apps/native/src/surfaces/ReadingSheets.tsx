@@ -1,6 +1,6 @@
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { PALETTE, SPACING, TYPOGRAPHY, Z_ORDER } from "../design/tokens";
-import type { SurfaceCommand } from "../../modules/objet-universe";
+import type { TrailEntry } from "../persistence/SessionTrail";
 
 export type WaveRepresentation = 0 | 1 | 2 | 3;
 
@@ -85,14 +85,14 @@ export function TrailSheet({
   events,
   onClose,
 }: Readonly<{
-  events: readonly SurfaceCommand[];
+  events: readonly TrailEntry[];
   onClose: () => void;
 }>) {
   return (
     <ReadingSheet title="trail / what you caused" onClose={onClose}>
       <Text style={styles.intro} allowFontScaling maxFontSizeMultiplier={2}>
-        A quiet record of this visit. It names causes, not achievements; durable
-        natural history will join this surface when the persistence lane lands.
+        A quiet record kept on this device. It names causes, not achievements;
+        the larger natural history can grow from these same semantic events.
       </Text>
       {events.length === 0 ? (
         <Text style={styles.empty} allowFontScaling maxFontSizeMultiplier={2}>
