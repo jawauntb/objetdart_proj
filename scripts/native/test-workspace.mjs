@@ -148,6 +148,9 @@ const universeModule = readText("apps/native/modules/objet-universe/expo-module.
 const universeBridge = readText("apps/native/modules/objet-universe/src/ObjetUniverseView.tsx");
 const universeView = readText("apps/native/modules/objet-universe/ios/ObjetUniverseView.swift");
 const universeModuleDefinition = readText("apps/native/modules/objet-universe/ios/ObjetUniverseModule.swift");
+const universeSurfaceBridge = readText("apps/native/modules/objet-universe/src/ObjetUniverseSurface.tsx");
+const universeSurfaceView = readText("apps/native/modules/objet-universe/ios/ObjetUniverseSurfaceView.swift");
+const universeRuntime = readText("apps/native/modules/objet-universe/ios/UniverseRuntime.swift");
 const universePodspec = readText("apps/native/modules/objet-universe/ios/ObjetUniverse.podspec");
 const universeHost = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/UniverseHost.swift");
 const universeClock = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/UniverseClock.swift");
@@ -480,7 +483,6 @@ execFileSync(process.execPath, ["scripts/native/run-accessibility-test.mjs"], {
 // second time.
 const surfaceInput = readText("apps/native/modules/objet-universe/ios/SurfaceInput.swift");
 const surfaceView = readText("apps/native/modules/objet-universe/ios/ObjetUniverseSurfaceView.swift");
-const universeRuntime = readText("apps/native/modules/objet-universe/ios/UniverseRuntime.swift");
 
 
 for (const recogniser of [
@@ -533,6 +535,9 @@ assert.ok(
 );
 assert.match(universeModuleDefinition, /ViewName\("ObjetUniverseSurface"\)/, "the surface needs the name React asks for");
 assert.match(universeModuleDefinition, /Events\("onSemanticCommand"\)/, "committed gestures must be able to reach the route");
+assert.match(universeSurfaceBridge, /assistiveCommandId/, "the surface bridge must expose the assistive command commit edge");
+assert.match(universeSurfaceView, /setAssistiveCommandId/, "the native surface must accept assistive commands");
+assert.match(universeRuntime, /commitAssistive/, "assistive commands must enter the shared native runtime");
 
 // The world route mounts the surface below the chrome and keeps the reveal
 // state the guide gates on. A route that mounts chrome alone is the screen
@@ -545,6 +550,8 @@ assert.ok(
 assert.match(worldRoute, /revealAfter/, "the route must keep what the visitor has caused, not a frozen placeholder");
 assert.match(worldRoute, /onGuideVisibilityChange/, "intervention pauses while a reading surface is open");
 assert.match(worldRoute, /enabled=\{trailReady\s*&&\s*!reading/, "the surface waits for trail recovery and closes while any reading surface has focus");
+assert.match(worldRoute, /<UniverseActions/, "the world route must mount the VoiceOver action surface");
+assert.match(worldRoute, /onAssistiveCommand/, "assistive commands must be forwarded to the native surface");
 
 // No affordance that leads nowhere: a chip answering a press with nothing is
 // friction wearing the costume of a feature.

@@ -25,6 +25,11 @@ public final class ObjetUniverseSurfaceView: ExpoView {
 
   private var input: SurfaceInput?
   private var enabled = true
+  private var assistiveVerb: String?
+  private var assistiveIntensity = 0.5
+  private var assistiveOriginX = 0.5
+  private var assistiveOriginY = 0.5
+  private var lastAssistiveCommandId: String?
 
   public required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -52,6 +57,47 @@ public final class ObjetUniverseSurfaceView: ExpoView {
 
   public func setRepresentation(_ value: Int) {
     UniverseRuntime.shared.setRepresentation(value)
+  }
+
+  public func setAssistiveVerb(_ value: String?) {
+    assistiveVerb = value
+  }
+
+  public func setAssistiveIntensity(_ value: Double) {
+    assistiveIntensity = min(max(value, 0), 1)
+  }
+
+  public func setAssistiveOriginX(_ value: Double) {
+    assistiveOriginX = min(max(value, 0), 1)
+  }
+
+  public func setAssistiveOriginY(_ value: Double) {
+    assistiveOriginY = min(max(value, 0), 1)
+  }
+
+  /// The command id is deliberately the last prop in the JS surface. Expo
+  /// applies the verb, intensity, and origin first; changing the id is the
+  /// single commit edge and prevents a prop update from firing twice.
+  public func setAssistiveCommandId(_ value: String?) {
+    guard let value, !value.isEmpty, value != lastAssistiveCommandId else { return }
+    lastAssistiveCommandId = value
+    guard let rawVerb = assistiveVerb, let verb = SemanticVerb(rawValue: rawVerb) else { return }
+    let origin = SemanticOrigin(x: assistiveOriginX, y: assistiveOriginY)
+    let expressed = UniverseRuntime.shared.commitAssistive(
+      id: value,
+      verb: verb,
+      intensity: assistiveIntensity,
+      origin: origin
+    )
+    let grammarVerb = UniverseRuntime.grammarVerb(for: verb)
+    onSemanticCommand([
+      "verb": grammarVerb.rawValue,
+      "semanticVerb": rawVerb,
+      "layer": "accessibility",
+      "source": "assistive",
+      "intensity": assistiveIntensity,
+      "answered": expressed,
+    ])
   }
 
   public override func didMoveToWindow() {

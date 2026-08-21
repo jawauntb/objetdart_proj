@@ -27,6 +27,22 @@ public final class ObjetUniverseModule: Module {
       Prop("representation") { (view: ObjetUniverseSurfaceView, representation: Int) in
         view.setRepresentation(representation)
       }
+
+      Prop("assistiveVerb") { (view: ObjetUniverseSurfaceView, verb: String?) in
+        view.setAssistiveVerb(verb)
+      }
+      Prop("assistiveIntensity") { (view: ObjetUniverseSurfaceView, intensity: Double) in
+        view.setAssistiveIntensity(intensity)
+      }
+      Prop("assistiveOriginX") { (view: ObjetUniverseSurfaceView, x: Double) in
+        view.setAssistiveOriginX(x)
+      }
+      Prop("assistiveOriginY") { (view: ObjetUniverseSurfaceView, y: Double) in
+        view.setAssistiveOriginY(y)
+      }
+      Prop("assistiveCommandId") { (view: ObjetUniverseSurfaceView, id: String?) in
+        view.setAssistiveCommandId(id)
+      }
     }
   }
 }

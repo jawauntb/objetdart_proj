@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { ObjetUniverseSurface, type SurfaceCommand } from "../modules/objet-universe";
+import { UniverseActions } from "../src/accessibility/UniverseActions";
+import type { NativeSemanticCommand } from "../src/universe/actions";
 import { NativeChrome } from "../src/design/NativeChrome";
 import { EMPTY_REVEAL, revealAfter, type SceneReveal } from "../src/guide/reveal";
 import {
@@ -41,6 +43,13 @@ export default function WorldRoute() {
   const [trail, setTrail] = useState<readonly TrailEntry[]>([]);
   const [trailReady, setTrailReady] = useState(false);
   const trailSequence = useRef(0);
+  const [assistiveCommand, setAssistiveCommand] = useState<{
+    id: string;
+    verb: NativeSemanticCommand["action"]["action"]["verb"];
+    intensity: number;
+    originX: number;
+    originY: number;
+  } | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -53,6 +62,17 @@ export default function WorldRoute() {
     return () => {
       mounted = false;
     };
+  }, []);
+
+  const onAssistiveCommand = useCallback((command: NativeSemanticCommand) => {
+    const payload = command.action.action.payload as Readonly<Record<string, unknown>>;
+    setAssistiveCommand({
+      id: command.action.id,
+      verb: command.action.action.verb,
+      intensity: command.action.action.intensity,
+      originX: typeof payload.x === "number" ? payload.x : 0.5,
+      originY: typeof payload.y === "number" ? payload.y : 0.5,
+    });
   }, []);
 
   const onSemanticCommand = useCallback((event: { nativeEvent: SurfaceCommand }) => {
@@ -76,12 +96,24 @@ export default function WorldRoute() {
 
   return (
     <View style={styles.field} accessibilityLabel="A living wave field">
-      <ObjetUniverseSurface
+      <UniverseActions
         style={StyleSheet.absoluteFill}
-        enabled={trailReady && !reading && !foldOpen && !trailOpen}
-        representation={representation}
-        onSemanticCommand={onSemanticCommand}
-      />
+        accessibilityLabel="Living wave field. Use actions to touch, step back, rotate the lens, or ring the field."
+        advertisedVerbs={["tap", "tap2", "tap3", "twist", "knock", "holdDwell", "holdCeremony"]}
+        onSemanticCommand={onAssistiveCommand}
+      >
+        <ObjetUniverseSurface
+          style={StyleSheet.absoluteFill}
+          enabled={trailReady && !reading && !foldOpen && !trailOpen}
+          representation={representation}
+          assistiveVerb={assistiveCommand?.verb}
+          assistiveIntensity={assistiveCommand?.intensity}
+          assistiveOriginX={assistiveCommand?.originX}
+          assistiveOriginY={assistiveCommand?.originY}
+          assistiveCommandId={assistiveCommand?.id}
+          onSemanticCommand={onSemanticCommand}
+        />
+      </UniverseActions>
       <NativeChrome
         scene="wave"
         reveal={reveal}
