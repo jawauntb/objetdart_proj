@@ -1,4 +1,4 @@
-import { DarkTheme, Stack, ThemeProvider, type Theme } from "expo-router";
+import { DarkTheme, Stack, ThemeProvider, useSegments, type Theme } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { StyleSheet, View } from "react-native";
 import { ObjetUniverseView } from "../modules/objet-universe";
@@ -21,9 +21,11 @@ const TRANSPARENT_OVER_UNIVERSE: Theme = {
 };
 
 export default function RootLayout() {
+  const segments = useSegments();
+  const scene = segments[0] === "cell" || segments[0] === "solar" ? segments[0] : "wave";
   return (
     <View style={styles.root}>
-      <ObjetUniverseView scene="wave" style={StyleSheet.absoluteFill} />
+      <ObjetUniverseView scene={scene} style={StyleSheet.absoluteFill} />
       <StatusBar hidden style="light" />
       <ThemeProvider value={TRANSPARENT_OVER_UNIVERSE}>
         <Stack

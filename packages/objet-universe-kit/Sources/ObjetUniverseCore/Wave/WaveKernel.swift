@@ -10,7 +10,7 @@ import Foundation
 /// The kernel is deliberately thin. The medium's laws live in `WaveField`
 /// beside the fixture that pins them, and the presentation lives in the render
 /// target — this file is only the boundary the host talks to.
-public final class WaveKernel: SimulationKernel {
+public final class WaveKernel: SurfaceSimulationKernel {
   /// A single wave field can be read as a surface, a signal, a spectrum, or
   /// a felt swell. The representation is a projection, not a second solver.
   public enum Representation: Int, CaseIterable, Sendable {
@@ -21,8 +21,10 @@ public final class WaveKernel: SimulationKernel {
   }
 
   public let scene: SceneID = .wave
+  public let materialKind = 0
   public private(set) var tick = 0
   public private(set) var representation: Representation = .surface
+  public var representationIndex: Int { representation.rawValue }
 
   /// Seconds of authoritative time per tick. Defaults to the one clock's step
   /// so the sources and the integrator cannot disagree about how long a tick

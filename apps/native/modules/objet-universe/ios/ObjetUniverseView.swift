@@ -3,38 +3,11 @@ import ObjetUniverseKit
 import QuartzCore
 import UIKit
 
-/// A kernel for a scene whose lane has not landed yet. It advances a tick
-/// counter and owns no material, so a view showing it has nothing to draw —
-/// which is why the wave scene, the one Release 1 screen a visitor actually
-/// arrives on, runs `WaveKernel` instead.
-private final class NativeProbeKernel: SimulationKernel {
-  let scene: SceneID
-  private var tick = 0
-
-  init(scene: SceneID) { self.scene = scene }
-  func prepare() {}
-  func activate() {}
-  func freeze() {}
-  func retire() {}
-  func apply(_ command: SemanticCommand) -> KernelOutput { output() }
-  func advance(ticks: Int) -> KernelOutput {
-    tick += ticks
-    return output()
-  }
-
-  private func output() -> KernelOutput {
-    .init(
-      stable: true,
-      checkpoint: .init(scene: scene, tick: tick, digest: "native-probe-\(scene.rawValue)-\(tick)")
-    )
-  }
-}
-
-/// Holds whichever wave kernel the host currently owns. The scene factory has
+/// Holds whichever surface kernel the host currently owns. The scene factory has
 /// to be built before `super.init`, where `self` does not exist yet, so the
 /// factory writes here instead of capturing the view.
-private final class WaveKernelBox {
-  var kernel: WaveKernel?
+private final class SurfaceKernelBox {
+  var kernel: (any SurfaceSimulationKernel)?
 }
 
 private final class DisplayLinkTarget: NSObject, @unchecked Sendable {
@@ -64,7 +37,7 @@ public final class ObjetUniverseView: ExpoView {
   // to retire them from deinit without sending CADisplayLink / UIKit types.
   private nonisolated(unsafe) let host: UniverseHost
   private nonisolated(unsafe) let renderHost = RenderHost()
-  private nonisolated(unsafe) let waveKernels: WaveKernelBox
+  private nonisolated(unsafe) let surfaceKernels: SurfaceKernelBox
   private nonisolated(unsafe) let displayLinkTarget = DisplayLinkTarget()
   private nonisolated(unsafe) var displayLink: CADisplayLink?
   private nonisolated(unsafe) var lifecycleObservers: [NSObjectProtocol] = []
@@ -73,21 +46,22 @@ public final class ObjetUniverseView: ExpoView {
   private var metalLayer: CAMetalLayer? { layer as? CAMetalLayer }
 
   public required init(appContext: AppContext? = nil) {
-    let box = WaveKernelBox()
+    let box = SurfaceKernelBox()
     let initial = WaveKernel(seed: ObjetUniverseView.launchSeed)
     box.kernel = initial
-    waveKernels = box
+    surfaceKernels = box
     host = UniverseHost(
       initial: initial,
       factory: { scene in
-        guard scene == .wave else {
-          // Nothing may keep reading a kernel the host has retired; the
-          // renderer simply holds its last frame until a scene lane for the
-          // destination lands.
-          box.kernel = nil
-          return NativeProbeKernel(scene: scene)
+        let kernel: any SurfaceSimulationKernel
+        switch scene {
+        case .wave:
+          kernel = WaveKernel(seed: ObjetUniverseView.launchSeed)
+        case .cell:
+          kernel = CellKernel(seed: ObjetUniverseView.launchSeed)
+        case .solar:
+          kernel = SolarKernel(seed: ObjetUniverseView.launchSeed)
         }
-        let kernel = WaveKernel(seed: ObjetUniverseView.launchSeed)
         box.kernel = kernel
         return kernel
       }
@@ -160,8 +134,14 @@ public final class ObjetUniverseView: ExpoView {
 
   /// Update only the visual lens. The field remains authoritative and keeps
   /// advancing; this is the native equivalent of the web wave lens rotation.
+  func setRepresentation(_ rawValue: Int) {
+    surfaceKernels.kernel?.setRepresentation(rawValue)
+  }
+
+  /// Kept as a source-compatible alias for older route glue; every surface
+  /// now understands the same projection control.
   func setWaveRepresentation(_ rawValue: Int) {
-    waveKernels.kernel?.setRepresentation(rawValue)
+    setRepresentation(rawValue)
   }
 
   /// The authoritative tick, for the sensory buses: sight, sound, and touch
@@ -191,7 +171,7 @@ public final class ObjetUniverseView: ExpoView {
   /// escapes the closure and nothing is copied on the way, so the frame path
   /// allocates nothing.
   nonisolated private func submitActiveSurface() {
-    guard let kernel = waveKernels.kernel else { return }
+    guard let kernel = surfaceKernels.kernel else { return }
     kernel.withSurface { values, width, height in
       renderHost.submitField(
         FieldSubmission(
@@ -201,7 +181,8 @@ public final class ObjetUniverseView: ExpoView {
           elapsedSeconds: kernel.elapsedSeconds,
           secondsPerStep: kernel.secondsPerTick,
           exposure: kernel.exposure,
-          representation: kernel.representation.rawValue
+          representation: kernel.representationIndex,
+          materialKind: kernel.materialKind
         )
       )
     }

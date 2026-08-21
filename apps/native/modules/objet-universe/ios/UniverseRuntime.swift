@@ -53,7 +53,7 @@ final class UniverseRuntime {
   /// nonisolated and could not call back in here to say so.
   func attach(_ view: ObjetUniverseView) {
     universe = view
-    view.setWaveRepresentation(representation)
+    view.setRepresentation(representation)
     subscribeVesselIfNeeded()
   }
 
@@ -62,7 +62,7 @@ final class UniverseRuntime {
   /// the frame path and keeps the persistent host authoritative.
   func setRepresentation(_ rawValue: Int) {
     representation = min(max(rawValue, 0), 3)
-    universe?.setWaveRepresentation(representation)
+    universe?.setRepresentation(representation)
   }
 
   /// Assistive actions enter at the same semantic boundary as touch. They

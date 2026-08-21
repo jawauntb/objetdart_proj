@@ -22,6 +22,7 @@ public enum WaveShaderSource {
     float elapsed;
     float exposure;
     float representation;
+    float materialKind;
     float breathSeconds;
     float pad;
   };
@@ -62,6 +63,35 @@ public enum WaveShaderSource {
     float2 fieldUV = (in.uv - 0.5) * cover + 0.5;
 
     float amplitude = surface.sample(surfaceSampler, fieldUV).r * uniforms.exposure;
+
+    // Cell and solar scenes share the field transport with waves, but their
+    // visual grammar is different. These branches stay on the GPU so the
+    // simulation can remain a compact scalar projection without adding a
+    // second entity renderer or per-frame geometry allocation.
+    if (uniforms.materialKind > 0.5 && uniforms.materialKind < 1.5) {
+      float colony = smoothstep(0.04, 0.55, amplitude);
+      float edge = smoothstep(0.04, 0.0, abs(amplitude - 0.36));
+      float breathing = 0.5 + 0.5 * sin(uniforms.elapsed * 1.7 + in.uv.x * 9.0 + in.uv.y * 7.0);
+      float3 cellDeep = float3(0.015, 0.055, 0.060);
+      float3 cellTeal = float3(0.10, 0.53, 0.43);
+      float3 cellLime = float3(0.62, 0.84, 0.39);
+      float3 cellColour = mix(cellDeep, cellTeal, colony);
+      cellColour = mix(cellColour, cellLime, edge * (0.72 + 0.2 * breathing));
+      cellColour += kSeaGlimmer * smoothstep(0.62, 1.0, amplitude) * 0.18;
+      return float4(cellColour, 1.0);
+    }
+
+    if (uniforms.materialKind > 1.5) {
+      float density = smoothstep(0.015, 0.22, amplitude);
+      float star = smoothstep(0.42, 0.98, amplitude);
+      float2 centred = in.uv - 0.5;
+      float nebula = 0.5 + 0.5 * sin(centred.x * 14.0 + centred.y * 10.0 + uniforms.elapsed * 0.12);
+      float3 space = mix(kNightDeep, float3(0.07, 0.08, 0.22), density * 0.75);
+      space += float3(0.20, 0.10, 0.38) * density * nebula * 0.45;
+      space = mix(space, kEmberWarm, star);
+      space += kSeaGlimmer * smoothstep(0.18, 0.36, amplitude) * 0.2;
+      return float4(space, 1.0);
+    }
 
     // Slope of the surface, read from the same texture: the medium lights
     // itself from its own gradient rather than from a decorative gloss.

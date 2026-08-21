@@ -1,0 +1,174 @@
+import Foundation
+
+/// A small deterministic orbital nursery for the first solar proof.
+///
+/// Bodies advance with a bounded symplectic Euler step. The Metal material is
+/// a density projection of the same bodies, so a changed orbit is visible
+/// without making particles the authority.
+public final class SolarKernel: SurfaceSimulationKernel {
+  public struct Body: Sendable {
+    var x: Double
+    var y: Double
+    var vx: Double
+    var vy: Double
+    var mass: Double
+  }
+
+  public let scene: SceneID = .solar
+  public let materialKind = 2
+  public let width = 160
+  public let height = 160
+  public let secondsPerTick: TimeInterval
+  public private(set) var tick = 0
+  public private(set) var representation = 0
+  public var representationIndex: Int { representation }
+  public private(set) var elapsedSeconds = 0.0
+  public private(set) var energy = 0.0
+  public let exposure = 1.0
+  public private(set) var bodies: [Body]
+
+  private var surface: [Float]
+
+  public init(seed: UInt64 = 0, secondsPerTick: TimeInterval = UniverseClock.defaultStepSeconds) {
+    precondition(secondsPerTick > 0)
+    self.secondsPerTick = secondsPerTick
+    surface = [Float](repeating: 0, count: width * height)
+    var random = SplitMix64(seed: seed &+ 0x50_1A_2026)
+    bodies = [Body(x: 0, y: 0, vx: 0, vy: 0, mass: 1)]
+    for index in 0 ..< 12 {
+      let radius = 0.18 + Double(index) * 0.075
+      let angle = random.nextUnitDouble() * Double.pi * 2
+      let mass = 0.006 + random.nextUnitDouble() * 0.018
+      let speed = (1 / max(radius, 0.1)).squareRoot()
+      bodies.append(Body(x: cos(angle) * radius, y: sin(angle) * radius, vx: -sin(angle) * speed, vy: cos(angle) * speed, mass: mass))
+    }
+    projectSurface()
+  }
+
+  public func withSurface<T>(_ body: (UnsafePointer<Float>, Int, Int) -> T) -> T {
+    surface.withUnsafeBufferPointer { buffer in body(buffer.baseAddress!, width, height) }
+  }
+
+  public func setRepresentation(_ rawValue: Int) {
+    representation = min(max(rawValue, 0), 3)
+  }
+
+  public func prepare() {}
+  public func activate() {}
+  public func freeze() {}
+  public func retire() {}
+
+  public func expresses(_ verb: SemanticVerb) -> Bool {
+    switch verb {
+    case .material, .grow, .ceremony, .tutti, .agitate, .wake, .gravity, .stepBack, .lens: true
+    case .train, .scale, .season, .pan, .weather, .timeDilation, .night, .breath: false
+    }
+  }
+
+  public func apply(_ command: SemanticCommand) -> KernelOutput {
+    let intensity = min(max(command.intensity, 0), 1)
+    let point = command.origin ?? .centre
+    switch command.verb {
+    case .material:
+      adjustNearest(toX: point.x * 2 - 1, y: point.y * 2 - 1, impulse: 0.02 + 0.1 * intensity)
+    case .grow:
+      bodies[0].mass += 0.005 + 0.02 * intensity
+    case .ceremony:
+      bodies.append(Body(x: 0.02, y: 0, vx: 0, vy: 1.3, mass: 0.01 + 0.02 * intensity))
+    case .tutti, .agitate, .wake:
+      for index in bodies.indices where index > 0 { bodies[index].vy += 0.03 * intensity }
+    case .gravity:
+      for index in bodies.indices where index > 0 { bodies[index].vx *= 1 - 0.05 * intensity }
+    case .stepBack:
+      setRepresentation(representation - 1)
+    case .lens:
+      setRepresentation((representation + 1) % 4)
+    case .train, .scale, .season, .pan, .weather, .timeDilation, .night, .breath:
+      break
+    }
+    projectSurface()
+    return output()
+  }
+
+  public func advance(ticks: Int) -> KernelOutput {
+    guard ticks > 0 else { return output() }
+    for _ in 0 ..< ticks {
+      integrate()
+      projectSurface()
+      tick += 1
+      elapsedSeconds += secondsPerTick
+    }
+    return output()
+  }
+
+  private func integrate() {
+    let dt = min(secondsPerTick, 1.0 / 60.0) * 0.45
+    let gravity = 0.12
+    var accelerations = [(Double, Double)](repeating: (0, 0), count: bodies.count)
+    for i in bodies.indices {
+      for j in bodies.indices where i != j {
+        let dx = bodies[j].x - bodies[i].x
+        let dy = bodies[j].y - bodies[i].y
+        let distanceSquared = max(0.0025, dx * dx + dy * dy)
+        let scale = gravity * bodies[j].mass / pow(distanceSquared, 1.5)
+        accelerations[i].0 += dx * scale
+        accelerations[i].1 += dy * scale
+      }
+    }
+    for index in bodies.indices {
+      bodies[index].vx += accelerations[index].0 * dt
+      bodies[index].vy += accelerations[index].1 * dt
+      bodies[index].x += bodies[index].vx * dt
+      bodies[index].y += bodies[index].vy * dt
+      let radius = (bodies[index].x * bodies[index].x + bodies[index].y * bodies[index].y).squareRoot()
+      if radius > 1.6 {
+        bodies[index].x *= 0.72
+        bodies[index].y *= 0.72
+        bodies[index].vx *= -0.55
+        bodies[index].vy *= -0.55
+      }
+    }
+  }
+
+  private func adjustNearest(toX x: Double, y: Double, impulse: Double) {
+    guard bodies.count > 1 else { return }
+    var nearest = 1
+    var nearestDistance = Double.greatestFiniteMagnitude
+    for index in 1 ..< bodies.count {
+      let dx = bodies[index].x - x
+      let dy = bodies[index].y - y
+      let distance = dx * dx + dy * dy
+      if distance < nearestDistance { nearestDistance = distance; nearest = index }
+    }
+    bodies[nearest].vx += impulse
+    bodies[nearest].vy += impulse * 0.5
+  }
+
+  private func projectSurface() {
+    surface.withUnsafeMutableBufferPointer { buffer in
+      for index in 0 ..< buffer.count { buffer[index] = 0 }
+      for body in bodies {
+        let px = (body.x / 3 + 0.5) * Double(width - 1)
+        let py = (body.y / 3 + 0.5) * Double(height - 1)
+        let radius = max(1.5, 2.0 + body.mass * 30)
+        let minX = max(1, Int(px - radius))
+        let maxX = min(width - 2, Int(px + radius))
+        let minY = max(1, Int(py - radius))
+        let maxY = min(height - 2, Int(py + radius))
+        for y in minY ... maxY {
+          for x in minX ... maxX {
+            let dx = Double(x) - px
+            let dy = Double(y) - py
+            let falloff = exp(-(dx * dx + dy * dy) / max(1, radius * radius))
+            buffer[y * width + x] += Float(min(1, body.mass * 18 * falloff))
+          }
+        }
+      }
+    }
+    energy = bodies.reduce(0) { $0 + 0.5 * $1.mass * ($1.vx * $1.vx + $1.vy * $1.vy) }
+  }
+
+  private func output() -> KernelOutput {
+    .init(stable: energy.isFinite, checkpoint: .init(scene: scene, tick: tick, digest: "solar-v1-\(tick)-\(energy.bitPattern)"))
+  }
+}

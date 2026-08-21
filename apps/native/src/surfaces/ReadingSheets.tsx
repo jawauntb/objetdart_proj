@@ -40,16 +40,22 @@ export function FoldSheet({
   representation,
   onSelect,
   onClose,
+  onOpenCell,
+  onOpenSolar,
+  onOpenWave,
 }: Readonly<{
   representation: WaveRepresentation;
   onSelect: (representation: WaveRepresentation) => void;
   onClose: () => void;
+  onOpenCell?: () => void;
+  onOpenSolar?: () => void;
+  onOpenWave?: () => void;
 }>) {
   return (
-    <ReadingSheet title="fold / one wave, four readings" onClose={onClose}>
+    <ReadingSheet title="fold / one field, four readings" onClose={onClose}>
       <Text style={styles.intro} allowFontScaling maxFontSizeMultiplier={2}>
-        This is a lens, not a new simulation. Choose how the field speaks while
-        the same sources keep propagating underneath.
+        This is a lens, not a new simulation. Choose how the active field speaks
+        while the same sources keep propagating underneath.
       </Text>
       {REPRESENTATIONS.map((item) => (
         <Pressable
@@ -77,6 +83,46 @@ export function FoldSheet({
           </Text>
         </Pressable>
       ))}
+      {onOpenCell || onOpenSolar || onOpenWave ? (
+        <View style={styles.sceneLinks}>
+          <Text style={styles.sceneHeading} allowFontScaling maxFontSizeMultiplier={2}>
+            visit another scale
+          </Text>
+          {onOpenCell ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Open the living cell scene"
+              onPress={onOpenCell}
+              style={({ pressed }) => [styles.option, pressed ? styles.optionPressed : null]}
+            >
+              <Text style={styles.optionLabel} allowFontScaling maxFontSizeMultiplier={2}>cell / colony</Text>
+              <Text style={styles.optionNote} allowFontScaling maxFontSizeMultiplier={2}>reaction, diffusion, and the first living patterns.</Text>
+            </Pressable>
+          ) : null}
+          {onOpenSolar ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Open the forming solar system scene"
+              onPress={onOpenSolar}
+              style={({ pressed }) => [styles.option, pressed ? styles.optionPressed : null]}
+            >
+              <Text style={styles.optionLabel} allowFontScaling maxFontSizeMultiplier={2}>solar / nursery</Text>
+              <Text style={styles.optionNote} allowFontScaling maxFontSizeMultiplier={2}>gravity, orbits, and a system taking shape.</Text>
+            </Pressable>
+          ) : null}
+          {onOpenWave ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Open the living wave scene"
+              onPress={onOpenWave}
+              style={({ pressed }) => [styles.option, pressed ? styles.optionPressed : null]}
+            >
+              <Text style={styles.optionLabel} allowFontScaling maxFontSizeMultiplier={2}>wave / surface</Text>
+              <Text style={styles.optionNote} allowFontScaling maxFontSizeMultiplier={2}>ripples, signals, spectra, and felt colour.</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
     </ReadingSheet>
   );
 }
@@ -84,12 +130,14 @@ export function FoldSheet({
 export function TrailSheet({
   events,
   onClose,
+  scene = "field",
 }: Readonly<{
   events: readonly TrailEntry[];
   onClose: () => void;
+  scene?: string;
 }>) {
   return (
-    <ReadingSheet title="trail / what you caused" onClose={onClose}>
+    <ReadingSheet title={`trail / what you caused in ${scene}`} onClose={onClose}>
       <Text style={styles.intro} allowFontScaling maxFontSizeMultiplier={2}>
         A quiet record kept on this device. It names causes, not achievements;
         the larger natural history can grow from these same semantic events.
@@ -111,7 +159,7 @@ export function TrailSheet({
                 </Text>
               </View>
               <Text style={styles.optionNote} allowFontScaling maxFontSizeMultiplier={2}>
-                {event.answered ? "the wave answered in the material." : "the gesture answered in hand and sound."}
+                {event.answered ? `the ${scene} material answered.` : "the gesture answered in hand and sound."}
               </Text>
             </View>
           ))}
@@ -245,6 +293,17 @@ const styles = StyleSheet.create({
   },
   optionPressed: {
     backgroundColor: "rgba(20, 28, 46, 0.9)",
+  },
+  sceneLinks: {
+    marginTop: SPACING.large,
+  },
+  sceneHeading: {
+    color: PALETTE.ink.quiet,
+    fontFamily: TYPOGRAPHY.system.family,
+    fontSize: TYPOGRAPHY.system.sizes.caption,
+    textTransform: "uppercase",
+    letterSpacing: 1,
+    marginBottom: SPACING.small,
   },
   optionHeading: {
     flexDirection: "row",
