@@ -75,6 +75,7 @@ assert.equal(nativePackage.dependencies.react, "19.2.3", "native React is locked
 assert.equal(nativePackage.dependencies["react-native"], "0.86.2", "Expo SDK 57 requires React Native 0.86.2");
 assert.match(nativePackage.engines.node, /22\.13/, "native builds must use the supported Node 22 line");
 assert.ok(nativePackage.dependencies["expo-dev-client"], "native development builds need expo-dev-client");
+assert.equal(nativePackage.dependencies["expo-file-system"], "57.0.4", "the native trail adapter must pin the Expo file-system API to the SDK 57 baseline");
 assert.ok(nativePackage.dependencies["expo-router"], "native shell needs Expo Router");
 assert.equal(nativePackage.dependencies["@objet/universe-contracts"], "*", "native bridge consumes the shared universe contract package directly");
 assert.equal(
@@ -311,11 +312,17 @@ const guideData = readText("apps/native/src/guide/guideData.ts");
 const guideSheet = readText("apps/native/src/guide/GuideSheet.tsx");
 const artDirection = readText("docs/native/art-direction.md");
 const worldRoute = readText("apps/native/app/world.tsx");
+const sessionTrail = readText("apps/native/src/persistence/SessionTrail.ts");
 assert.match(worldRoute, /onOpenFold=/, "world route must wire the fold affordance to a real surface");
 assert.match(worldRoute, /onOpenTrail=/, "world route must wire the trail affordance to a real surface");
 assert.match(worldRoute, /<FoldSheet/, "world route must render the fold surface when requested");
 assert.match(worldRoute, /<TrailSheet/, "world route must render the trail surface when requested");
 assert.match(worldRoute, /representation=\{representation\}/, "world route must pass the selected lens to the native surface");
+assert.match(worldRoute, /loadSessionTrail/, "world route must recover the local trail before enabling touch");
+assert.match(worldRoute, /trailReady\s*&&/, "world route must not accept a gesture before trail recovery completes");
+assert.match(sessionTrail, /SESSION_TRAIL_VERSION = 1/, "session trail storage must be versioned");
+assert.match(sessionTrail, /SESSION_TRAIL_LIMIT = 120/, "session trail storage must remain bounded");
+assert.match(sessionTrail, /writeQueue/, "session trail writes must serialize rapid gesture appends");
 
 assert.match(designTokens, /export const PALETTE/, "native design tokens must declare a shared palette");
 assert.match(designTokens, /REDUCED_MOTION_EQUIVALENTS/, "native design tokens must declare reduced-motion equivalents that preserve state");
@@ -537,7 +544,7 @@ assert.ok(
 );
 assert.match(worldRoute, /revealAfter/, "the route must keep what the visitor has caused, not a frozen placeholder");
 assert.match(worldRoute, /onGuideVisibilityChange/, "intervention pauses while a reading surface is open");
-assert.match(worldRoute, /enabled=\{!reading\s*&&/, "the surface closes while any reading surface has focus");
+assert.match(worldRoute, /enabled=\{trailReady\s*&&\s*!reading/, "the surface waits for trail recovery and closes while any reading surface has focus");
 
 // No affordance that leads nowhere: a chip answering a press with nothing is
 // friction wearing the costume of a feature.
