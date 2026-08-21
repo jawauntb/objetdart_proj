@@ -122,6 +122,9 @@ assert.ok(eas.build.production, "a release profile must exist");
 assert.equal(eas.cli.appVersionSource, "remote", "EAS must own iOS buildNumber so every store submit is unique");
 assert.equal(eas.build.production.autoIncrement, true, "production must auto-increment the remote iOS buildNumber");
 assert.equal(eas.build.production.node, "22.13.0", "EAS production must use the native Node 22.13 line");
+assert.equal(eas.build["simulator-release"].developmentClient, false, "release simulator must run the standalone app shell");
+assert.equal(eas.build["simulator-release"].distribution, "internal", "release simulator builds must remain directly installable");
+assert.equal(eas.build["simulator-release"].ios.simulator, true, "release simulator profile must target the simulator");
 assert.equal(eas.submit.production.ios.bundleIdentifier, "com.objetdart.universe", "TestFlight submit must name the store bundle id");
 assert.equal(eas.submit.production.ios.appleTeamId, "58877MPK38", "TestFlight submit must name the Apple team");
 assert.equal(eas.submit.production.ios.ascAppId, "6803362991", "TestFlight submit must name the App Store Connect app so CI can run non-interactive");
@@ -155,6 +158,7 @@ const universePodspec = readText("apps/native/modules/objet-universe/ios/ObjetUn
 const universeHost = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/UniverseHost.swift");
 const universeClock = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/UniverseClock.swift");
 const renderHost = readText("packages/objet-universe-kit/Sources/ObjetUniverseRender/RenderHost.swift");
+assert.match(universeView, /maximum:\s*60,\s*preferred:\s*60/, "native presentation must stay within a 60 Hz frame budget");
 assert.match(universeModule, /ObjetUniverseModule/, "the local Expo module must register the native universe module");
 assert.match(universeBridge, /requireNativeViewManager/, "React must use the native universe view rather than recreate a renderer");
 assert.match(universeModuleDefinition, /Name\("ObjetUniverse"\)/, "the native module name must match the JS bridge");

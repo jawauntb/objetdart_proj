@@ -252,6 +252,13 @@ public enum WaveShaderSource {
     }
 
     float3 colour = mix(kNightDeep, kSeaDeep, 0.55 + 0.45 * breath);
+    // Resting amplitudes are physically small beside a struck crest, but they
+    // still have sign and structure. Map that real low-amplitude band into a
+    // visible trough/crest contrast instead of inventing decorative motion.
+    float restingContrast = smoothstep(0.008, 0.12, abs(amplitude));
+    float3 restingTone = amplitude >= 0.0 ? kSeaLit : kNightDeep;
+    colour = mix(colour, restingTone, restingContrast * 0.48);
+    colour += kSeaGlimmer * restingContrast * (0.06 + 0.08 * breath);
     colour = mix(colour, kSeaLit, smoothstep(-0.35, 0.85, amplitude));
     colour = mix(colour, kSeaGlimmer, smoothstep(0.55, 1.05, amplitude) * 0.7);
     // A crest or trough that reaches the medium's declared range is the

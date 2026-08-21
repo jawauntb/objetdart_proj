@@ -49,6 +49,18 @@ final class UniverseClockTests: XCTestCase {
     XCTAssertEqual(next.steps.count, 1)
   }
 
+  func testProductionDefaultDropsLargeDebtAfterAtMostTwoSteps() {
+    var clock = UniverseClock()
+    _ = clock.advance(to: 0)
+
+    let stalled = clock.advance(to: 10)
+    let next = clock.advance(to: 10 + UniverseClock.defaultStepSeconds)
+
+    XCTAssertEqual(stalled.steps.count, 2, "one presentation frame must never monopolise the main thread")
+    XCTAssertTrue(stalled.droppedDebt, "discarded wall-clock debt must remain observable")
+    XCTAssertEqual(next.steps.count, 1, "discarded debt must not leak into following frames")
+  }
+
   func testOutOfOrderActionsKeepTimestampOrderAtFixedBoundaries() {
     var clock = UniverseClock(stepSeconds: 1.0 / 120.0, maxStepsPerFrame: 120)
     _ = clock.advance(to: 0)

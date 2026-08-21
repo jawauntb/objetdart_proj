@@ -204,6 +204,10 @@ public final class ObjetUniverseView: ExpoView {
   private func startDisplayLinkIfNeeded() {
     guard displayLink == nil else { return }
     let link = CADisplayLink(target: displayLinkTarget, selector: #selector(DisplayLinkTarget.tick(_:)))
+    // The solver advances at 120 fixed ticks per second, two per presentation.
+    // A ProMotion display must not silently double the main-thread callback
+    // rate: touch delivery and Metal submission share that thread.
+    link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
     link.add(to: .main, forMode: .common)
     displayLink = link
   }

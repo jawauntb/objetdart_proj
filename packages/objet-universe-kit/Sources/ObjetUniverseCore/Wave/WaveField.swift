@@ -175,6 +175,8 @@ public final class WaveField {
   public func step(secondsPerStep: Double) {
     let w = width
     let h = height
+    var kinetic = 0.0
+    var gradient = 0.0
 
     // Fixed edges: the medium is a bounded tank, exactly as the web law states.
     for x in 0 ..< w {
@@ -190,8 +192,28 @@ public final class WaveField {
         let centre = Double(current[i])
         let laplacian = Double(current[i - 1]) + Double(current[i + 1])
           + Double(current[i - w]) + Double(current[i + w]) - 4 * centre
-        next[i] = Float((2 * centre - Double(previous[i]) + cSquared * laplacian) * damping)
+        let value = Float((2 * centre - Double(previous[i]) + cSquared * laplacian) * damping)
+        next[i] = value
+
+        // Fold the exact discrete-energy ledger into the stencil while this
+        // row is hot. Every lattice edge is counted once: left/up here, then
+        // the fixed right and bottom walls below. This is the same quantity
+        // as a second full-field scan, without rereading all three buffers.
+        let nextValue = Double(value)
+        let velocity = nextValue - centre
+        kinetic += velocity * velocity
+        let leftSlope = nextValue - Double(next[i - 1])
+        let upperSlope = nextValue - Double(next[i - w])
+        gradient += leftSlope * leftSlope + upperSlope * upperSlope
       }
+      let rightSlope = Double(next[row + w - 2])
+      gradient += rightSlope * rightSlope
+    }
+
+    let bottomInterior = (h - 2) * w
+    for x in 1 ..< (w - 1) {
+      let bottomSlope = Double(next[bottomInterior + x])
+      gradient += bottomSlope * bottomSlope
     }
 
     elapsedSeconds += secondsPerStep
@@ -202,41 +224,47 @@ public final class WaveField {
           * sin(source.radiansPerSecond * elapsedSeconds + source.phase)
       }
       for cell in swellCells {
-        next[cell.index] += Float(swellAmplitudes[cell.source] * Double(cell.weight))
+        let index = cell.index
+        let oldValue = Double(next[index])
+        let drivenValue = next[index] + Float(swellAmplitudes[cell.source] * Double(cell.weight))
+        let newValue = Double(drivenValue)
+
+        let oldVelocity = oldValue - Double(current[index])
+        let newVelocity = newValue - Double(current[index])
+        kinetic += newVelocity * newVelocity - oldVelocity * oldVelocity
+
+        // The source changes the four edges incident to this cell. Correct
+        // their already-counted contributions in place; overlapping swells
+        // remain exact because each addition observes the last written value.
+        let leftValue = Double(next[index - 1])
+        let oldLeftSlope = oldValue - leftValue
+        let newLeftSlope = newValue - leftValue
+        gradient += newLeftSlope * newLeftSlope - oldLeftSlope * oldLeftSlope
+
+        let rightValue = Double(next[index + 1])
+        let oldRightSlope = oldValue - rightValue
+        let newRightSlope = newValue - rightValue
+        gradient += newRightSlope * newRightSlope - oldRightSlope * oldRightSlope
+
+        let upperValue = Double(next[index - w])
+        let oldUpperSlope = oldValue - upperValue
+        let newUpperSlope = newValue - upperValue
+        gradient += newUpperSlope * newUpperSlope - oldUpperSlope * oldUpperSlope
+
+        let lowerValue = Double(next[index + w])
+        let oldLowerSlope = oldValue - lowerValue
+        let newLowerSlope = newValue - lowerValue
+        gradient += newLowerSlope * newLowerSlope - oldLowerSlope * oldLowerSlope
+        next[index] = drivenValue
       }
     }
 
-    accumulateEnergy()
+    energy = 0.5 * kinetic + 0.5 * cSquared * gradient
 
     let stale = previous
     previous = current
     current = next
     next = stale
-  }
-
-  private func accumulateEnergy() {
-    let w = width
-    let h = height
-    var kinetic = 0.0
-    var gradient = 0.0
-    for y in 0 ..< h {
-      let row = y * w
-      for x in 0 ..< w {
-        let i = row + x
-        let value = Double(next[i])
-        let velocity = value - Double(current[i])
-        kinetic += velocity * velocity
-        if x + 1 < w {
-          let slope = Double(next[i + 1]) - value
-          gradient += slope * slope
-        }
-        if y + 1 < h {
-          let slope = Double(next[i + w]) - value
-          gradient += slope * slope
-        }
-      }
-    }
-    energy = 0.5 * kinetic + 0.5 * cSquared * gradient
   }
 
   /// A resting sea is not an empty one: the seed writes a few broad swells so

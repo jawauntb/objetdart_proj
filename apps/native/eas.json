@@ -15,6 +15,14 @@
         "simulator": true
       }
     },
+    "simulator-release": {
+      "developmentClient": false,
+      "distribution": "internal",
+      "node": "22.13.0",
+      "ios": {
+        "simulator": true
+      }
+    },
     "preview": {
       "distribution": "internal"
     },

@@ -44,7 +44,7 @@ public struct UniverseClock: Sendable {
 
   public init(
     stepSeconds: TimeInterval = UniverseClock.defaultStepSeconds,
-    maxStepsPerFrame: Int = 12,
+    maxStepsPerFrame: Int = 2,
     maxPendingActions: Int = 1_024
   ) {
     precondition(stepSeconds > 0)
