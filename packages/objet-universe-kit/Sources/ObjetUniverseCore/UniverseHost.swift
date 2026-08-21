@@ -20,6 +20,7 @@ public final class UniverseHost {
     let command: SemanticCommand
   }
   private var pendingCommands: [Int: PendingCommand] = [:]
+  private var committedCommandReceipts: [CommittedCommandReceipt] = []
   private var suspended = false
   private var retired = false
 
@@ -69,11 +70,24 @@ public final class UniverseHost {
           record(.outputQuarantined)
           continue
         }
-        _ = promote(activeKernel.apply(pending.command))
+        let output = activeKernel.apply(pending.command)
+        if promote(output) == .committed {
+          committedCommandReceipts.append(.init(
+            scene: pending.scene,
+            command: pending.command,
+            checkpoint: output.checkpoint,
+            historyKind: output.historyKind
+          ))
+        }
       }
       _ = promote(activeKernel.advance(ticks: 1))
     }
     return frame
+  }
+
+  public func drainCommittedCommandReceipts() -> [CommittedCommandReceipt] {
+    defer { committedCommandReceipts.removeAll(keepingCapacity: true) }
+    return committedCommandReceipts
   }
 
   public func suspend() {
@@ -118,6 +132,7 @@ public final class UniverseHost {
     if !suspended { activeKernel.freeze() }
     activeKernel.retire()
     pendingCommands.removeAll(keepingCapacity: false)
+    committedCommandReceipts.removeAll(keepingCapacity: false)
     clock.suspend()
     retired = true
   }

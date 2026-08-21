@@ -4,6 +4,8 @@ import type { StyleProp, ViewStyle } from "react-native";
 import type { ActionLayer, ActionSource, SemanticVerb } from "@objet/universe-contracts";
 import type { NativeGrammarVerb } from "../../../src/universe/actions.ts";
 
+export type NativeHistoryKind = "birth" | "division" | "merge" | "collision" | "discovery" | "branch" | "intervention";
+
 /**
  * One committed gesture, as the universe recorded it.
  *
@@ -20,6 +22,12 @@ export type SurfaceCommand = Readonly<{
   source: ActionSource;
   intensity: number;
   answered: boolean;
+  /** Present only after the native host applies and checkpoints the command. */
+  eventId?: string;
+  scene?: "wave" | "cell" | "solar" | "molecules" | "atoms";
+  logicalTick?: number | null;
+  checkpointDigest?: string | null;
+  historyKind?: NativeHistoryKind;
 }>;
 
 export type ObjetUniverseSurfaceProps = {

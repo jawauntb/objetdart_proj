@@ -111,7 +111,7 @@ public final class SolarKernel: SurfaceSimulationKernel {
       break
     }
     projectSurface()
-    return output()
+    return output(historyKind: command.verb == .ceremony ? .birth : nil)
   }
 
   public func advance(ticks: Int) -> KernelOutput {
@@ -277,7 +277,7 @@ public final class SolarKernel: SurfaceSimulationKernel {
     }
   }
 
-  private func output() -> KernelOutput {
-    .init(stable: energy.isFinite, checkpoint: .init(scene: scene, tick: tick, digest: "solar-v2-\(tick)-\(representation)-\(energy.bitPattern)"))
+  private func output(historyKind: NaturalHistoryKind? = nil) -> KernelOutput {
+    .init(stable: energy.isFinite, checkpoint: .init(scene: scene, tick: tick, digest: "solar-v2-\(tick)-\(representation)-\(energy.bitPattern)"), historyKind: historyKind)
   }
 }

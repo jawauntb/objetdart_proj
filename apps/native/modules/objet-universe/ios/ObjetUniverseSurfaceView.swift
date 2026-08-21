@@ -45,6 +45,9 @@ public final class ObjetUniverseSurfaceView: ExpoView {
       onDiscovery: { _ in }
     )
     input = SurfaceInput(surface: self, router: router)
+    UniverseRuntime.shared.setEventSink { [weak self] payload in
+      self?.onSemanticCommand(payload)
+    }
   }
 
   /// The route closes the surface while a reading surface is open: the
@@ -94,14 +97,17 @@ public final class ObjetUniverseSurfaceView: ExpoView {
       origin: origin
     )
     let grammarVerb = UniverseRuntime.grammarVerb(for: verb)
-    onSemanticCommand([
-      "verb": grammarVerb.rawValue,
-      "semanticVerb": rawVerb,
-      "layer": "accessibility",
-      "source": "assistive",
-      "intensity": assistiveIntensity,
-      "answered": expressed,
-    ])
+    if !expressed {
+      onSemanticCommand([
+        "eventId": value,
+        "verb": grammarVerb.rawValue,
+        "semanticVerb": rawVerb,
+        "layer": "accessibility",
+        "source": "assistive",
+        "intensity": assistiveIntensity,
+        "answered": false,
+      ])
+    }
   }
 
   public override func didMoveToWindow() {
@@ -119,15 +125,15 @@ public final class ObjetUniverseSurfaceView: ExpoView {
       )
     }
     let expressed = UniverseRuntime.shared.commit(routed, origin: origin)
-    onSemanticCommand([
-      "verb": routed.verb.rawValue,
-      "semanticVerb": GestureRouter.semanticVerb(for: routed.verb).rawValue,
-      "layer": routed.layer.rawValue,
-      "source": routed.source.rawValue,
-      "intensity": routed.intensity,
-      // Whether the medium said it in its own material, rather than only in
-      // the hand and the ear. The guide gates on this.
-      "answered": expressed,
-    ])
+    if !expressed {
+      onSemanticCommand([
+        "verb": routed.verb.rawValue,
+        "semanticVerb": GestureRouter.semanticVerb(for: routed.verb).rawValue,
+        "layer": routed.layer.rawValue,
+        "source": routed.source.rawValue,
+        "intensity": routed.intensity,
+        "answered": false,
+      ])
+    }
   }
 }

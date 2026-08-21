@@ -1,4 +1,4 @@
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import type { NativeSceneId } from "@objet/universe-contracts";
@@ -7,18 +7,16 @@ import { UniverseActions } from "../accessibility/UniverseActions";
 import type { NativeSemanticCommand } from "../universe/actions";
 import { NativeChrome } from "../design/NativeChrome";
 import { EMPTY_REVEAL, revealAfter, type SceneReveal } from "../guide/reveal";
-import {
-  FoldSheet,
-  TrailSheet,
-  type SceneLensIndex,
-} from "../surfaces/ReadingSheets";
+import { FoldSheet, type SceneLensIndex } from "../surfaces/ReadingSheets";
 import {
   appendSessionTrail,
-  loadSessionTrail,
+  loadSessionTrailState,
   makeTrailEntry,
   SESSION_TRAIL_LIMIT,
+  switchSessionBranch,
   type TrailEntry,
 } from "../persistence/SessionTrail";
+import { mergeTrailEntries } from "../trail/sessionState";
 import {
   EMPTY_UNIVERSE_PROGRESS,
   cycleLens,
@@ -47,14 +45,18 @@ const SCENE_LABEL: Record<NativeSceneId, string> = {
 export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
   const router = useRouter();
   const [reveal, setReveal] = useState<SceneReveal>(EMPTY_REVEAL);
-  const [reading, setReading] = useState(false);
+  const [routeFocused, setRouteFocused] = useState(true);
   const [foldOpen, setFoldOpen] = useState(false);
-  const [trailOpen, setTrailOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
   const [representation, setRepresentation] = useState<SceneLensIndex>(0);
-  const [trail, setTrail] = useState<readonly TrailEntry[]>([]);
   const [progress, setProgress] = useState<UniverseProgress>(EMPTY_UNIVERSE_PROGRESS);
   const progressRef = useRef(progress);
+  const trailRef = useRef<readonly TrailEntry[]>([]);
   const trailSequence = useRef(0);
+  const activeBranchRef = useRef("local-main");
+  const trailHydratedRef = useRef(false);
+  const interactedBeforeTrailHydrationRef = useRef(false);
+  const pendingProgressCommandsRef = useRef<SurfaceCommand[]>([]);
   const [assistiveCommand, setAssistiveCommand] = useState<{
     id: string;
     verb: NativeSemanticCommand["action"]["action"]["verb"];
@@ -64,14 +66,57 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
   } | null>(null);
   const unlockedRepresentations = unlockedLenses(progress, scene);
 
+  useFocusEffect(useCallback(() => {
+    let focusActive = true;
+    if (trailHydratedRef.current) {
+      // A trail overlay may have switched branches. Hold input for the brief
+      // local read so the first returning touch cannot land on the old branch.
+      setRouteFocused(false);
+      void loadSessionTrailState().then((trailState) => {
+        if (!focusActive) return;
+        activeBranchRef.current = trailState.activeBranchId;
+        trailRef.current = mergeTrailEntries(trailRef.current, trailState.entries);
+        trailSequence.current = Math.max(trailSequence.current, trailRef.current.length);
+        setRouteFocused(true);
+      });
+    } else {
+      setRouteFocused(true);
+    }
+    return () => {
+      focusActive = false;
+      setRouteFocused(false);
+    };
+  }, []));
+
   useEffect(() => {
     let mounted = true;
-    void Promise.all([loadSessionTrail(), loadUniverseProgress()]).then(([entries, savedProgress]) => {
+    void Promise.all([loadSessionTrailState(), loadUniverseProgress()]).then(([trailState, savedProgress]) => {
+      const mergedEntries = mergeTrailEntries(trailRef.current, trailState.entries);
+      trailSequence.current = Math.max(trailSequence.current, mergedEntries.length);
+      trailRef.current = mergedEntries;
+      if (interactedBeforeTrailHydrationRef.current) {
+        // The first touch is authoritative for the branch the visitor already
+        // inhabited. Persist that choice after the disk read instead of
+        // silently moving subsequent gestures to a different saved branch.
+        void switchSessionBranch(activeBranchRef.current).catch(() => {
+          activeBranchRef.current = trailState.activeBranchId;
+        });
+      } else {
+        activeBranchRef.current = trailState.activeBranchId;
+      }
+      trailHydratedRef.current = true;
+      let mergedProgress = savedProgress;
+      for (const command of pendingProgressCommandsRef.current) {
+        mergedProgress = recordProgress(mergedProgress, command.scene ?? scene, command);
+      }
+      pendingProgressCommandsRef.current = [];
+      progressRef.current = mergedProgress;
+      if (mergedProgress !== savedProgress) void saveUniverseProgress(mergedProgress);
       if (!mounted) return;
-      trailSequence.current = entries.length;
-      setTrail(entries);
-      setProgress(savedProgress);
-      progressRef.current = savedProgress;
+      setProgress(mergedProgress);
+      setReveal((current) => mergedEntries
+        .filter((entry) => entry.scene === scene && entry.answered)
+        .reduce((next, entry) => revealAfter(next, entry), current));
     });
     return () => {
       mounted = false;
@@ -91,27 +136,44 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
 
   const onSemanticCommand = useCallback((event: { nativeEvent: SurfaceCommand }) => {
     const command = event.nativeEvent;
-    setReveal((current) => revealAfter(current, command));
-    const entry = makeTrailEntry(command, trailSequence.current + 1);
-    trailSequence.current += 1;
-    setTrail((current) => [...current, entry].slice(-SESSION_TRAIL_LIMIT));
-    void appendSessionTrail(entry);
-    const nextProgress = recordProgress(progressRef.current, scene, command);
-    if (nextProgress !== progressRef.current) {
-      progressRef.current = nextProgress;
-      setProgress(nextProgress);
-      void saveUniverseProgress(nextProgress);
+    const eventScene = command.scene ?? scene;
+    if (!trailHydratedRef.current) {
+      interactedBeforeTrailHydrationRef.current = true;
     }
-    if (command.answered && command.semanticVerb === "lens") {
-      setRepresentation((current) => cycleLens(nextProgress, scene, current, 1));
-    } else if (command.answered && command.semanticVerb === "step-back") {
-      setRepresentation((current) => cycleLens(nextProgress, scene, current, -1));
+    if (command.answered) {
+      const activeBranchId = activeBranchRef.current;
+      const parentEvent = trailRef.current.slice().reverse().find((entry) => entry.branchId === activeBranchId);
+      const entry = makeTrailEntry(command, trailSequence.current + 1, Date.now(), {
+        scene: eventScene,
+        branchId: activeBranchId,
+        parentEventId: parentEvent?.id ?? null,
+      });
+      trailSequence.current += 1;
+      trailRef.current = [...trailRef.current, entry].slice(-SESSION_TRAIL_LIMIT);
+      void appendSessionTrail(entry).then(() => {
+        // The native host has committed the command, but reveal/progression
+        // acknowledges it only after the local history write also succeeds.
+        if (!trailHydratedRef.current) pendingProgressCommandsRef.current.push(command);
+        if (eventScene === scene) setReveal((current) => revealAfter(current, command));
+        const nextProgress = recordProgress(progressRef.current, eventScene, command);
+        if (nextProgress !== progressRef.current) {
+          progressRef.current = nextProgress;
+          setProgress(nextProgress);
+          if (trailHydratedRef.current) void saveUniverseProgress(nextProgress);
+        }
+        if (eventScene === scene && command.semanticVerb === "lens") {
+          setRepresentation((current) => cycleLens(nextProgress, scene, current, 1));
+        } else if (eventScene === scene && command.semanticVerb === "step-back") {
+          setRepresentation((current) => cycleLens(nextProgress, scene, current, -1));
+        }
+      }).catch(() => {
+        trailRef.current = trailRef.current.filter((candidate) => candidate.id !== entry.id);
+      });
     }
   }, [scene]);
 
   const closeReadings = useCallback(() => {
     setFoldOpen(false);
-    setTrailOpen(false);
   }, []);
   const openScene = useCallback((destination: NativeSceneId) => {
     closeReadings();
@@ -131,7 +193,7 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
           // Persistence hydrates beside the material; it must never gate the
           // first touch. The native kernel is deterministic from launch and
           // the trail/progression files are convenience state, not authority.
-          enabled={!reading && !foldOpen && !trailOpen}
+          enabled={routeFocused && !foldOpen && !guideOpen}
           representation={representation}
           maxRepresentation={unlockedRepresentations[unlockedRepresentations.length - 1]}
           assistiveVerb={assistiveCommand?.verb}
@@ -146,14 +208,11 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
         scene={scene}
         reveal={reveal}
         onOpenFold={() => {
-          setTrailOpen(false);
           setFoldOpen(true);
         }}
-        onOpenTrail={() => {
-          setFoldOpen(false);
-          setTrailOpen(true);
-        }}
-        onGuideVisibilityChange={setReading}
+        onOpenTrail={() => router.push(`/trail?scene=${scene}`)}
+        onOpenGuide={(access) => router.push(`/guide?scene=${scene}&access=${access}`)}
+        onGuideVisibilityChange={setGuideOpen}
       />
       {foldOpen ? (
         <FoldSheet
@@ -166,7 +225,6 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
           onOpenScene={openScene}
         />
       ) : null}
-      {trailOpen ? <TrailSheet scene={SCENE_LABEL[scene]} events={trail} onClose={closeReadings} /> : null}
     </View>
   );
 }

@@ -134,6 +134,7 @@ public final class MoleculeKernel: SurfaceSimulationKernel {
   public func apply(_ command: SemanticCommand) -> KernelOutput {
     let intensity = min(max(command.intensity, 0), 1)
     let point = command.origin ?? .centre
+    let priorMoleculeCount = molecules.count
     switch command.verb {
     case .material:
       seedMolecule(x: point.x * 2 - 1, y: point.y * 2 - 1, intensity: intensity)
@@ -153,7 +154,7 @@ public final class MoleculeKernel: SurfaceSimulationKernel {
       break
     }
     projectSurface()
-    return output()
+    return output(historyKind: command.verb == .grow && molecules.count > priorMoleculeCount ? .birth : nil)
   }
 
   public func advance(ticks: Int) -> KernelOutput {
@@ -336,7 +337,7 @@ public final class MoleculeKernel: SurfaceSimulationKernel {
     ScalarFieldPainter.gaussian(x: x, y: y, radius: radius, value: value, width: width, height: height, into: &output)
   }
 
-  private func output() -> KernelOutput {
-    .init(stable: energy.isFinite, checkpoint: .init(scene: scene, tick: tick, digest: "molecules-v1-\(tick)-\(representation)-\(molecules.count)-\(reactions.count)-\(energy.bitPattern)"))
+  private func output(historyKind: NaturalHistoryKind? = nil) -> KernelOutput {
+    .init(stable: energy.isFinite, checkpoint: .init(scene: scene, tick: tick, digest: "molecules-v1-\(tick)-\(representation)-\(molecules.count)-\(reactions.count)-\(energy.bitPattern)"), historyKind: historyKind)
   }
 }

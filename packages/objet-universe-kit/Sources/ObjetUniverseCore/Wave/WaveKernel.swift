@@ -163,7 +163,7 @@ public final class WaveKernel: SurfaceSimulationKernel {
          .timeDilation, .gravity, .night, .breath:
       break
     }
-    return output()
+    return output(historyKind: command.verb == .ceremony ? .discovery : nil)
   }
 
   /// Footprint of an intervention. Continuous in intensity and bounded well
@@ -182,13 +182,14 @@ public final class WaveKernel: SurfaceSimulationKernel {
     return output()
   }
 
-  private func output() -> KernelOutput {
+  private func output(historyKind: NaturalHistoryKind? = nil) -> KernelOutput {
     // Stability is the medium's own report: a Courant violation reaches
     // infinity within a few dozen steps, and the host quarantines the frame
     // instead of promoting a checkpoint nobody can replay.
     .init(
       stable: field.energy.isFinite,
-      checkpoint: .init(scene: scene, tick: tick, digest: digest())
+      checkpoint: .init(scene: scene, tick: tick, digest: digest()),
+      historyKind: historyKind
     )
   }
 
