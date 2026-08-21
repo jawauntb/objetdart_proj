@@ -91,6 +91,7 @@ export const UNIVERSE_ACTION_LABELS: readonly UniverseActionLabel[] = Object.fre
       x: ACCESSIBILITY_SYNTHETIC_POINT.x,
       y: ACCESSIBILITY_SYNTHETIC_POINT.y,
       intensity: 0.5,
+      phase: "release",
     }),
   }),
   Object.freeze({
@@ -104,6 +105,7 @@ export const UNIVERSE_ACTION_LABELS: readonly UniverseActionLabel[] = Object.fre
       x: ACCESSIBILITY_SYNTHETIC_POINT.x,
       y: ACCESSIBILITY_SYNTHETIC_POINT.y,
       intensity: 0.6,
+      phase: "release",
     }),
   }),
   Object.freeze({
@@ -117,6 +119,7 @@ export const UNIVERSE_ACTION_LABELS: readonly UniverseActionLabel[] = Object.fre
       x: ACCESSIBILITY_SYNTHETIC_POINT.x,
       y: ACCESSIBILITY_SYNTHETIC_POINT.y,
       intensity: 0.5,
+      phase: "release",
     }),
   }),
   Object.freeze({

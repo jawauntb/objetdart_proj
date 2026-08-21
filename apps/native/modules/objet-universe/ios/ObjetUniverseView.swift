@@ -100,6 +100,10 @@ public final class ObjetUniverseView: ExpoView {
     accessibilityLabel = "A living wave field"
     installMaterialRenderer()
     observeApplicationLifecycle()
+    // The one seam a route may reach the kernel through. The registry holds
+    // this view weakly, so a remount replaces it and a teardown clears it
+    // without a nonisolated deinit having to call back in.
+    UniverseRuntime.shared.attach(self)
   }
 
   deinit {
@@ -140,6 +144,23 @@ public final class ObjetUniverseView: ExpoView {
     startDisplayLinkIfNeeded()
     displayLink?.isPaused = false
   }
+
+  /// Whether the medium currently mounted says this verb in its own
+  /// material. The input layer asks before it commits, and answers in the
+  /// hand and the ear when the answer is no.
+  func expresses(_ verb: SemanticVerb) -> Bool {
+    host.expresses(verb)
+  }
+
+  /// Commit one semantic act. The host schedules it onto a fixed tick — never
+  /// onto a presentation frame — so the same gestures replay to the same sea.
+  func commit(_ command: SemanticCommand) {
+    host.apply(command)
+  }
+
+  /// The authoritative tick, for the sensory buses: sight, sound, and touch
+  /// all read one clock or they are three separate events.
+  var logicalTick: Int { host.telemetry.logicalTick }
 
   public func setScene(_ rawScene: String) {
     guard let destination = SceneID(rawValue: rawScene) else { return }

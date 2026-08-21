@@ -150,7 +150,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     semantic: "ceremony",
     reveal: "Express",
     sceneNotes: {
-      wave: "the current field is committed as a kept composition.",
+      wave: "the whole tank rings in phase with the point you held.",
       cell: "the colony's current lineage is committed as a named strain.",
       solar: "the current system is committed as a saved star.",
     },
@@ -202,7 +202,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     semantic: "material",
     reveal: "Express",
     sceneNotes: {
-      wave: "a moving source is released with residual velocity.",
+      wave: "the release lands as a last impulse, scaled by the speed the hand had.",
       cell: "a daughter cell is thrown out of the parent's neighbourhood.",
       solar: "a body is ejected with the hand's angular velocity.",
     },

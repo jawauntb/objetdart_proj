@@ -129,19 +129,27 @@ export type AssembleInput = Readonly<{
 }>;
 
 /**
+ * Phase of a contact that lasts. A hold and a span are both intervals, and
+ * both have to say which end of the interval they are reporting: the tick is
+ * what keeps duration an axis rather than a switch, and the release is what
+ * commits. Mirrors `GesturePhase` in `GestureRouter.swift`.
+ */
+export type GesturePhase = "enter" | "tick" | "release";
+
+/**
  * A single gesture-shape descriptor the router normalizes each recognizer
  * emit into. Native touch, VoiceOver custom actions, and keyboard shortcuts
  * all feed this shape — never a raw UIGestureRecognizer.
  */
 export type NativeGestureShape =
   | Readonly<{ kind: "tap"; fingers: 1 | 2 | 3; count: number; x: number; y: number; intensity: number }>
-  | Readonly<{ kind: "hold"; fingers: 1 | 2 | 3; elapsedMs: number; x: number; y: number; intensity: number }>
+  | Readonly<{ kind: "hold"; fingers: 1 | 2 | 3; elapsedMs: number; x: number; y: number; intensity: number; phase: GesturePhase }>
   | Readonly<{ kind: "drag"; fingers: 1 | 2 | 3; dx: number; dy: number; vx: number; vy: number; x: number; y: number }>
   | Readonly<{ kind: "flick"; fingers: 1 | 2 | 3; speed: number; angle: number; x: number; y: number }>
   | Readonly<{ kind: "twist"; fingers: 2 | 3; angleRad: number; velocity: number }>
   | Readonly<{ kind: "pinch"; scale: number; velocity: number }>
   | Readonly<{ kind: "scrub"; winding: number; angularVelocity: number; cx: number; cy: number }>
-  | Readonly<{ kind: "span"; phase: "enter" | "tick" | "release"; spread: number; elapsedMs: number; cx: number; cy: number }>
+  | Readonly<{ kind: "span"; phase: GesturePhase; spread: number; elapsedMs: number; cx: number; cy: number }>
   | Readonly<{ kind: "shake"; intensity: number }>
   | Readonly<{ kind: "tilt"; beta: number; gamma: number }>
   | Readonly<{ kind: "knock"; intensity: number }>
@@ -261,7 +269,13 @@ export function resolveVerbFromShape(shape: NativeGestureShape): { verb: Semanti
     }
     case "hold": {
       if (shape.fingers >= 3) return { verb: "time-dilation", layer: "world" };
-      if (shape.elapsedMs >= NATIVE_GESTURE_THRESHOLDS.ceremonyMs) return { verb: "ceremony", layer: "material" };
+      // The ceremony is committed when the hand lets go, never on the way
+      // past the threshold: a hold that is still deepening is still a dwell,
+      // which is what keeps duration an axis instead of a switch. Mirrors
+      // `roomGestureBindings` in `src/lib/gesture/defaults.ts`.
+      if (shape.phase !== "tick" && shape.elapsedMs >= NATIVE_GESTURE_THRESHOLDS.ceremonyMs) {
+        return { verb: "ceremony", layer: "material" };
+      }
       return { verb: "grow", layer: "material" };
     }
     case "drag": {
@@ -312,6 +326,7 @@ export function payloadFromShape(shape: NativeGestureShape): ActionPayload {
       payload.elapsedMs = shape.elapsedMs;
       payload.x = shape.x;
       payload.y = shape.y;
+      payload.phase = shape.phase;
       return Object.freeze(payload);
     case "drag":
       payload.fingers = shape.fingers;

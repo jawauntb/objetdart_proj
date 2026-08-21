@@ -54,6 +54,59 @@ material is drawn into it by `WaveMaterialRenderer` from the field the active
   `scripts/native/fixtures/wave-reference.json` pins, and it decays to black
   within minutes.
 
+## What touch does
+
+The universe view is mounted below every route and cannot be touched there:
+UIKit hit-tests the topmost view at a point, so every navigator screen above
+it answers first even when it is fully transparent. The touchable half is
+therefore `<ObjetUniverseSurface>` — a transparent native view the route
+mounts inside itself, holding the recognisers and drawing nothing. The chrome
+sits above it and keeps its own taps; everything else falls through to the
+water.
+
+One contact travels one path, and `scripts/native/test-workspace.mjs` guards
+each hop:
+
+1. `SurfaceInput` normalises a UIKit recogniser into a `NativeGestureShape`.
+   It holds no threshold of its own — every number comes from
+   `NativeGestureThresholds`, which is the verbatim mirror of
+   `src/lib/gesture/core.ts`.
+2. `GestureRouter` decides what the shape *means*. Finger count addresses the
+   stack: one finger is the material, two the representation, three the
+   world-law. A tap climbs the train's rungs, and a press keeps arriving at
+   the wire contract's sample rate so duration stays an axis — the ceremony
+   is committed when the hand lets go, never on the way past 2500 ms.
+3. `UniverseRuntime` is the one seam to the kernel. It projects contact onto
+   the material through `MaterialProjection` — the same aspect-fill law the
+   shader reads, so the ring lands under the finger rather than a quarter of
+   a tank away — asks the medium whether it says the verb, and commits when
+   it does.
+4. Either way the hand and the ear answer, through `HapticBus` and
+   `AudioBus`. A verb the wave cannot say — season, weather, lens — is
+   acknowledged softly instead of being given invented physics, exactly as
+   `src/lib/gesture/defaults.ts` does on the web. Continuous streams answer
+   in the material only: twenty haptics a second is a rattle, not a
+   confirmation.
+
+The wave tank says six of the seventeen durable meanings —
+`material`, `grow`, `ceremony`, `tutti`, `agitate`, `wake` — and
+`WaveKernel.expresses` is where that vocabulary is declared.
+`WaveInterventionTests` pins it against what `apply` actually does, so the
+declaration cannot drift from the physics. React learns only which
+phenomena the visitor has caused, because the guide may not name a
+phenomenon that has not landed; the material never round-trips through
+JavaScript.
+
+The vessel — tilt, shake, knock, flip — reaches the same router from
+`VesselSensors`, and is invited by the first touch rather than demanded at
+launch: iOS presents its dialog only from inside a real gesture, and a
+universe that asked before it was touched would be asking for nothing.
+
+Three-finger twist (season) and `pan2` stay unbound: UIKit's rotation
+recogniser is a two-finger instrument, and the shape vocabulary has no pan2
+case. They are answered, not implemented — the guide entry stays hidden
+until the phenomenon can actually land.
+
 The wave shader is Metal source embedded in `WaveShaders.swift` and compiled
 once at `prepare()`. The kit ships both as a Swift package and as a CocoaPod,
 and a `.metal` file would produce a `default.metallib` only one of those two

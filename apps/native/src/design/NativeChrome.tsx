@@ -4,9 +4,15 @@
  *
  * The persistent `<ObjetUniverseView>` renders below the entire chrome
  * layer; `NativeChrome` never paints over the active material. It provides
- * three sought affordances (fold, trail, `?`) in the safe-area corners and
+ * the sought affordances (fold, trail, `?`) in the safe-area corners and
  * a small guide sheet host — all volunteered, never auto-opened. There is
  * no tab bar, no first-launch modal, no coach mark, no HUD.
+ *
+ * An affordance appears only when it leads somewhere. `fold` and `trail`
+ * belong to lanes that have not landed, and a chip that answers a press with
+ * nothing is friction wearing the costume of a feature: until a route hands
+ * this component a handler for one, it does not draw it. The `?` is always
+ * here, because the guide always is.
  *
  * Reduced-motion is respected via a passed prop (the app-level reduced-motion
  * listener is expected to feed this component); typography scales with
@@ -33,21 +39,14 @@ import {
 import { sceneStyle } from "./sceneStyle";
 import { GuideSheet } from "../guide/GuideSheet";
 import { GUIDE_ENTRIES_BY_VERB, type GuideEntry, type GuideVerb } from "../guide/guideData";
+import { EMPTY_REVEAL, type SceneReveal } from "../guide/reveal";
 
 /**
- * The scene lanes push a small `SceneReveal` state up: which phenomena have
- * been *caused* by the visitor so far. The guide sheet uses it to gate the
- * Play/Reveal/Name/Transfer/Express choreography — a guide entry whose
- * phenomenon has not landed yet is hidden.
+ * The reveal state — which phenomena the visitor has *caused* — is the guide's
+ * gate, and its law lives with the guide in `../guide/reveal.ts`. The chrome
+ * only reads it.
  */
-export type SceneReveal = Readonly<{
-  /** verbs whose phenomenon the visitor has caused at least once. */
-  causedVerbs: readonly GuideVerb[];
-  /** how many times the visitor has produced the primary phenomenon. */
-  primaryReproductions: number;
-  /** whether the visitor has committed an expressive act. */
-  expressed: boolean;
-}>;
+export type { SceneReveal };
 
 export type NativeChromeProps = Readonly<{
   scene: NativeSceneId;
@@ -55,11 +54,22 @@ export type NativeChromeProps = Readonly<{
   reducedMotion?: boolean;
   onOpenFold?: () => void;
   onOpenTrail?: () => void;
+  /**
+   * Announces the guide sheet opening and closing. The route closes the
+   * touch surface while it is open — the documented state contract pauses
+   * authoritative intervention while a reading surface has focus.
+   */
+  onGuideVisibilityChange?: (open: boolean) => void;
 }>;
 
-const EMPTY_REVEAL: SceneReveal = { causedVerbs: [], primaryReproductions: 0, expressed: false };
-
-export function NativeChrome({ scene, reveal = EMPTY_REVEAL, reducedMotion = false, onOpenFold, onOpenTrail }: NativeChromeProps) {
+export function NativeChrome({
+  scene,
+  reveal = EMPTY_REVEAL,
+  reducedMotion = false,
+  onOpenFold,
+  onOpenTrail,
+  onGuideVisibilityChange,
+}: NativeChromeProps) {
   const [guideOpen, setGuideOpen] = useState(false);
   const style = sceneStyle(scene);
   const openMs = motionDurationMs(MOTION.guideOpenMs, reducedMotion);
@@ -69,8 +79,14 @@ export function NativeChrome({ scene, reveal = EMPTY_REVEAL, reducedMotion = fal
     return Object.values(GUIDE_ENTRIES_BY_VERB).filter((entry) => caused.has(entry.verb));
   }, [reveal.causedVerbs]);
 
-  const openGuide = useCallback(() => setGuideOpen(true), []);
-  const closeGuide = useCallback(() => setGuideOpen(false), []);
+  const openGuide = useCallback(() => {
+    setGuideOpen(true);
+    onGuideVisibilityChange?.(true);
+  }, [onGuideVisibilityChange]);
+  const closeGuide = useCallback(() => {
+    setGuideOpen(false);
+    onGuideVisibilityChange?.(false);
+  }, [onGuideVisibilityChange]);
 
   return (
     <View
@@ -80,18 +96,26 @@ export function NativeChrome({ scene, reveal = EMPTY_REVEAL, reducedMotion = fal
     >
       <SafeAreaView pointerEvents="box-none" style={styles.safe} edges={SAFE_EDGES}>
         <View pointerEvents="box-none" style={styles.topRow}>
-          <ChromeAffordance
-            label="fold"
-            accessibilityLabel="Open the scale fold"
-            onPress={onOpenFold}
-            variant="leading"
-          />
-          <ChromeAffordance
-            label="trail"
-            accessibilityLabel="Open your trail of kept readings"
-            onPress={onOpenTrail}
-            variant="trailing"
-          />
+          {onOpenFold ? (
+            <ChromeAffordance
+              label="fold"
+              accessibilityLabel="Open the scale fold"
+              onPress={onOpenFold}
+              variant="leading"
+            />
+          ) : (
+            <View />
+          )}
+          {onOpenTrail ? (
+            <ChromeAffordance
+              label="trail"
+              accessibilityLabel="Open your trail of kept readings"
+              onPress={onOpenTrail}
+              variant="trailing"
+            />
+          ) : (
+            <View />
+          )}
         </View>
         <View pointerEvents="box-none" style={styles.bottomRow}>
           <View />
@@ -130,7 +154,7 @@ function ChromeAffordance({
 }: Readonly<{
   label: string;
   accessibilityLabel: string;
-  onPress: (() => void) | undefined;
+  onPress: () => void;
   variant: AffordanceVariant;
 }>) {
   const align: ViewStyle = { alignSelf: variant === "leading" ? "flex-start" : "flex-end" };
@@ -141,7 +165,6 @@ function ChromeAffordance({
       onPress={onPress}
       hitSlop={SPACING.small}
       style={({ pressed }) => [styles.affordance, align, pressed ? styles.affordancePressed : null]}
-      disabled={!onPress}
     >
       <Text
         style={styles.affordanceLabel}

@@ -29,7 +29,7 @@ import {
   type GuideEntry,
   type GuideRevealStep,
 } from "./guideData";
-import type { SceneReveal } from "../design/NativeChrome";
+import type { SceneReveal } from "./reveal";
 
 export type GuideSheetProps = Readonly<{
   scene: NativeSceneId;

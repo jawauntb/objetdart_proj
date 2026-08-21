@@ -7,3 +7,8 @@ export {
   type NearMissInvitation,
   type NativeSemanticCommand,
 } from "./src/ObjetUniverseView";
+export {
+  ObjetUniverseSurface,
+  type ObjetUniverseSurfaceProps,
+  type SurfaceCommand,
+} from "./src/ObjetUniverseSurface";

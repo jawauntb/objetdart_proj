@@ -456,6 +456,162 @@ execFileSync(process.execPath, ["scripts/native/run-accessibility-test.mjs"], {
   stdio: "inherit",
 });
 
+// U5 — the half that makes contact: recognisers, the seam to the kernel, and
+// the surface a route mounts.
+//
+// The router could always say what a shape means; nothing was making shapes.
+// A recogniser attached to nothing is the bug these guards exist to catch a
+// second time.
+const surfaceInput = readText("apps/native/modules/objet-universe/ios/SurfaceInput.swift");
+const surfaceView = readText("apps/native/modules/objet-universe/ios/ObjetUniverseSurfaceView.swift");
+const universeRuntime = readText("apps/native/modules/objet-universe/ios/UniverseRuntime.swift");
+
+
+for (const recogniser of [
+  "UITapGestureRecognizer",
+  "UILongPressGestureRecognizer",
+  "UIPanGestureRecognizer",
+  "UIRotationGestureRecognizer",
+  "UIPinchGestureRecognizer",
+]) {
+  assert.match(
+    surfaceInput,
+    new RegExp(recogniser),
+    `SurfaceInput must install a ${recogniser} — an unrecognised gesture is a dead surface`,
+  );
+}
+assert.match(surfaceInput, /view\.addGestureRecognizer\(recogniser\)/, "SurfaceInput must attach its recognisers to a real view");
+assert.match(surfaceInput, /router\.route\(shape:/, "every recognised shape must reach the router, never the kernel directly");
+assert.match(surfaceInput, /router\.advanceTapTrain\(\)/, "a tap must climb the train's rung rather than always landing as a first tap");
+assert.match(surfaceInput, /phase: \.tick/, "a press must keep deepening while it is held");
+assert.match(surfaceInput, /phase: \.release/, "the ceremony is committed when the hand lets go");
+
+// A room defines no timing constant of its own: every threshold comes from
+// gesture/core.ts, through NativeGestureThresholds. A bare copy of one of
+// those numbers in the input layer is a private dialect.
+for (const value of ["900", "2500", "250", "280", "12", "0.6", "0.75", "0.03", "0.1", "16", "22", "80", "180", "350"]) {
+  const literal = new RegExp(`(?<![\\d._])${value.replace(".", "\\.")}(?![\\d_])`);
+  assert.doesNotMatch(
+    surfaceInput,
+    literal,
+    `SurfaceInput restates the threshold ${value} — read it from NativeGestureThresholds instead`,
+  );
+}
+
+assert.match(surfaceView, /UniverseRuntime\.shared\.commit/, "the surface must reach the kernel only through the one seam");
+assert.match(surfaceView, /MaterialProjection\.materialPoint/, "contact must be projected onto the material the shader draws, or the ring lands where the finger is not");
+assert.match(surfaceView, /isAccessibilityElement = false/, "the surface must not silence the universe's VoiceOver identity");
+assert.match(universeView, /UniverseRuntime\.shared\.attach\(self\)/, "the mounted universe must register itself as the one live host");
+
+assert.match(universeRuntime, /expresses\(verb\)/, "a command must be committed only when the medium says the verb");
+assert.match(universeRuntime, /HapticBus\.shared\.schedule/, "state must land in a second sense in the same frame");
+assert.match(universeRuntime, /AudioBus\.shared\.schedule/, "state must land in a second sense in the same frame");
+assert.match(universeRuntime, /vessel\.subscribe/, "tilt, shake, knock and flip must reach the same grammar as touch");
+assert.match(universeRuntime, /vessel\.request/, "the vessel is invited from inside a real gesture, never demanded on launch");
+assert.match(universeRuntime, /vesselRouter\.route\(shape:/, "the vessel must speak through the router like every other source");
+
+assert.ok(
+  universeModuleDefinition.indexOf("View(ObjetUniverseView.self)") <
+    universeModuleDefinition.indexOf("View(ObjetUniverseSurfaceView.self)"),
+  "the universe stays the module's default view — the surface is the second one",
+);
+assert.match(universeModuleDefinition, /ViewName\("ObjetUniverseSurface"\)/, "the surface needs the name React asks for");
+assert.match(universeModuleDefinition, /Events\("onSemanticCommand"\)/, "committed gestures must be able to reach the route");
+
+// The world route mounts the surface below the chrome and keeps the reveal
+// state the guide gates on. A route that mounts chrome alone is the screen
+// that could not be touched.
+assert.match(worldRoute, /<ObjetUniverseSurface/, "the world route must mount the touch surface over the persistent universe");
+assert.ok(
+  worldRoute.indexOf("<ObjetUniverseSurface") < worldRoute.indexOf("<NativeChrome"),
+  "the chrome sits above the surface so the `?` keeps its own taps",
+);
+assert.match(worldRoute, /revealAfter/, "the route must keep what the visitor has caused, not a frozen placeholder");
+assert.match(worldRoute, /onGuideVisibilityChange/, "intervention pauses while a reading surface is open");
+assert.match(worldRoute, /enabled=\{!reading\}/, "the surface closes while the guide sheet has focus");
+
+// No affordance that leads nowhere: a chip answering a press with nothing is
+// friction wearing the costume of a feature.
+assert.doesNotMatch(nativeChrome, /disabled=\{!onPress\}/, "NativeChrome must not draw an affordance it cannot answer");
+assert.match(nativeChrome, /onOpenFold \? \(/, "fold appears only once a lane hands the chrome a handler");
+assert.match(nativeChrome, /onOpenTrail \? \(/, "trail appears only once a lane hands the chrome a handler");
+
+// Cross-language pins for the two numbers the input layer added.
+assert.match(gestureRouter, /public static let tapTrainCap = 9/, "the Swift train cap must be declared");
+assert.match(readText("src/lib/gesture/core.ts"), /tapTrainCap: 9/, "the web train cap must stay the same number");
+assert.match(gestureRouter, /public static let continuousSampleHz: Double = 20/, "the Swift sample cadence must be declared");
+assert.match(
+  readText("packages/universe-contracts/src/actions.ts"),
+  /export const CONTINUOUS_SAMPLE_HZ = 20 as const;/,
+  "the wire contract's sample cadence must stay the same number",
+);
+
+// The hold's phase is what keeps duration an axis, and it has to mean the
+// same thing in both languages.
+assert.match(gestureRouter, /case hold\(fingers: Int, elapsedMs: Double, x: Double, y: Double, intensity: Double, phase: GesturePhase\)/, "the Swift hold shape must carry its phase");
+assert.match(gestureActions, /kind: "hold";[^}]*phase: GesturePhase/, "the TypeScript hold shape must carry its phase");
+assert.match(gestureRouter, /if phase != \.tick, elapsedMs >= NativeGestureThresholds\.ceremonyMs/, "Swift must commit the ceremony on release, never on the way past the threshold");
+assert.match(gestureActions, /shape\.phase !== "tick" && shape\.elapsedMs >= NATIVE_GESTURE_THRESHOLDS\.ceremonyMs/, "TypeScript must commit the ceremony on release, never on the way past the threshold");
+
+// Grammar verb → durable meaning: one table in TypeScript, one switch in
+// Swift, and they must agree verb for verb.
+const swiftSemanticVerbs = extractSwiftSemanticVerbMap(gestureRouter);
+const typescriptSemanticVerbs = extractNativeGlobalVerbMap(gestureActions);
+assert.ok(typescriptSemanticVerbs.size > 0, "NATIVE_GLOBAL_VERBS must remain extractable");
+assert.equal(
+  swiftSemanticVerbs.size,
+  typescriptSemanticVerbs.size,
+  "the Swift verb map and NATIVE_GLOBAL_VERBS must cover the same verbs",
+);
+for (const [grammarVerb, semanticVerb] of typescriptSemanticVerbs) {
+  assert.equal(
+    swiftSemanticVerbs.get(grammarVerb),
+    semanticVerb,
+    `Swift maps "${grammarVerb}" to a different meaning than NATIVE_GLOBAL_VERBS does`,
+  );
+}
+
+execFileSync("node", ["--experimental-strip-types", "apps/native/src/guide/__tests__/reveal.test.ts"], {
+  cwd: root,
+  stdio: "inherit",
+});
+
+/** Read `GestureRouter.semanticVerb(for:)` as a grammar verb → meaning map. */
+function extractSwiftSemanticVerbMap(source) {
+  const start = source.indexOf("public static func semanticVerb(for verb: NativeGrammarVerb)");
+  if (start === -1) return new Map();
+  const body = source.slice(start, source.indexOf("\n  }", start));
+  const map = new Map();
+  const regex = /case ((?:\.[A-Za-z0-9]+(?:,\s*)?)+):\s*(?:return\s+)?\.([A-Za-z0-9]+)/g;
+  let match;
+  while ((match = regex.exec(body)) !== null) {
+    const meaning = kebabFromSwiftCase(match[2]);
+    for (const verb of match[1].split(",")) {
+      map.set(verb.trim().slice(1), meaning);
+    }
+  }
+  return map;
+}
+
+/** Swift spells the two hyphenated meanings in camel case. */
+function kebabFromSwiftCase(name) {
+  if (name === "stepBack") return "step-back";
+  if (name === "timeDilation") return "time-dilation";
+  return name;
+}
+
+/** Read NATIVE_GLOBAL_VERBS as the same map, from the other language. */
+function extractNativeGlobalVerbMap(source) {
+  const start = source.indexOf("export const NATIVE_GLOBAL_VERBS");
+  if (start === -1) return new Map();
+  const body = source.slice(start, source.indexOf("] as const)", start));
+  const map = new Map();
+  const regex = /grammarVerb:\s*"([^"]+)",\s*semanticVerb:\s*"([^"]+)"/g;
+  let match;
+  while ((match = regex.exec(body)) !== null) map.set(match[1], match[2]);
+  return map;
+}
+
 // U6 — Shared audio, haptic, and sensory clock. The native sensory bus lives
 // in its own SPM target so scenes cannot import it accidentally through
 // ObjetUniverseCore, and its React surface is limited to muting preferences.
