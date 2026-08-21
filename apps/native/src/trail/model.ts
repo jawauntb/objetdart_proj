@@ -16,12 +16,6 @@ export type TrailHistoryKind =
   | "branch"
   | "intervention";
 
-export type TrailReturnAnchor = Readonly<{
-  scene: NativeSceneId;
-  eventId: string;
-  recordedAt: number;
-}>;
-
 export type ProjectableTrailEntry = Readonly<SurfaceCommand & {
   id: string;
   recordedAt: number;
@@ -48,7 +42,6 @@ export type TrailHistoryEvent = Readonly<{
   scientificName: string;
   answered: boolean;
   intensity: number;
-  returnAnchor: TrailReturnAnchor;
 }>;
 
 export type TrailProjection = Readonly<{
@@ -98,13 +91,12 @@ export function scaleIdForScene(scene: NativeSceneId): NativeScaleId {
 }
 
 export function inferHistoryKind(
-  entry: Pick<ProjectableTrailEntry, "scene" | "verb" | "semanticVerb">,
+  _entry: Pick<ProjectableTrailEntry, "scene" | "verb" | "semanticVerb">,
 ): TrailHistoryKind {
   // The coarse bridge confirms that a semantic command was expressed, but it
   // does not claim a particular scientific outcome. Specific births,
   // collisions, merges, divisions, and branches enter through historyKind
   // only when the authoritative kernel emits that committed projection.
-  if (entry.semanticVerb === "ceremony") return "discovery";
   return "intervention";
 }
 
@@ -161,11 +153,6 @@ export function projectNaturalHistory(
       scientificName: entry.scientificName ?? description.scientificName,
       answered: entry.answered,
       intensity: entry.intensity,
-      returnAnchor: Object.freeze({
-        scene: entry.scene,
-        eventId: entry.id,
-        recordedAt: entry.recordedAt,
-      }),
     });
   });
   const scaleOrder = Array.from(new Set(events.map((event) => event.scaleId)));

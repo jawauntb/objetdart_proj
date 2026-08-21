@@ -8,7 +8,6 @@ import {
   projectNaturalHistory,
   type BranchRecord,
   type ProjectableTrailEntry,
-  type TrailReturnAnchor,
 } from "./model";
 
 export function TrailView({
@@ -16,7 +15,7 @@ export function TrailView({
   branches,
   activeBranchId = "local-main",
   offline = true,
-  onReturnToAnchor,
+  onSwitchBranch,
   onRetireBranch,
   onRestoreBranch,
 }: Readonly<{
@@ -24,7 +23,7 @@ export function TrailView({
   branches?: readonly BranchRecord[];
   activeBranchId?: string;
   offline?: boolean;
-  onReturnToAnchor?: (anchor: TrailReturnAnchor) => void;
+  onSwitchBranch?: (branchId: string) => void;
   onRetireBranch?: (branchId: string) => void;
   onRestoreBranch?: (branchId: string) => void;
 }>) {
@@ -54,7 +53,7 @@ export function TrailView({
           what became because you were here
         </Text>
         <Text style={styles.intro} allowFontScaling maxFontSizeMultiplier={3}>
-          This is cause and consequence, not a score. Choose a change to return to its scene; history itself is never rewritten by looking.
+          This is cause and consequence, not a score. It records what happened without pretending that a scene snapshot can already be restored.
         </Text>
       </View>
 
@@ -74,7 +73,7 @@ export function TrailView({
                     {event.scaleLabel}
                   </Text>
                 ) : null}
-                <HistoryEventView event={event} onReturnToAnchor={onReturnToAnchor} />
+                <HistoryEventView event={event} />
               </View>
             );
           })
@@ -90,6 +89,7 @@ export function TrailView({
                 key={branch.id}
                 branch={branch}
                 current={branch.id === activeBranchId}
+                onSwitch={onSwitchBranch}
                 onRetire={onRetireBranch}
                 onRestore={onRestoreBranch}
               />

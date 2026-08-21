@@ -4,6 +4,7 @@ import { NATIVE_SCENE_IDS, type NativeSceneId } from "@objet/universe-contracts"
 import { PALETTE, SPACING, TYPOGRAPHY } from "../src/design/tokens";
 import { ConceptReveal } from "../src/guide/ConceptReveal";
 import { GUIDE_ENTRIES, REVEAL_STEPS } from "../src/guide/guideData";
+import { dismissOverlay } from "../src/trail/navigation";
 
 export default function GuideRoute() {
   const router = useRouter();
@@ -20,7 +21,7 @@ export default function GuideRoute() {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`Return to the ${scene} scene`}
-            onPress={() => router.replace(pathForScene(scene))}
+            onPress={() => dismissOverlay(router, scene)}
             style={styles.close}
           >
             <Text style={styles.closeLabel} allowFontScaling maxFontSizeMultiplier={3}>
@@ -73,10 +74,6 @@ export default function GuideRoute() {
 
 function validScene(value: string | undefined): value is NativeSceneId {
   return NATIVE_SCENE_IDS.some((scene) => scene === value);
-}
-
-function pathForScene(scene: NativeSceneId): "/world" | "/cell" | "/solar" | "/molecules" | "/atoms" {
-  return scene === "wave" ? "/world" : `/${scene}`;
 }
 
 const styles = StyleSheet.create({

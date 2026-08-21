@@ -32,7 +32,7 @@ function entry(
 }
 
 describe("natural-history projection", () => {
-  test("orders events, names causes and consequences, and keeps scene return anchors", () => {
+  test("orders events and names causes and consequences without inventing restorable checkpoints", () => {
     const projection = projectNaturalHistory([
       entry("division", 30, "cell", "division", "root", "birth"),
       entry("birth", 10, "solar", "birth"),
@@ -48,11 +48,7 @@ describe("natural-history projection", () => {
     expect(projection.events.every((event) => event.cause.length > 0)).toBe(true);
     expect(projection.events.every((event) => event.consequence.length > 0)).toBe(true);
     expect(projection.events.every((event) => event.scientificName.length > 0)).toBe(true);
-    expect(projection.events[2]?.returnAnchor).toEqual({
-      scene: "cell",
-      eventId: "division",
-      recordedAt: 30,
-    });
+    expect(Object.hasOwn(projection.events[2] ?? {}, "returnAnchor")).toBe(false);
   });
 
   test("represents birth, division, merge, collision, discovery, and branch events", () => {
@@ -77,6 +73,15 @@ describe("natural-history projection", () => {
   test("does not turn an unanswered gesture into world history", () => {
     const unanswered = { ...entry("attempt", 1, "wave", "intervention"), answered: false };
     expect(projectNaturalHistory([unanswered]).events).toEqual([]);
+  });
+
+  test("keeps interaction-only commands generic until the domain emits an authoritative event kind", () => {
+    const ceremony = {
+      ...entry("ceremony", 1, "solar", undefined),
+      semanticVerb: "ceremony",
+    };
+    expect(projectNaturalHistory([ceremony]).events[0]?.kind).toBe("intervention");
+    expect(projectNaturalHistory([ceremony]).events[0]?.scientificName).toBe("intervention");
   });
 });
 

@@ -4,9 +4,16 @@ import type { SurfaceCommand } from "../../modules/objet-universe";
 import {
   describeHistoryEvent,
   scaleIdForScene,
+  type BranchRecord,
   type ProjectableTrailEntry,
   type TrailHistoryKind,
 } from "../trail/model";
+import {
+  branchStateAfter,
+  mergeTrailEntries,
+  normalizeSessionBranches,
+  type BranchStateAction,
+} from "../trail/sessionState";
 
 /** The bounded local projection that feeds the natural-history trail. */
 export const SESSION_TRAIL_VERSION = 2 as const;
@@ -19,6 +26,7 @@ export type TrailEntry = Readonly<ProjectableTrailEntry & {
   scene: NativeSceneId;
   scaleId: ReturnType<typeof scaleIdForScene>;
   historyKind: TrailHistoryKind;
+  historyAuthority: "interaction" | "domain";
   branchId: string;
   parentEventId: string | null;
   cause: string;
@@ -29,6 +37,14 @@ export type TrailEntry = Readonly<ProjectableTrailEntry & {
 type TrailEnvelope = Readonly<{
   version: 1 | typeof SESSION_TRAIL_VERSION;
   entries: readonly TrailEntry[];
+  branches?: readonly BranchRecord[];
+  activeBranchId?: string;
+}>;
+
+export type SessionTrailState = Readonly<{
+  entries: readonly TrailEntry[];
+  branches: readonly BranchRecord[];
+  activeBranchId: string;
 }>;
 
 const FILE_NAME = "objet-universe-trail-v1.json";
@@ -62,12 +78,15 @@ function normalizeEntry(value: unknown): TrailEntry | null {
   const id = entry.id;
   const recordedAt = entry.recordedAt;
   const scene = isNativeSceneId(entry.scene) ? entry.scene : "wave";
+  const authoritativeKind = entry.historyAuthority === "domain" && isTrailHistoryKind(entry.historyKind)
+    ? entry.historyKind
+    : undefined;
   const description = describeHistoryEvent({
     scene,
     verb: entry.verb,
     semanticVerb: entry.semanticVerb,
     answered: entry.answered,
-    historyKind: entry.historyKind,
+    historyKind: authoritativeKind,
   });
   return Object.freeze({
     ...entry,
@@ -77,18 +96,21 @@ function normalizeEntry(value: unknown): TrailEntry | null {
     scene,
     scaleId: scaleIdForScene(scene),
     historyKind: description.kind,
+    historyAuthority: authoritativeKind ? "domain" : "interaction",
     branchId: typeof entry.branchId === "string" && entry.branchId.length > 0 ? entry.branchId : "local-main",
     parentEventId:
       typeof entry.parentEventId === "string" || entry.parentEventId === null
         ? entry.parentEventId
         : null,
-    cause: typeof entry.cause === "string" && entry.cause.length > 0 ? entry.cause : description.cause,
+    cause: authoritativeKind && typeof entry.cause === "string" && entry.cause.length > 0
+      ? entry.cause
+      : description.cause,
     consequence:
-      typeof entry.consequence === "string" && entry.consequence.length > 0
+      authoritativeKind && typeof entry.consequence === "string" && entry.consequence.length > 0
         ? entry.consequence
         : description.consequence,
     scientificName:
-      typeof entry.scientificName === "string" && entry.scientificName.length > 0
+      authoritativeKind && typeof entry.scientificName === "string" && entry.scientificName.length > 0
         ? entry.scientificName
         : description.scientificName,
   });
@@ -107,43 +129,109 @@ function boundedEntries(entries: readonly unknown[]): readonly TrailEntry[] {
   });
 }
 
-/** Load an honest empty trail when the file is absent, corrupt, or too old. */
-export async function loadSessionTrail(): Promise<readonly TrailEntry[]> {
+const EMPTY_STATE: SessionTrailState = Object.freeze({
+  entries: Object.freeze([]),
+  branches: Object.freeze([{ id: "local-main", parentId: null, retired: false }]),
+  activeBranchId: "local-main",
+});
+
+async function readSessionTrailState(): Promise<SessionTrailState> {
   const uri = trailUri();
-  if (!uri) return [];
+  if (!uri) return EMPTY_STATE;
   try {
     const info = await FileSystem.getInfoAsync(uri);
-    if (!info.exists) return [];
+    if (!info.exists) return EMPTY_STATE;
     const parsed: unknown = JSON.parse(await FileSystem.readAsStringAsync(uri));
-    if (!parsed || typeof parsed !== "object") return [];
+    if (!parsed || typeof parsed !== "object") return EMPTY_STATE;
     const envelope = parsed as Partial<TrailEnvelope>;
-    // Version 1 contained raw commands only. Normalisation preserves those
-    // local memories while promoting them into the v2 natural-history shape.
-    if ((envelope.version !== 1 && envelope.version !== SESSION_TRAIL_VERSION) || !Array.isArray(envelope.entries)) return [];
-    return boundedEntries(envelope.entries);
+    if (
+      (envelope.version !== 1 && envelope.version !== SESSION_TRAIL_VERSION) ||
+      !Array.isArray(envelope.entries)
+    ) return EMPTY_STATE;
+    // Older entries did not record whether a specific scientific outcome came
+    // from the domain kernel. Missing authority is intentionally treated as a
+    // generic intervention rather than presented as an authoritative event.
+    const entries = boundedEntries(envelope.entries);
+    const records = envelope.version === SESSION_TRAIL_VERSION && Array.isArray(envelope.branches)
+      ? envelope.branches.filter(isBranchRecord)
+      : [];
+    const branchState = normalizeSessionBranches(
+      entries,
+      records,
+      envelope.version === SESSION_TRAIL_VERSION && typeof envelope.activeBranchId === "string"
+        ? envelope.activeBranchId
+        : "local-main",
+    );
+    return Object.freeze({ entries, ...branchState });
   } catch {
     // A damaged memory surface must never block the material. The next valid
     // append replaces it with a fresh versioned envelope.
-    return [];
+    return EMPTY_STATE;
   }
 }
 
-/** Append in order, serialising writes so rapid gestures cannot overwrite one another. */
-export function appendSessionTrail(entry: TrailEntry): Promise<void> {
-  writeQueue = writeQueue.then(async () => {
+/** Load after prior mutations so readers never observe a half-written envelope. */
+export async function loadSessionTrailState(): Promise<SessionTrailState> {
+  await writeQueue;
+  return readSessionTrailState();
+}
+
+export async function loadSessionTrail(): Promise<readonly TrailEntry[]> {
+  return (await loadSessionTrailState()).entries;
+}
+
+function persistMutation(
+  mutate: (state: SessionTrailState) => SessionTrailState,
+): Promise<SessionTrailState> {
+  let resolved = EMPTY_STATE;
+  const operation = writeQueue.then(async () => {
+    const prior = await readSessionTrailState();
+    resolved = mutate(prior);
     const uri = trailUri();
-    if (!uri || !normalizeEntry(entry)) return;
-    const prior = await loadSessionTrail();
-    const next: TrailEnvelope = {
+    if (!uri) return;
+    const envelope: TrailEnvelope = {
       version: SESSION_TRAIL_VERSION,
-      entries: boundedEntries([...prior, entry]),
+      entries: resolved.entries,
+      branches: resolved.branches,
+      activeBranchId: resolved.activeBranchId,
     };
-    await FileSystem.writeAsStringAsync(uri, JSON.stringify(next));
+    await FileSystem.writeAsStringAsync(uri, JSON.stringify(envelope));
   }).catch(() => {
     // Persistence is a return-value feature, never a reason to drop a live
-    // wave command or surface an unhandled promise rejection.
+    // command or surface an unhandled rejection.
   });
-  return writeQueue;
+  writeQueue = operation.then(() => undefined);
+  return operation.then(() => resolved);
+}
+
+/** Append in order, serialising writes so rapid gestures cannot overwrite one another. */
+export function appendSessionTrail(entry: TrailEntry): Promise<SessionTrailState> {
+  return persistMutation((prior) => {
+    const normalized = normalizeEntry(entry);
+    if (!normalized) return prior;
+    const entries = boundedEntries(mergeTrailEntries(prior.entries, [normalized]));
+    const branchState = normalizeSessionBranches(entries, prior.branches, prior.activeBranchId);
+    return Object.freeze({ entries, ...branchState });
+  });
+}
+
+export function switchSessionBranch(branchId: string): Promise<SessionTrailState> {
+  return changeBranch({ type: "switch", branchId });
+}
+
+export function retireSessionBranch(branchId: string): Promise<SessionTrailState> {
+  return changeBranch({ type: "retire", branchId });
+}
+
+export function restoreSessionBranch(branchId: string): Promise<SessionTrailState> {
+  return changeBranch({ type: "restore", branchId });
+}
+
+function changeBranch(action: BranchStateAction): Promise<SessionTrailState> {
+  return persistMutation((prior) => Object.freeze({
+    entries: prior.entries,
+    ...branchStateAfter(prior, action),
+  }));
 }
 
 export function makeTrailEntry(
@@ -173,6 +261,7 @@ export function makeTrailEntry(
     scene,
     scaleId: scaleIdForScene(scene),
     historyKind: description.kind,
+    historyAuthority: context.historyKind ? "domain" : "interaction",
     branchId: context.branchId ?? "local-main",
     parentEventId: context.parentEventId ?? null,
     cause: description.cause,
@@ -183,4 +272,17 @@ export function makeTrailEntry(
 
 function isNativeSceneId(value: unknown): value is NativeSceneId {
   return value === "wave" || value === "cell" || value === "solar" || value === "molecules" || value === "atoms";
+}
+
+function isTrailHistoryKind(value: unknown): value is TrailHistoryKind {
+  return value === "birth" || value === "division" || value === "merge" || value === "collision" ||
+    value === "discovery" || value === "branch" || value === "intervention";
+}
+
+function isBranchRecord(value: unknown): value is BranchRecord {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Partial<BranchRecord>;
+  return typeof record.id === "string" && record.id.length > 0 &&
+    (typeof record.parentId === "string" || record.parentId === null) &&
+    typeof record.retired === "boolean";
 }

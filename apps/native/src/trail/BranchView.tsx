@@ -6,11 +6,13 @@ import { retirementTransition, type TrailBranchSummary } from "./model";
 export function BranchView({
   branch,
   current,
+  onSwitch,
   onRetire,
   onRestore,
 }: Readonly<{
   branch: TrailBranchSummary;
   current: boolean;
+  onSwitch?: (branchId: string) => void;
   onRetire?: (branchId: string) => void;
   onRestore?: (branchId: string) => void;
 }>) {
@@ -47,6 +49,16 @@ export function BranchView({
         <Text style={styles.notice} allowFontScaling maxFontSizeMultiplier={3}>
           leave this branch before retiring it.
         </Text>
+      ) : null}
+      {!current && !branch.retired && onSwitch ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityHint="Makes this the branch where new changes are recorded"
+          onPress={() => onSwitch(branch.id)}
+          style={styles.action}
+        >
+          <Text style={styles.actionLabel}>inhabit branch</Text>
+        </Pressable>
       ) : null}
       {canChange ? (
         confirming ? (

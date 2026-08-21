@@ -10,11 +10,13 @@ import { EMPTY_REVEAL, revealAfter, type SceneReveal } from "../guide/reveal";
 import { FoldSheet, type SceneLensIndex } from "../surfaces/ReadingSheets";
 import {
   appendSessionTrail,
-  loadSessionTrail,
+  loadSessionTrailState,
   makeTrailEntry,
   SESSION_TRAIL_LIMIT,
+  switchSessionBranch,
   type TrailEntry,
 } from "../persistence/SessionTrail";
+import { mergeTrailEntries } from "../trail/sessionState";
 import {
   EMPTY_UNIVERSE_PROGRESS,
   cycleLens,
@@ -50,6 +52,10 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
   const progressRef = useRef(progress);
   const trailRef = useRef<readonly TrailEntry[]>([]);
   const trailSequence = useRef(0);
+  const activeBranchRef = useRef("local-main");
+  const trailHydratedRef = useRef(false);
+  const interactedBeforeTrailHydrationRef = useRef(false);
+  const pendingProgressCommandsRef = useRef<SurfaceCommand[]>([]);
   const [assistiveCommand, setAssistiveCommand] = useState<{
     id: string;
     verb: NativeSemanticCommand["action"]["action"]["verb"];
@@ -60,20 +66,51 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
   const unlockedRepresentations = unlockedLenses(progress, scene);
 
   useFocusEffect(useCallback(() => {
-    setRouteFocused(true);
+    let focusActive = true;
+    if (trailHydratedRef.current) {
+      // A trail overlay may have switched branches. Hold input for the brief
+      // local read so the first returning touch cannot land on the old branch.
+      setRouteFocused(false);
+      void loadSessionTrailState().then((trailState) => {
+        if (!focusActive) return;
+        activeBranchRef.current = trailState.activeBranchId;
+        trailRef.current = mergeTrailEntries(trailRef.current, trailState.entries);
+        trailSequence.current = Math.max(trailSequence.current, trailRef.current.length);
+        setRouteFocused(true);
+      });
+    } else {
+      setRouteFocused(true);
+    }
     return () => {
+      focusActive = false;
       setRouteFocused(false);
     };
   }, []));
 
   useEffect(() => {
     let mounted = true;
-    void Promise.all([loadSessionTrail(), loadUniverseProgress()]).then(([entries, savedProgress]) => {
+    void Promise.all([loadSessionTrailState(), loadUniverseProgress()]).then(([trailState, savedProgress]) => {
+      const mergedEntries = mergeTrailEntries(trailRef.current, trailState.entries);
+      trailSequence.current = Math.max(trailSequence.current, mergedEntries.length);
+      trailRef.current = mergedEntries;
+      if (interactedBeforeTrailHydrationRef.current) {
+        // The first touch is authoritative for the branch the visitor already
+        // inhabited. Persist that choice after the disk read instead of
+        // silently moving subsequent gestures to a different saved branch.
+        void switchSessionBranch(activeBranchRef.current);
+      } else {
+        activeBranchRef.current = trailState.activeBranchId;
+      }
+      trailHydratedRef.current = true;
+      let mergedProgress = savedProgress;
+      for (const command of pendingProgressCommandsRef.current) {
+        mergedProgress = recordProgress(mergedProgress, scene, command);
+      }
+      pendingProgressCommandsRef.current = [];
+      progressRef.current = mergedProgress;
+      if (mergedProgress !== savedProgress) void saveUniverseProgress(mergedProgress);
       if (!mounted) return;
-      trailSequence.current = entries.length;
-      trailRef.current = entries;
-      setProgress(savedProgress);
-      progressRef.current = savedProgress;
+      setProgress(mergedProgress);
     });
     return () => {
       mounted = false;
@@ -93,12 +130,18 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
 
   const onSemanticCommand = useCallback((event: { nativeEvent: SurfaceCommand }) => {
     const command = event.nativeEvent;
+    if (!trailHydratedRef.current) {
+      interactedBeforeTrailHydrationRef.current = true;
+      pendingProgressCommandsRef.current.push(command);
+    }
     setReveal((current) => revealAfter(current, command));
     if (command.answered) {
+      const activeBranchId = activeBranchRef.current;
+      const parentEvent = trailRef.current.slice().reverse().find((entry) => entry.branchId === activeBranchId);
       const entry = makeTrailEntry(command, trailSequence.current + 1, Date.now(), {
         scene,
-        branchId: "local-main",
-        parentEventId: trailRef.current[trailRef.current.length - 1]?.id ?? null,
+        branchId: activeBranchId,
+        parentEventId: parentEvent?.id ?? null,
       });
       trailSequence.current += 1;
       trailRef.current = [...trailRef.current, entry].slice(-SESSION_TRAIL_LIMIT);
@@ -108,7 +151,9 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
     if (nextProgress !== progressRef.current) {
       progressRef.current = nextProgress;
       setProgress(nextProgress);
-      void saveUniverseProgress(nextProgress);
+      // Before hydration, keep the live delta in memory. Persisting it first
+      // would let the subsequent load read that delta and replay it twice.
+      if (trailHydratedRef.current) void saveUniverseProgress(nextProgress);
     }
     if (command.answered && command.semanticVerb === "lens") {
       setRepresentation((current) => cycleLens(nextProgress, scene, current, 1));

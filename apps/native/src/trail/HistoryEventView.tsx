@@ -1,21 +1,12 @@
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { PALETTE, SPACING, TYPOGRAPHY } from "../design/tokens";
-import type { TrailHistoryEvent, TrailReturnAnchor } from "./model";
+import type { TrailHistoryEvent } from "./model";
 
-export function HistoryEventView({
-  event,
-  onReturnToAnchor,
-}: Readonly<{
-  event: TrailHistoryEvent;
-  onReturnToAnchor?: (anchor: TrailReturnAnchor) => void;
-}>) {
+export function HistoryEventView({ event }: Readonly<{ event: TrailHistoryEvent }>) {
   return (
-    <Pressable
-      accessibilityRole={onReturnToAnchor ? "button" : undefined}
-      accessibilityLabel={`${event.scientificName}. ${event.cause}. ${event.consequence}`}
-      accessibilityHint={onReturnToAnchor ? `Return to the ${event.scene} scene` : undefined}
-      onPress={onReturnToAnchor ? () => onReturnToAnchor(event.returnAnchor) : undefined}
-      style={({ pressed }) => [styles.event, pressed ? styles.pressed : null]}
+    <View
+      accessibilityLabel={`${event.scientificName}. ${event.cause}. ${event.consequence}. Recorded in ${event.scene}. This moment has no restorable checkpoint.`}
+      style={styles.event}
     >
       <View style={styles.heading}>
         <Text style={styles.kind} allowFontScaling maxFontSizeMultiplier={3}>
@@ -31,10 +22,13 @@ export function HistoryEventView({
       <Text style={styles.consequence} allowFontScaling maxFontSizeMultiplier={3}>
         then {event.consequence}
       </Text>
-      <Text style={styles.anchor} allowFontScaling maxFontSizeMultiplier={3}>
-        return to {event.scene} · {formatRecordedAt(event.recordedAt)}
+      <Text style={styles.recorded} allowFontScaling maxFontSizeMultiplier={3}>
+        recorded in {event.scene} · {formatRecordedAt(event.recordedAt)}
       </Text>
-    </Pressable>
+      <Text style={styles.checkpointNotice} allowFontScaling maxFontSizeMultiplier={3}>
+        you cannot return to this moment until this history has restorable checkpoints.
+      </Text>
+    </View>
   );
 }
 
@@ -54,7 +48,6 @@ const styles = StyleSheet.create({
     paddingVertical: SPACING.small,
     marginBottom: SPACING.medium,
   },
-  pressed: { backgroundColor: "rgba(58, 136, 193, 0.12)" },
   heading: { flexDirection: "row", justifyContent: "space-between", gap: SPACING.medium },
   kind: {
     color: PALETTE.ink.plain,
@@ -83,10 +76,16 @@ const styles = StyleSheet.create({
     lineHeight: TYPOGRAPHY.system.sizes.body * 1.45,
     marginTop: SPACING.tick,
   },
-  anchor: {
+  recorded: {
     color: PALETTE.sea.lit,
     fontFamily: TYPOGRAPHY.system.family,
     fontSize: TYPOGRAPHY.system.sizes.caption,
     marginTop: SPACING.small,
+  },
+  checkpointNotice: {
+    color: PALETTE.ink.faint,
+    fontFamily: TYPOGRAPHY.system.family,
+    fontSize: TYPOGRAPHY.system.sizes.caption,
+    marginTop: SPACING.tick,
   },
 });
