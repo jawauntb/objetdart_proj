@@ -51,6 +51,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run native:host
+      - run: swift test -c release --package-path packages/objet-universe-kit
       - run: npm run native:prebuild
       - run: find apps/native/ios -type f ! -path '*/project.pbxproj' -print0 | sort -z | xargs -0 shasum > /tmp/objet-ios-first.sha
       - run: sed -E 's/[A-F0-9]{24}/OBJECT_ID/g' apps/native/ios/objetdart.xcodeproj/project.pbxproj > /tmp/objet-ios-first.pbxproj
