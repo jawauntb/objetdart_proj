@@ -27,10 +27,16 @@ public struct UniverseClock: Sendable {
   /// The authoritative step. Every kernel that converts ticks into seconds
   /// reads it from here rather than restating the number.
   public static let defaultStepSeconds: TimeInterval = 1.0 / 120.0
+  /// 30 Hz is the slowest presentation cadence requested from iOS. Four
+  /// fixed steps keep logical time whole at that cadence; a true stall gets a
+  /// smaller budget so recovery cannot monopolise input delivery.
+  public static let defaultStallThresholdSeconds: TimeInterval = 1.0 / 15.0
 
   public private(set) var logicalTick = 0
   public let stepSeconds: TimeInterval
   public let maxStepsPerFrame: Int
+  public let maxStallStepsPerFrame: Int
+  public let stallThresholdSeconds: TimeInterval
   public let maxPendingActions: Int
   public var pendingActionCount: Int { scheduledActions.count - nextUnappliedAction }
 
@@ -44,14 +50,20 @@ public struct UniverseClock: Sendable {
 
   public init(
     stepSeconds: TimeInterval = UniverseClock.defaultStepSeconds,
-    maxStepsPerFrame: Int = 12,
+    maxStepsPerFrame: Int = 4,
+    maxStallStepsPerFrame: Int = 2,
+    stallThresholdSeconds: TimeInterval = UniverseClock.defaultStallThresholdSeconds,
     maxPendingActions: Int = 1_024
   ) {
     precondition(stepSeconds > 0)
     precondition(maxStepsPerFrame > 0)
+    precondition(maxStallStepsPerFrame > 0 && maxStallStepsPerFrame <= maxStepsPerFrame)
+    precondition(stallThresholdSeconds >= stepSeconds)
     precondition(maxPendingActions > 0)
     self.stepSeconds = stepSeconds
     self.maxStepsPerFrame = maxStepsPerFrame
+    self.maxStallStepsPerFrame = maxStallStepsPerFrame
+    self.stallThresholdSeconds = stallThresholdSeconds
     self.maxPendingActions = maxPendingActions
   }
 
@@ -104,9 +116,10 @@ public struct UniverseClock: Sendable {
     // Presentation timestamps are binary floating point; keep an exact fixed-step
     // boundary from becoming a zero-step frame because of a rounding ulp.
     let requestedSteps = Int((accumulator + stepSeconds * 1e-9) / stepSeconds)
-    let steps = min(requestedSteps, maxStepsPerFrame)
+    let frameStepLimit = elapsed > stallThresholdSeconds ? maxStallStepsPerFrame : maxStepsPerFrame
+    let steps = min(requestedSteps, frameStepLimit)
     accumulator = max(0, accumulator - Double(steps) * stepSeconds)
-    let droppedDebt = requestedSteps > maxStepsPerFrame
+    let droppedDebt = requestedSteps > frameStepLimit
     if droppedDebt { accumulator = 0 }
     var clockSteps: [ClockStep] = []
     clockSteps.reserveCapacity(steps)
@@ -114,6 +127,15 @@ public struct UniverseClock: Sendable {
       logicalTick += 1
       let actions = applyActions(through: logicalTick)
       clockSteps.append(.init(tick: logicalTick, actionOrdinals: actions))
+    }
+    if droppedDebt {
+      // Dropped wall time is not authoritative time. Pending commands are
+      // never discarded: commands inside the skipped interval coalesce onto
+      // the next fixed tick, later commands keep their remaining delay, and
+      // ordinal order remains the tie-breaker. New commands schedule from the
+      // rebased wall/logical origin instead of waiting behind discarded debt.
+      rebaseActionsAfterDroppedDebt(requestedSteps - steps)
+      schedulingOrigin = (presentationTime, logicalTick)
     }
 
     return .init(
@@ -136,6 +158,18 @@ public struct UniverseClock: Sendable {
       nextUnappliedAction = 0
     }
     return due
+  }
+
+  private mutating func rebaseActionsAfterDroppedDebt(_ droppedSteps: Int) {
+    guard droppedSteps > 0, nextUnappliedAction < scheduledActions.count else { return }
+    let nextTick = logicalTick + 1
+    let rebased = scheduledActions[nextUnappliedAction...].map { action in
+      ScheduledAction(
+        targetTick: max(nextTick, action.targetTick - droppedSteps),
+        ordinal: action.ordinal
+      )
+    }.sorted()
+    scheduledActions.replaceSubrange(nextUnappliedAction..., with: rebased)
   }
 
   private func insertionIndex(for action: ScheduledAction) -> Int {

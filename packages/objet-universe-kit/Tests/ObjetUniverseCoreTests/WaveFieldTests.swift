@@ -72,6 +72,34 @@ final class WaveFieldTests: XCTestCase {
     WaveField(width: width, height: height, cSquared: 0.25, damping: 1, ambientDrive: 0, seed: 0)
   }
 
+  private func declaredEnergy(
+    previous: [Float],
+    current: [Float],
+    width: Int,
+    height: Int,
+    cSquared: Double
+  ) -> Double {
+    var kinetic = 0.0
+    var gradient = 0.0
+    for y in 0 ..< height {
+      for x in 0 ..< width {
+        let index = y * width + x
+        let value = Double(current[index])
+        let velocity = value - Double(previous[index])
+        kinetic += velocity * velocity
+        if x + 1 < width {
+          let slope = Double(current[index + 1]) - value
+          gradient += slope * slope
+        }
+        if y + 1 < height {
+          let slope = Double(current[index + width]) - value
+          gradient += slope * slope
+        }
+      }
+    }
+    return 0.5 * kinetic + 0.5 * cSquared * gradient
+  }
+
   func testOneStepReproducesTheCommittedCrossLanguageFixture() throws {
     let fixture = try loadFixture()
     let inputs = fixture.inputs.finiteDifference
@@ -154,6 +182,40 @@ final class WaveFieldTests: XCTestCase {
     XCTAssertLessThan(field.energy, struck * 0.2, "a damped medium must actually give its energy up")
   }
 
+  func testFusedEnergyLedgerEqualsTheDeclaredDiscreteEnergy() {
+    let field = conservativeField(width: 48, height: 48)
+    field.displace(atX: 0.48, y: 0.57, amplitude: 0.8, radiusCells: 5)
+    let previous = surface(of: field)
+
+    field.step(secondsPerStep: UniverseClock.defaultStepSeconds)
+
+    let current = surface(of: field)
+    let declaredEnergy = declaredEnergy(
+      previous: previous,
+      current: current,
+      width: field.width,
+      height: field.height,
+      cSquared: field.cSquared
+    )
+    XCTAssertEqual(field.energy, declaredEnergy, accuracy: 1e-10)
+  }
+
+  func testDrivenSwellIsIncludedInTheFusedEnergyLedger() {
+    let field = WaveField(width: 48, height: 48, seed: 17)
+    let previous = surface(of: field)
+
+    field.step(secondsPerStep: UniverseClock.defaultStepSeconds)
+
+    let declaredEnergy = declaredEnergy(
+      previous: previous,
+      current: surface(of: field),
+      width: field.width,
+      height: field.height,
+      cSquared: field.cSquared
+    )
+    XCTAssertEqual(field.energy, declaredEnergy, accuracy: 1e-10)
+  }
+
   /// The regression this whole change exists for: an arriving visitor must
   /// find a moving sea, not a black rectangle — on the first frame, and after
   /// minutes of nobody touching anything. A damped tank with no source term
@@ -230,6 +292,18 @@ final class WaveFieldTests: XCTestCase {
       "a running gain would normalise a big wave back down to the resting sea"
     )
     XCTAssertEqual(quiet.exposure, 1 / WaveField.displayReferenceAmplitude, accuracy: 1e-12)
+  }
+
+  func testRestingSeaOccupiesAVisiblePartOfTheDeclaredDisplayRange() {
+    let field = WaveField(seed: 0x6F62_6A65_7420_6461)
+    for _ in 0 ..< 840 { field.step(secondsPerStep: UniverseClock.defaultStepSeconds) }
+
+    let visiblePeak = Double(surface(of: field).map { abs($0) }.max() ?? 0) * field.exposure
+    XCTAssertGreaterThanOrEqual(
+      visiblePeak,
+      0.18,
+      "the seven-second resting breath must not be mapped into near-black"
+    )
   }
 }
 

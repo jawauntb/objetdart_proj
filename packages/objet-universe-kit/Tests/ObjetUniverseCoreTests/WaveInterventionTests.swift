@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 @testable import ObjetUniverseCore
+@testable import ObjetUniverseRender
 
 /// What a hand does to the medium.
 ///
@@ -168,6 +169,13 @@ final class WaveInterventionTests: XCTestCase {
 
 /// The projection the hand and the shader share.
 final class MaterialProjectionTests: XCTestCase {
+  func testWaveShaderDeclaresRestingContrastBeforeCrestColour() {
+    XCTAssertTrue(
+      WaveShaderSource.metal.contains("restingContrast"),
+      "the resting field needs an explicit visual mapping rather than relying on crest thresholds"
+    )
+  }
+
   func testTheMiddleOfTheScreenIsTheMiddleOfTheMaterial() {
     let point = MaterialProjection.materialPoint(
       viewX: 0.5, viewY: 0.5, viewportWidth: 390, viewportHeight: 844
