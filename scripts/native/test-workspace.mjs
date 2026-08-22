@@ -35,6 +35,27 @@ function resolvedExpoConfig() {
   return JSON.parse(output);
 }
 
+function inspectOpaqueRgbPng(relativePath) {
+  const png = readFileSync(path.join(root, relativePath));
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  assert.ok(png.subarray(0, 8).equals(signature), `${relativePath} must be a PNG`);
+
+  const width = png.readUInt32BE(16);
+  const height = png.readUInt32BE(20);
+  const bitDepth = png[24];
+  const colorType = png[25];
+  const interlace = png[28];
+  assert.equal(bitDepth, 8, `${relativePath} must use 8-bit channels`);
+  assert.equal(colorType, 2, `${relativePath} must be opaque RGB with no alpha channel`);
+  assert.equal(interlace, 0, `${relativePath} must be non-interlaced`);
+
+  return {
+    width,
+    height,
+    encodedBytes: png.byteLength,
+  };
+}
+
 const [nodeMajor, nodeMinor] = process.versions.node.split(".").map(Number);
 assert.ok(
   nodeMajor === 22 && nodeMinor >= 13,
@@ -96,6 +117,10 @@ assert.equal(expoConfig.ios?.supportsTablet, true, "native app must support iPad
 assert.equal(expoConfig.userInterfaceStyle, "dark", "launch field begins in darkness");
 assert.ok(expoConfig.plugins?.includes("./plugins/withObjetUniverse"), "native config must resolve the source-controlled native-root plugin");
 assert.ok(expoConfig.ios?.infoPlist?.NSMotionUsageDescription, "motion access must have a privacy purpose string");
+assert.equal(expoConfig.icon, "./assets/icon.png", "Expo must package the source-controlled app icon");
+const appIcon = inspectOpaqueRgbPng("apps/native/assets/icon.png");
+assert.deepEqual([appIcon.width, appIcon.height], [1024, 1024], "the App Store icon must be exactly 1024 × 1024");
+assert.ok(appIcon.encodedBytes >= 64_000, "the icon cannot regress to the previous flat-black placeholder");
 
 const layout = readText("apps/native/app/_layout.tsx");
 const index = readText("apps/native/app/index.tsx");
