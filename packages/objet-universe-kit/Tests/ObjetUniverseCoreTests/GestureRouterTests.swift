@@ -42,9 +42,24 @@ final class GestureRouterTests: XCTestCase {
     return try String(contentsOf: router, encoding: .utf8)
   }
 
+  private func loadSurfaceInputSource() throws -> String {
+    let input = repoRoot().appendingPathComponent("apps/native/modules/objet-universe/ios/SurfaceInput.swift")
+    return try String(contentsOf: input, encoding: .utf8)
+  }
+
   private func loadVesselSource() throws -> String {
     let vessel = repoRoot().appendingPathComponent("apps/native/modules/objet-universe/ios/VesselSensors.swift")
     return try String(contentsOf: vessel, encoding: .utf8)
+  }
+
+  private func loadSurfaceViewSource() throws -> String {
+    let surface = repoRoot().appendingPathComponent("apps/native/modules/objet-universe/ios/ObjetUniverseSurfaceView.swift")
+    return try String(contentsOf: surface, encoding: .utf8)
+  }
+
+  private func loadRuntimeSource() throws -> String {
+    let runtime = repoRoot().appendingPathComponent("apps/native/modules/objet-universe/ios/UniverseRuntime.swift")
+    return try String(contentsOf: runtime, encoding: .utf8)
   }
 
   private func loadWebCoreSource() throws -> String {
@@ -117,6 +132,47 @@ final class GestureRouterTests: XCTestCase {
     XCTAssertTrue(router.contains("public func pumpDiscovery"), "the router must own the idle-discovery clock")
     XCTAssertTrue(router.contains("public static func resolve(shape: NativeGestureShape)"), "verb/layer resolution must remain a pure classifier")
     XCTAssertTrue(router.contains("public static func intensity(from shape: NativeGestureShape)"), "intensity must remain a pure classifier")
+  }
+
+  func testDragShapePreservesOneContinuousActWithoutInventingASecondImpulse() throws {
+    let router = try loadRouterSource()
+    let input = try loadSurfaceInputSource()
+    XCTAssertTrue(router.contains("phase: GesturePhase"), "drag samples must retain enter/tick/release phase")
+    XCTAssertTrue(router.contains("totalDx: Double, totalDy: Double"), "drag samples must retain total displacement")
+    XCTAssertTrue(router.contains("vx: Double, vy: Double"), "drag samples must retain release velocity")
+    XCTAssertTrue(router.contains("target: NativeContactTarget"), "drag samples must retain the selected body or open-sky identity")
+    XCTAssertTrue(router.contains("case body(id: UInt64)"), "a selected orbital body must keep a stable identity")
+    XCTAssertTrue(router.contains("case openSky"), "open sky must remain a first-class contact intent")
+    XCTAssertTrue(router.contains("if target == .openSky { return (.pan2, .representation) }"), "open sky must become camera intent rather than grabbing the selected body")
+    XCTAssertFalse(input.contains("emit(.flick("), "drag release must not emit a second impulse as a flick")
+    XCTAssertTrue(input.contains("phase: .release"), "slow and fast drags must both preserve release")
+    XCTAssertTrue(input.contains("pressure: pencilContactActive ? pencilPressure : 0"), "Pencil pressure must enrich the same hold payload while finger touch stays available")
+    XCTAssertTrue(router.contains("case cancel"), "an interrupted contact must never masquerade as a committed release")
+    XCTAssertTrue(input.contains("case .cancelled, .failed:"), "UIKit cancellation must have an explicit branch")
+    XCTAssertTrue(input.contains("emitDrag(phase: .cancel"), "a cancelled drag must reach the kernel as cancel")
+  }
+
+  func testContinuousNativePreviewsProduceOneReactCommitReceipt() throws {
+    let router = try loadRouterSource()
+    let input = try loadSurfaceInputSource()
+    let surface = try loadSurfaceViewSource()
+    XCTAssertTrue(router.contains("public let isCommitBoundary: Bool"))
+    XCTAssertTrue(input.contains("isCommitBoundary: commitsReceipt"))
+    XCTAssertTrue(input.contains("commitsReceipt: phase == .release"))
+    XCTAssertTrue(surface.contains("guard routed.isCommitBoundary else { return }"),
+                  "20 Hz previews must not rewrite trail/progression files or unlock lenses")
+  }
+
+  func testTiltIsCalibratedSignedAndCarriesTypedReplayPayload() throws {
+    let vessel = try loadVesselSource()
+    let runtime = try loadRuntimeSource()
+    XCTAssertTrue(vessel.contains("public struct TiltCalibration"))
+    XCTAssertTrue(vessel.contains("return TiltEvent(beta: 0, gamma: 0)"),
+                  "the calibration sample and steady neutral must be zero")
+    XCTAssertTrue(vessel.contains("Self.signedDelta(beta"))
+    XCTAssertTrue(vessel.contains("Self.signedDelta(gamma"))
+    XCTAssertTrue(runtime.contains("SemanticVesselPayload(betaDegrees: beta, gammaDegrees: gamma)"),
+                  "signed axes must cross the semantic boundary instead of collapsing to intensity")
   }
 
   func testGestureRouterKeepsFingerCountAddressingIntact() throws {

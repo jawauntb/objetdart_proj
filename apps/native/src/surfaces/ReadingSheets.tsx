@@ -25,10 +25,10 @@ const LENSES_BY_SCENE: Record<NativeSceneId, ReadonlyArray<{
     { id: 3, label: "protein", notation: "sequence → form", note: "a derived fold: local expression gathers into a working shape." },
   ],
   solar: [
-    { id: 0, label: "galaxy", notation: "ρ(r, θ)", note: "many stellar births gathered into one rotating cosmic field." },
-    { id: 1, label: "star", notation: "M, L", note: "mass gathers at the centre while orbits keep their history." },
-    { id: 2, label: "planet", notation: "Tₑq", note: "a body condenses into a world with terrain and a causal temperature." },
-    { id: 3, label: "Earth", notation: "air · sea · life", note: "a derived biosphere lens: atmosphere, ocean, and the possibility of life." },
+    { id: 0, label: "system", notation: "rᵢ, vᵢ, mᵢ", note: "the same live bodies, masses, and gravity you are touching." },
+    { id: 1, label: "trajectories", notation: "rᵢ(t)", note: "recent paths and a short prediction from the current state." },
+    { id: 2, label: "harmonics", notation: "Tᵢ : Tⱼ", note: "orbital periods read as ratios, spacing, and consonance." },
+    { id: 3, label: "felt", notation: "ΔE → light · tone · pulse", note: "kernel-authored outcomes expressed across sight, sound, and touch." },
   ],
   molecules: [
     { id: 0, label: "mixture", notation: "Σnᵢ", note: "a bounded field of compounds moving and vibrating together." },
@@ -47,7 +47,7 @@ const LENSES_BY_SCENE: Record<NativeSceneId, ReadonlyArray<{
 const SCENE_LINKS: ReadonlyArray<{ id: NativeSceneId; label: string; note: string }> = [
   { id: "wave", label: "wave / surface", note: "ripples, signals, spectra, and felt colour." },
   { id: "cell", label: "cell / colony", note: "reaction, diffusion, and the first living patterns." },
-  { id: "solar", label: "solar / nursery", note: "gravity, orbits, and a system taking shape." },
+  { id: "solar", label: "solar / gravity loom", note: "touch bodies, cast matter into open sky, and read their orbits." },
   { id: "molecules", label: "molecules / bonds", note: "formulas, geometry, reactions, and vibration." },
   { id: "atoms", label: "atoms / shells", note: "excitation, covalent bonds, and fusion energy." },
 ];

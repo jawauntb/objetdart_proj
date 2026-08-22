@@ -28,6 +28,43 @@ public final class VesselSensors: @unchecked Sendable {
     public let gamma: Double
   }
 
+  /// Establishes the pose at subscription start as neutral, then reports
+  /// signed angular displacement from that pose. Sampling a still device at
+  /// 20 Hz therefore keeps returning zero instead of cumulatively changing a
+  /// physical parameter; leaning left and right remain opposite commands.
+  public struct TiltCalibration: Sendable {
+    private var neutralBeta: Double?
+    private var neutralGamma: Double?
+
+    public init() {}
+
+    public mutating func reset() {
+      neutralBeta = nil
+      neutralGamma = nil
+    }
+
+    public mutating func calibrate(beta: Double, gamma: Double) -> TiltEvent {
+      guard beta.isFinite, gamma.isFinite else { return TiltEvent(beta: 0, gamma: 0) }
+      if neutralBeta == nil || neutralGamma == nil {
+        neutralBeta = beta
+        neutralGamma = gamma
+        return TiltEvent(beta: 0, gamma: 0)
+      }
+      return TiltEvent(
+        beta: Self.signedDelta(beta, from: neutralBeta ?? beta),
+        gamma: Self.signedDelta(gamma, from: neutralGamma ?? gamma)
+      )
+    }
+
+    private static func signedDelta(_ value: Double, from neutral: Double) -> Double {
+      var delta = value - neutral
+      while delta > 180 { delta -= 360 }
+      while delta < -180 { delta += 360 }
+      // Sensor tremor around the resting pose is not deliberate gravity.
+      return abs(delta) < 0.75 ? 0 : delta
+    }
+  }
+
   public enum Grant: String, Sendable {
     case unrequested
     case granted
@@ -76,6 +113,7 @@ public final class VesselSensors: @unchecked Sendable {
   private var running = false
   private var lifecycleObservers: [NSObjectProtocol] = []
   private var askedThisSession = false
+  private var tiltCalibration = TiltCalibration()
 
   public init(
     manager: CMMotionManager = CMMotionManager(),
@@ -178,6 +216,7 @@ public final class VesselSensors: @unchecked Sendable {
   private func startIfNeeded() {
     guard !running, isAvailable, !listeners.isEmpty else { return }
     running = true
+    tiltCalibration.reset()
     if manager.isDeviceMotionAvailable {
       manager.startDeviceMotionUpdates(to: queue) { [weak self] (motion: CMDeviceMotion?, error: Error?) in
         guard let self, let motion, error == nil else { return }
@@ -203,9 +242,13 @@ public final class VesselSensors: @unchecked Sendable {
     let now = clock()
     if now - lastTiltAt >= 0.05 {
       lastTiltAt = now
-      let tilt = TiltEvent(beta: motion.attitude.pitch * 180 / .pi, gamma: motion.attitude.roll * 180 / .pi)
+      let rawBeta = motion.attitude.pitch * 180 / .pi
+      let rawGamma = motion.attitude.roll * 180 / .pi
+      let tilt = tiltCalibration.calibrate(beta: rawBeta, gamma: rawGamma)
       for listener in listeners.values { listener.onTilt?(tilt) }
-      let absBeta = abs(tilt.beta)
+      // Face-down is an absolute vessel posture, unlike relative gravity
+      // tilt, so its hysteresis continues to read the raw attitude.
+      let absBeta = abs(rawBeta)
       if !faceDown && absBeta > VesselSensors.flipEnterDeg {
         faceDown = true
         for listener in listeners.values { listener.onFlip?(true) }

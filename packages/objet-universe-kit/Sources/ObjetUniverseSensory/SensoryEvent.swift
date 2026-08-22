@@ -91,12 +91,17 @@ public struct SensoryEvent: Equatable, Sendable {
   public let clock: SensoryClock
   public let derivation: SensoryDerivation
   public let senses: Set<SensorySense>
+  /// Optional kernel-authored scientific pitch. When present, the audio bus
+  /// preserves this exact frequency relationship instead of choosing a
+  /// generic UI tone. Gain still comes only from `derivation`.
+  public let frequencyHz: Double?
 
   public init(
     id: String,
     signature: SensorySignature,
     clock: SensoryClock,
     energy: Double,
+    frequencyHz: Double? = nil,
     senses: Set<SensorySense> = [.visual, .audio, .haptic]
   ) {
     precondition(!id.isEmpty, "sensory event id must not be empty")
@@ -104,6 +109,11 @@ public struct SensoryEvent: Equatable, Sendable {
     self.signature = signature
     self.clock = clock
     self.derivation = SensoryDerivation(energy: energy)
+    if let frequencyHz, frequencyHz.isFinite, frequencyHz >= 20, frequencyHz <= 20_000 {
+      self.frequencyHz = frequencyHz
+    } else {
+      self.frequencyHz = nil
+    }
     self.senses = senses
   }
 }

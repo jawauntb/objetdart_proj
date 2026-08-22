@@ -1,7 +1,12 @@
+#if SWIFT_PACKAGE
+import ObjetUniverseCore
+#endif
+
 public final class RenderHost {
   public private(set) var clockStarts = 0
   public private(set) var renderedFrameCount = 0
   public private(set) var submittedFieldCount = 0
+  public private(set) var submittedSolarCount = 0
   public var activeRendererCount: Int { running ? renderers.count : 0 }
 
   private var renderers: [RendererKind: UniverseRenderer] = [:]
@@ -32,6 +37,52 @@ public final class RenderHost {
       (renderer as? FieldSurfaceRenderer)?.submitField(submission)
     }
     submittedFieldCount += 1
+  }
+
+  /// Upload one bounded solar snapshot to the installed solar renderer. As
+  /// with field submission, a suspended host rejects the upload because the
+  /// renderer may already have released its GPU resources.
+  public func submitSolar(_ snapshot: SolarRenderSnapshot) {
+    guard running else { return }
+    for renderer in renderers.values {
+      (renderer as? SolarSystemRenderer)?.submitSolar(snapshot)
+    }
+    submittedSolarCount += 1
+  }
+
+  public func orientSolarCamera(
+    by translation: SemanticVector,
+    velocity: SemanticVector,
+    phase: SemanticGesturePhase
+  ) {
+    guard running else { return }
+    for renderer in renderers.values {
+      (renderer as? SolarCameraRenderer)?.orientSolarCamera(
+        by: translation,
+        velocity: velocity,
+        phase: phase
+      )
+    }
+  }
+
+  public func projectSolarMaterialPoint(_ point: SemanticOrigin) -> SemanticOrigin {
+    guard running else { return point }
+    for renderer in renderers.values {
+      if let camera = renderer as? SolarCameraRenderer {
+        return camera.projectSolarMaterialPoint(point)
+      }
+    }
+    return point
+  }
+
+  public func projectSolarMaterialVector(_ vector: SemanticVector) -> SemanticVector {
+    guard running else { return vector }
+    for renderer in renderers.values {
+      if let camera = renderer as? SolarCameraRenderer {
+        return camera.projectSolarMaterialVector(vector)
+      }
+    }
+    return vector
   }
 
   public func render(interpolation: Double) {

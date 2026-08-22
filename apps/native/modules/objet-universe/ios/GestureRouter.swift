@@ -88,13 +88,58 @@ public enum NativeActionSource: String, Sendable {
   case system
 }
 
+/// The thing a continuous contact gripped when it entered the material.
+/// Identity is sampled once and carried through every tick and release; a
+/// moving body never falls out from under the hand because the renderer has
+/// advanced since the previous sample.
+public enum NativeContactTarget: Equatable, Sendable {
+  case body(id: UInt64)
+  case openSky
+  case material
+
+  public var bodyID: UInt64? {
+    if case let .body(id) = self { return id }
+    return nil
+  }
+}
+
+/// Pencil-only axes retained beside the shared touch grammar. These are
+/// ready for iPad instruments without making Pencil a separate interaction
+/// language or removing finger parity.
+public struct NativePencilSample: Sendable {
+  public let phase: GesturePhase
+  public let x: Double
+  public let y: Double
+  public let pressure: Double
+  public let altitude: Double
+  public let azimuth: Double
+  public let hovering: Bool
+}
+
 /// Shape of a recogniser emit. Matches the TypeScript `NativeGestureShape`
 /// discriminated union. The router normalises every UIKit gesture recogniser
 /// into one of these cases before assembling a `SemanticCommand`.
 public enum NativeGestureShape: Sendable {
-  case tap(fingers: Int, count: Int, x: Double, y: Double, intensity: Double)
-  case hold(fingers: Int, elapsedMs: Double, x: Double, y: Double, intensity: Double, phase: GesturePhase)
-  case drag(fingers: Int, dx: Double, dy: Double, vx: Double, vy: Double, x: Double, y: Double)
+  case tap(fingers: Int, count: Int, x: Double, y: Double, intensity: Double, target: NativeContactTarget)
+  case hold(
+    fingers: Int,
+    elapsedMs: Double,
+    x: Double, y: Double,
+    intensity: Double,
+    phase: GesturePhase,
+    pressure: Double,
+    altitude: Double,
+    azimuth: Double,
+    target: NativeContactTarget
+  )
+  case drag(
+    fingers: Int,
+    phase: GesturePhase,
+    totalDx: Double, totalDy: Double,
+    vx: Double, vy: Double,
+    x: Double, y: Double,
+    target: NativeContactTarget
+  )
   case flick(fingers: Int, speed: Double, angle: Double, x: Double, y: Double)
   case twist(fingers: Int, angleRad: Double, velocity: Double)
   case pinch(scale: Double, velocity: Double)
@@ -115,6 +160,7 @@ public enum GesturePhase: String, Sendable {
   case enter
   case tick
   case release
+  case cancel
 }
 
 /// The span shape's phase, unchanged in name because the TypeScript union
@@ -130,6 +176,10 @@ public struct RoutedCommand: Sendable {
   public let intensity: Double
   public let logicalTimeMs: Double
   public let shape: NativeGestureShape
+  /// True only once for a continuous UIKit act. Native previews still route
+  /// every sampled phase, while React persistence and progression receive a
+  /// single receipt at the intentional commit boundary.
+  public let isCommitBoundary: Bool
 
   public init(
     verb: NativeGrammarVerb,
@@ -137,7 +187,8 @@ public struct RoutedCommand: Sendable {
     source: NativeActionSource,
     intensity: Double,
     logicalTimeMs: Double,
-    shape: NativeGestureShape
+    shape: NativeGestureShape,
+    isCommitBoundary: Bool = true
   ) {
     self.verb = verb
     self.layer = layer
@@ -145,6 +196,7 @@ public struct RoutedCommand: Sendable {
     self.intensity = intensity
     self.logicalTimeMs = logicalTimeMs
     self.shape = shape
+    self.isCommitBoundary = isCommitBoundary
   }
 }
 
@@ -193,7 +245,11 @@ public final class GestureRouter: @unchecked Sendable {
   /// Rebuild a `RoutedCommand` from a normalised shape. Rooms cannot rebind
   /// verbs — the pure switch here mirrors `resolveVerbFromShape` on the TS
   /// side, and is the ONLY place layer/verb decisions happen in Swift.
-  public func route(shape: NativeGestureShape, source: NativeActionSource, logicalTimeMs: Double) {
+  public func route(shape: NativeGestureShape,
+    source: NativeActionSource,
+    logicalTimeMs: Double,
+    isCommitBoundary: Bool = true
+  ) {
     let (verb, layer) = Self.resolve(shape: shape)
     let intensity = Self.intensity(from: shape)
     let command = RoutedCommand(
@@ -202,7 +258,8 @@ public final class GestureRouter: @unchecked Sendable {
       source: source,
       intensity: intensity,
       logicalTimeMs: logicalTimeMs,
-      shape: shape
+      shape: shape,
+      isCommitBoundary: isCommitBoundary
     )
     markContact()
     queue.async { [sink] in
@@ -292,20 +349,21 @@ public final class GestureRouter: @unchecked Sendable {
   /// or a UIWindow.
   public static func resolve(shape: NativeGestureShape) -> (NativeGrammarVerb, NativeActionLayer) {
     switch shape {
-    case let .tap(fingers, _, _, _, _):
+    case let .tap(fingers, _, _, _, _, _):
       if fingers >= 3 { return (.tap3, .material) }
       if fingers == 2 { return (.tap2, .representation) }
       return (.tap, .material)
-    case let .hold(fingers, elapsedMs, _, _, _, phase):
+    case let .hold(fingers, elapsedMs, _, _, _, phase, _, _, _, _):
       if fingers >= 3 { return (.hold3, .world) }
       // The ceremony is committed when the hand lets go, never on the way
       // past the threshold: a hold that is still deepening is still a dwell,
       // which is what keeps duration an axis instead of a switch. Mirrors
       // `roomGestureBindings` in `src/lib/gesture/defaults.ts`.
-      if phase != .tick, elapsedMs >= NativeGestureThresholds.ceremonyMs { return (.holdCeremony, .material) }
+      if phase == .release, elapsedMs >= NativeGestureThresholds.ceremonyMs { return (.holdCeremony, .material) }
       return (.holdDwell, .material)
-    case let .drag(fingers, _, _, _, _, _, _):
+    case let .drag(fingers, _, _, _, _, _, _, _, target):
       if fingers >= 3 { return (.drag3, .world) }
+      if target == .openSky { return (.pan2, .representation) }
       return (.drag, .material)
     case .flick:
       return (.flick, .material)
@@ -335,12 +393,14 @@ public final class GestureRouter: @unchecked Sendable {
   /// `intensityFromNativeShape` on the TypeScript side.
   public static func intensity(from shape: NativeGestureShape) -> Double {
     switch shape {
-    case let .tap(_, _, _, _, intensity):
+    case let .tap(_, _, _, _, intensity, _):
       return clamp01(intensity)
-    case let .hold(_, _, _, _, intensity, _):
+    case let .hold(_, _, _, _, intensity, _, _, _, _, _):
       return clamp01(intensity)
-    case let .drag(_, _, _, vx, vy, _, _):
-      return clamp01((vx * vx + vy * vy).squareRoot() / 3.0)
+    case let .drag(_, _, totalDx, totalDy, vx, vy, _, _, _):
+      let speed = (vx * vx + vy * vy).squareRoot()
+      let travel = (totalDx * totalDx + totalDy * totalDy).squareRoot()
+      return clamp01(max(speed / 3.0, travel))
     case let .flick(_, speed, _, _, _):
       return clamp01(speed / 3.0)
     case let .twist(_, angleRad, _):
@@ -370,13 +430,22 @@ public final class GestureRouter: @unchecked Sendable {
   /// middle of itself.
   public static func contact(from shape: NativeGestureShape) -> (x: Double, y: Double)? {
     switch shape {
-    case let .tap(_, _, x, y, _): return (x, y)
-    case let .hold(_, _, x, y, _, _): return (x, y)
-    case let .drag(_, _, _, _, _, x, y): return (x, y)
+    case let .tap(_, _, x, y, _, _): return (x, y)
+    case let .hold(_, _, x, y, _, _, _, _, _, _): return (x, y)
+    case let .drag(_, _, _, _, _, _, x, y, _): return (x, y)
     case let .flick(_, _, _, x, y): return (x, y)
     case let .scrub(_, _, cx, cy): return (cx, cy)
     case let .span(_, _, _, cx, cy): return (cx, cy)
     case .twist, .pinch, .shake, .tilt, .knock, .flip, .breath: return nil
+    }
+  }
+
+  public static func target(from shape: NativeGestureShape) -> NativeContactTarget? {
+    switch shape {
+    case let .tap(_, _, _, _, _, target): target
+    case let .hold(_, _, _, _, _, _, _, _, _, target): target
+    case let .drag(_, _, _, _, _, _, _, _, target): target
+    case .flick, .twist, .pinch, .scrub, .span, .shake, .tilt, .knock, .flip, .breath: nil
     }
   }
 

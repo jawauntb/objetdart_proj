@@ -32,6 +32,10 @@ public final class ObjetUniverseModule: Module {
         view.setMaxRepresentation(representation)
       }
 
+      Prop("reducedMotion") { (view: ObjetUniverseSurfaceView, reducedMotion: Bool) in
+        view.setReducedMotion(reducedMotion)
+      }
+
       Prop("assistiveVerb") { (view: ObjetUniverseSurfaceView, verb: String?) in
         view.setAssistiveVerb(verb)
       }

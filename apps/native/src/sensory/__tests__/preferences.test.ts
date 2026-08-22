@@ -5,8 +5,11 @@ import {
   DEFAULT_SENSORY_PREFERENCES,
   applySensoryPreferences,
   busStateFromPreferences,
+  createSensoryPreferenceCoordinator,
   enabledSenses,
   isSensoryChannelEnabled,
+  serializeSensoryPreferences,
+  toggleSensoryPreference,
   type SensoryPreferences,
 } from "../preferences.ts";
 
@@ -61,6 +64,17 @@ test("muting haptics does not disable audio", () => {
   assert.equal(isSensoryChannelEnabled(prefs, "audio"), true);
 });
 
+test("the compact sensory control toggles audio and haptics independently", () => {
+  const audioMuted = toggleSensoryPreference(DEFAULT_SENSORY_PREFERENCES, "audio");
+  assert.deepEqual(audioMuted, { audioMuted: true, hapticsMuted: false });
+
+  const bothMuted = toggleSensoryPreference(audioMuted, "haptic");
+  assert.deepEqual(bothMuted, { audioMuted: true, hapticsMuted: true });
+
+  const audioRestored = toggleSensoryPreference(bothMuted, "audio");
+  assert.deepEqual(audioRestored, { audioMuted: false, hapticsMuted: true });
+});
+
 test("muting both audio and haptics still leaves visual scientific feedback authoritative", () => {
   const prefs = applySensoryPreferences(DEFAULT_SENSORY_PREFERENCES, {
     audioMuted: true,
@@ -94,4 +108,49 @@ test("busStateFromPreferences surfaces coarse bus state without per-event detail
   assert.equal(state.audioMuted, true);
   assert.equal(state.hapticsMuted, false);
   assert.equal(state.hapticEngineAvailable, false);
+});
+
+test("startup, change, and relaunch apply the one persisted preference to native buses", async () => {
+  let stored: string | null = serializeSensoryPreferences({ audioMuted: true, hapticsMuted: false });
+  const applied: SensoryPreferences[] = [];
+  let prewarms = 0;
+  const storage = {
+    async read() { return stored; },
+    async write(value: string) { stored = value; },
+  };
+  const bridge = {
+    async apply(preferences: SensoryPreferences) { applied.push(preferences); },
+    async prewarmAudio() { prewarms += 1; },
+  };
+
+  const firstLaunch = createSensoryPreferenceCoordinator(storage, bridge);
+  assert.deepEqual(await firstLaunch.initialize(), { audioMuted: true, hapticsMuted: false });
+  assert.deepEqual(await firstLaunch.update({ hapticsMuted: true }), {
+    audioMuted: true,
+    hapticsMuted: true,
+  });
+
+  const relaunched = createSensoryPreferenceCoordinator(storage, bridge);
+  assert.deepEqual(await relaunched.initialize(), { audioMuted: true, hapticsMuted: true });
+  assert.deepEqual(applied, [
+    { audioMuted: true, hapticsMuted: false },
+    { audioMuted: true, hapticsMuted: true },
+    { audioMuted: true, hapticsMuted: true },
+  ]);
+  assert.equal(prewarms, 2, "each process launch prewarms once after restoring mute state");
+});
+
+test("corrupt or future preference envelopes fall back to safe live defaults", async () => {
+  assert.equal(JSON.stringify(DEFAULT_SENSORY_PREFERENCES), JSON.stringify({ audioMuted: false, hapticsMuted: false }));
+  // The coordinator exercises parsing through initialize without exposing a
+  // second persistence authority.
+  for (const raw of ["not-json", JSON.stringify({ version: 99, audioMuted: true, hapticsMuted: true })]) {
+    const applications: SensoryPreferences[] = [];
+    const coordinator = createSensoryPreferenceCoordinator(
+      { async read() { return raw; }, async write() {} },
+      { async apply(value) { applications.push(value); }, async prewarmAudio() {} },
+    );
+    await coordinator.initialize();
+    assert.deepEqual(applications[0], DEFAULT_SENSORY_PREFERENCES);
+  }
 });

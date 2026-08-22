@@ -19,6 +19,12 @@ public final class SensoryModule: Module {
       HapticBus.shared.setMuted(muted)
     }
 
+    AsyncFunction("prewarmAudio") { () async in
+      await withCheckedContinuation { continuation in
+        AudioBus.shared.prewarm { continuation.resume() }
+      }
+    }
+
     Function("busState") { () -> [String: Any] in
       [
         "audioMuted": AudioBus.shared.isMuted,

@@ -3,6 +3,34 @@ import XCTest
 @testable import ObjetUniverseRender
 
 final class RendererLifecycleTests: XCTestCase {
+  func testContinuousCommandDeduplicationWindowStaysBounded() {
+    let kernel = ProbeKernel(scene: .wave)
+    let host = UniverseHost(initial: kernel, factory: { _ in kernel })
+    _ = host.advance(to: 0)
+    var presentationTime = 0.0
+
+    for index in 0 ..< 2_048 {
+      XCTAssertEqual(
+        host.apply(.init(id: "continuous-\(index)", verb: .material, at: presentationTime)),
+        .scheduled
+      )
+      presentationTime += UniverseClock.defaultStepSeconds
+      _ = host.advance(to: presentationTime)
+    }
+
+    XCTAssertEqual(host.acceptedCommandIDCount, 512)
+    XCTAssertEqual(
+      host.apply(.init(id: "continuous-2047", verb: .material, at: presentationTime)),
+      .committed,
+      "recent bridge retries must remain idempotent"
+    )
+    XCTAssertEqual(
+      host.apply(.init(id: "continuous-0", verb: .material, at: presentationTime)),
+      .scheduled,
+      "an expired continuous sample may leave the bounded reconciliation window"
+    )
+  }
+
   func testSceneHandoffCommitsOnceForNormalInterruptedReversedAndBackgroundedRequests() throws {
     let source = ProbeKernel(scene: .wave)
     let cell = ProbeKernel(scene: .cell)
@@ -185,6 +213,19 @@ final class RendererLifecycleTests: XCTestCase {
     XCTAssertEqual(sixty.ticks, oneTwenty.ticks)
     XCTAssertEqual(thirty.checkpoint, sixty.checkpoint)
     XCTAssertEqual(sixty.checkpoint, oneTwenty.checkpoint)
+  }
+
+  func testHostDeduplicatesTheSameSemanticCommandIDBeforeScheduling() {
+    let kernel = TraceKernel(scene: .wave)
+    let host = UniverseHost(initial: kernel, factory: { _ in kernel })
+    _ = host.advance(to: 0)
+    let command = SemanticCommand(id: "retry-safe", verb: .material, at: 0)
+
+    XCTAssertEqual(host.apply(command), .scheduled)
+    XCTAssertEqual(host.apply(command), .committed)
+    _ = host.advance(to: UniverseClock.defaultStepSeconds)
+
+    XCTAssertEqual(kernel.appliedAtTicks.count, 1)
   }
 
   private func hostTrace(presentationRate: Int) -> (ticks: [Int], checkpoint: KernelCheckpoint) {

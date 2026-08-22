@@ -80,6 +80,18 @@ function clamp01(value: number): number {
   return value;
 }
 
+function finite(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function finiteNonnegative(value: number): number {
+  return Math.max(0, finite(value));
+}
+
+function clamp(value: number, lower: number, upper: number): number {
+  return Math.min(Math.max(value, lower), upper);
+}
+
 function assertNoRendererKeys(payload: Readonly<Record<string, unknown>>): void {
   for (const key of Object.keys(payload)) {
     if (RENDERER_FIELD.test(key)) {
@@ -134,7 +146,7 @@ export type AssembleInput = Readonly<{
  * what keeps duration an axis rather than a switch, and the release is what
  * commits. Mirrors `GesturePhase` in `GestureRouter.swift`.
  */
-export type GesturePhase = "enter" | "tick" | "release";
+export type GesturePhase = "enter" | "tick" | "release" | "cancel";
 
 /**
  * A single gesture-shape descriptor the router normalizes each recognizer
@@ -143,8 +155,8 @@ export type GesturePhase = "enter" | "tick" | "release";
  */
 export type NativeGestureShape =
   | Readonly<{ kind: "tap"; fingers: 1 | 2 | 3; count: number; x: number; y: number; intensity: number }>
-  | Readonly<{ kind: "hold"; fingers: 1 | 2 | 3; elapsedMs: number; x: number; y: number; intensity: number; phase: GesturePhase }>
-  | Readonly<{ kind: "drag"; fingers: 1 | 2 | 3; dx: number; dy: number; vx: number; vy: number; x: number; y: number }>
+  | Readonly<{ kind: "hold"; fingers: 1 | 2 | 3; elapsedMs: number; x: number; y: number; intensity: number; phase: GesturePhase; pressure?: number; azimuth?: number; altitude?: number; targetBodyId?: string }>
+  | Readonly<{ kind: "drag"; fingers: 1 | 2 | 3; dx: number; dy: number; vx: number; vy: number; x: number; y: number; phase?: GesturePhase; targetBodyId?: string }>
   | Readonly<{ kind: "flick"; fingers: 1 | 2 | 3; speed: number; angle: number; x: number; y: number }>
   | Readonly<{ kind: "twist"; fingers: 2 | 3; angleRad: number; velocity: number }>
   | Readonly<{ kind: "pinch"; scale: number; velocity: number }>
@@ -273,7 +285,7 @@ export function resolveVerbFromShape(shape: NativeGestureShape): { verb: Semanti
       // past the threshold: a hold that is still deepening is still a dwell,
       // which is what keeps duration an axis instead of a switch. Mirrors
       // `roomGestureBindings` in `src/lib/gesture/defaults.ts`.
-      if (shape.phase !== "tick" && shape.elapsedMs >= NATIVE_GESTURE_THRESHOLDS.ceremonyMs) {
+      if (shape.phase === "release" && shape.elapsedMs >= NATIVE_GESTURE_THRESHOLDS.ceremonyMs) {
         return { verb: "ceremony", layer: "material" };
       }
       return { verb: "grow", layer: "material" };
@@ -323,17 +335,25 @@ export function payloadFromShape(shape: NativeGestureShape): ActionPayload {
       return Object.freeze(payload);
     case "hold":
       payload.fingers = shape.fingers;
-      payload.elapsedMs = shape.elapsedMs;
-      payload.x = shape.x;
-      payload.y = shape.y;
+      payload.elapsedMs = finiteNonnegative(shape.elapsedMs);
+      payload.x = finite(shape.x);
+      payload.y = finite(shape.y);
       payload.phase = shape.phase;
+      payload.pressure = clamp01(finite(shape.pressure));
+      payload.azimuth = finite(shape.azimuth);
+      payload.altitude = clamp(finite(shape.altitude), -Math.PI / 2, Math.PI / 2);
+      if (shape.targetBodyId) payload.targetBodyId = shape.targetBodyId;
       return Object.freeze(payload);
     case "drag":
       payload.fingers = shape.fingers;
-      payload.dx = shape.dx;
-      payload.dy = shape.dy;
-      payload.x = shape.x;
-      payload.y = shape.y;
+      payload.dx = finite(shape.dx);
+      payload.dy = finite(shape.dy);
+      payload.vx = finite(shape.vx);
+      payload.vy = finite(shape.vy);
+      payload.x = finite(shape.x);
+      payload.y = finite(shape.y);
+      payload.phase = shape.phase ?? "tick";
+      if (shape.targetBodyId) payload.targetBodyId = shape.targetBodyId;
       return Object.freeze(payload);
     case "flick":
       payload.fingers = shape.fingers;

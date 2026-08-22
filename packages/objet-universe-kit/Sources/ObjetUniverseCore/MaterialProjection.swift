@@ -41,4 +41,24 @@ public enum MaterialProjection {
       y: (viewY - 0.5) * coverY + 0.5
     )
   }
+
+  /// Project a view-normalized displacement or velocity onto the square
+  /// material. Unlike a point this has no centre translation.
+  public static func materialVector(
+    viewX: Double,
+    viewY: Double,
+    viewportWidth: Double,
+    viewportHeight: Double
+  ) -> SemanticVector {
+    guard
+      viewX.isFinite, viewY.isFinite,
+      viewportWidth.isFinite, viewportHeight.isFinite,
+      viewportWidth > 0, viewportHeight > 0
+    else { return .zero }
+    let longest = max(viewportWidth, viewportHeight)
+    return SemanticVector(
+      x: viewX * viewportWidth / longest,
+      y: viewY * viewportHeight / longest
+    )
+  }
 }

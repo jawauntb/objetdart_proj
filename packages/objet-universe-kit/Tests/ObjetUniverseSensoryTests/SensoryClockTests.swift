@@ -52,6 +52,31 @@ final class SensoryClockTests: XCTestCase {
     XCTAssertEqual(bus._testAppliedCount(), 1)
   }
 
+  func testAudioSchedulingNeverWaitsForABlockedRecoveryQueue() {
+    let queue = DispatchQueue(label: "audio-recovery-blocked")
+    let started = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    queue.async {
+      started.signal()
+      release.wait()
+    }
+    XCTAssertEqual(started.wait(timeout: .now() + 1), .success)
+
+    let bus = AudioBus(queue: queue)
+    let event = SensoryEvent(
+      id: "nonblocking-recovery",
+      signature: .ripple,
+      clock: SensoryClock(logicalTick: 1),
+      energy: 0.5
+    )
+    let began = ProcessInfo.processInfo.systemUptime
+    XCTAssertEqual(bus.schedule(event), .scheduled)
+    let callerDuration = ProcessInfo.processInfo.systemUptime - began
+    release.signal()
+
+    XCTAssertLessThan(callerDuration, 0.010, "MainActor event delivery must never join audio recovery")
+  }
+
   func testHapticBusRefusesToReFireTheSameEventID() {
     let bus = HapticBus()
     let event = SensoryEvent(
@@ -100,6 +125,37 @@ final class SensoryClockTests: XCTestCase {
     )
     XCTAssertEqual(bus.schedule(after), .scheduled)
     XCTAssertEqual(bus._testAppliedCount(), 3)
+  }
+
+  func testDelayedOnsetRevalidatesInterruptionBeforePlaying() {
+    let bus = AudioBus()
+    let completion = expectation(description: "delayed onset settles")
+    let event = SensoryEvent(
+      id: "delayed-interruption",
+      signature: .crossing,
+      clock: SensoryClock(logicalTick: 4, wallOffset: 0.030),
+      energy: 0.8
+    )
+
+    XCTAssertEqual(bus.schedule(event) { completion.fulfill() }, .scheduled)
+    bus._testForceInterruption(true)
+    wait(for: [completion], timeout: 1)
+
+    XCTAssertEqual(bus._testPerformedOnsetCount(), 0,
+                   "an interruption beginning after schedule must still suppress the delayed onset")
+    XCTAssertEqual(bus.schedule(event), .duplicate,
+                   "recovery must not replay a suppressed but already-authoritative event")
+  }
+
+  func testPrewarmIsIdempotentAndDoesNotConsumeAnEvent() {
+    let bus = AudioBus()
+    let first = expectation(description: "first prewarm")
+    let second = expectation(description: "coalesced prewarm")
+    bus.prewarm { first.fulfill() }
+    bus.prewarm { second.fulfill() }
+    wait(for: [first, second], timeout: 1)
+    XCTAssertEqual(bus._testAppliedCount(), 0)
+    XCTAssertEqual(bus._testPerformedOnsetCount(), 0)
   }
 
   // MARK: - Muting isolation
@@ -229,5 +285,37 @@ final class SensoryClockTests: XCTestCase {
     // channel — which is the whole invariant.
     XCTAssertEqual(event.clock.logicalTick, 314159)
     XCTAssertEqual(event.clock.wallOffset, 0)
+  }
+
+  func testOrbitalToneProfilesAreStableAndDistinct() {
+    let tap = AudioToneProfile.forSignature(.tap)
+    let orbit = AudioToneProfile.forSignature(.ripple)
+    let collision = AudioToneProfile.forSignature(.crossing)
+
+    XCTAssertGreaterThan(tap.frequency, 0)
+    XCTAssertGreaterThan(orbit.duration, tap.duration)
+    XCTAssertNotEqual(collision.frequency, orbit.frequency)
+    XCTAssertLessThanOrEqual(collision.duration, 0.5, "outcome tones must stay immediate")
+  }
+
+  func testOrbitalPlaybackPreservesKernelAuthoredFrequencyExactly() {
+    for frequency in [40.0, 110, 364, 1_024, 8_000] {
+      let playback = try! XCTUnwrap(OrbitalPlayback.forFrequency(frequency))
+      XCTAssertEqual(playback.baseFrequency * Double(playback.rate), frequency, accuracy: 0.001)
+      XCTAssertGreaterThanOrEqual(playback.rate, 0.5)
+      XCTAssertLessThanOrEqual(playback.rate, 2)
+    }
+
+    XCTAssertNil(OrbitalPlayback.forFrequency(.nan))
+    XCTAssertNil(OrbitalPlayback.forFrequency(19))
+  }
+
+  func testOrbitalToneGainComesOnlyFromAuthoritativeEnergy() {
+    let quiet = AudioToneProfile.gain(forEnergy: 0.2)
+    let loud = AudioToneProfile.gain(forEnergy: 0.8)
+    XCTAssertGreaterThan(loud, quiet)
+    XCTAssertEqual(AudioToneProfile.gain(forEnergy: -.infinity), 0)
+    XCTAssertEqual(AudioToneProfile.gain(forEnergy: .nan), 0)
+    XCTAssertLessThanOrEqual(AudioToneProfile.gain(forEnergy: 4), 1)
   }
 }

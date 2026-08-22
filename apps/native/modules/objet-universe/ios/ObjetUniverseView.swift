@@ -76,7 +76,7 @@ public final class ObjetUniverseView: ExpoView {
     isOpaque = true
     isAccessibilityElement = true
     accessibilityLabel = "A living wave field"
-    installMaterialRenderer()
+    installMaterialRenderer(for: .wave)
     observeApplicationLifecycle()
     // The one seam a route may reach the kernel through. The registry holds
     // this view weakly, so a remount replaces it and a teardown clears it
@@ -133,7 +133,7 @@ public final class ObjetUniverseView: ExpoView {
   /// Commit one semantic act. The host schedules it onto a fixed tick — never
   /// onto a presentation frame — so the same gestures replay to the same sea.
   func commit(_ command: SemanticCommand) {
-    host.apply(command)
+    host.apply(projectSolarCommandIfNeeded(command))
   }
 
   /// Update only the visual lens. The field remains authoritative and keeps
@@ -148,15 +148,45 @@ public final class ObjetUniverseView: ExpoView {
     setRepresentation(rawValue)
   }
 
+  /// Resolve a touch to one authoritative solar identity. The input layer can
+  /// use the returned ID in a semantic command, but never reads render
+  /// instances or screen-space sprites to decide what was touched.
+  func solarTargetBody(at materialPoint: SemanticOrigin) -> UInt64? {
+    let projected = renderHost.projectSolarMaterialPoint(materialPoint)
+    return (surfaceKernels.kernel as? any SolarSnapshotProviding)?.solarTargetBody(at: projected)
+  }
+
+  /// Open-sky drags turn the presentation camera. They bypass the kernel, so
+  /// looking around can never move the selected body or alter replay state.
+  func orientSolarCamera(
+    by translation: SemanticVector,
+    velocity: SemanticVector,
+    phase: SemanticGesturePhase
+  ) {
+    renderHost.orientSolarCamera(by: translation, velocity: velocity, phase: phase)
+  }
+
+  /// Drain only outcomes authored by the active kernel. Runtime sensory buses
+  /// consume this borrowed batch immediately after commit, keeping event
+  /// meaning out of gesture recognizers and renderer heuristics.
+  func drainSimulationOutcomes<T>(_ body: (UnsafeBufferPointer<SimulationOutcome>) -> T) -> T {
+    guard let source = surfaceKernels.kernel as? any SimulationOutcomeProducing else {
+      return body(UnsafeBufferPointer(start: nil, count: 0))
+    }
+    return source.drainSimulationOutcomes(body)
+  }
+
   /// The authoritative tick, for the sensory buses: sight, sound, and touch
   /// all read one clock or they are three separate events.
   var logicalTick: Int { host.telemetry.logicalTick }
+  var activeScene: SceneID { host.activeScene }
 
   public func setScene(_ rawScene: String) {
     guard let destination = SceneID(rawValue: rawScene) else { return }
     do {
       if try host.handoff(to: destination) {
         accessibilityLabel = accessibilityDescription(for: destination)
+        installMaterialRenderer(for: destination)
       }
     } catch {
       // The last stable scene remains visible. U4 persists this boundary; U3
@@ -166,9 +196,27 @@ public final class ObjetUniverseView: ExpoView {
 
   nonisolated fileprivate func advanceFrame(at timestamp: CFTimeInterval) {
     let frame = host.advance(to: timestamp)
+    publishFrameOutcomes()
     submitActiveSurface()
     renderHost.render(interpolation: frame.interpolation)
     publishAccessibilitySnapshotIfNeeded()
+  }
+
+  /// Collisions and escapes originate during fixed-step advancement rather
+  /// than a gesture callback. Drain them before this frame is drawn so sight,
+  /// sound, and touch all receive the same authoritative event.
+  nonisolated private func publishFrameOutcomes() {
+    MainActor.assumeIsolated {
+      self.publishFrameOutcomesOnMain()
+    }
+  }
+
+  private func publishFrameOutcomesOnMain() {
+    guard let source = surfaceKernels.kernel as? any SimulationOutcomeProducing else { return }
+    source.drainSimulationOutcomes { outcomes in
+      guard !outcomes.isEmpty else { return }
+      UniverseRuntime.shared.publishAuthoritativeOutcomes(outcomes)
+    }
   }
 
   /// Hand the frame's authoritative field to the material. The pointer never
@@ -176,6 +224,12 @@ public final class ObjetUniverseView: ExpoView {
   /// allocates nothing.
   nonisolated private func submitActiveSurface() {
     guard let kernel = surfaceKernels.kernel else { return }
+    if let solar = kernel as? any SolarSnapshotProviding {
+      solar.withSolarRenderSnapshot { snapshot in
+        renderHost.submitSolar(snapshot)
+      }
+      return
+    }
     kernel.withSurface { values, width, height in
       renderHost.submitField(
         FieldSubmission(
@@ -195,10 +249,50 @@ public final class ObjetUniverseView: ExpoView {
   /// The one renderer this view installs. If Metal is unavailable the view
   /// stays on its ground colour rather than installing a stand-in that counts
   /// frames and draws nothing.
-  private func installMaterialRenderer() {
+  private func installMaterialRenderer(for scene: SceneID) {
     guard let metalLayer else { return }
-    guard let renderer = WaveMaterialRenderer(layer: metalLayer, breathSeconds: WaveField.breathSeconds) else { return }
+    guard let renderer = SceneRendererFactory.make(
+      for: scene,
+      layer: metalLayer,
+      waveBreathSeconds: WaveField.breathSeconds
+    ) else { return }
     renderHost.install(renderer)
+  }
+
+  /// The input surface has already inverted the viewport's aspect cover.
+  /// Solar has one additional presentation-only yaw/pitch transform, so apply
+  /// its inverse here before the command enters replayable authority.
+  private func projectSolarCommandIfNeeded(_ command: SemanticCommand) -> SemanticCommand {
+    guard host.activeScene == .solar else { return command }
+    let origin = command.origin.map(renderHost.projectSolarMaterialPoint)
+    let contact = command.payload.contact.map { contact in
+      SemanticContactPayload(
+        phase: contact.phase,
+        point: renderHost.projectSolarMaterialPoint(contact.point),
+        durationSeconds: contact.durationSeconds,
+        normalizedPressure: contact.normalizedPressure,
+        azimuth: contact.azimuth,
+        altitude: contact.altitude,
+        targetBodyID: contact.targetBodyID
+      )
+    }
+    let drag = command.payload.drag.map { drag in
+      SemanticDragPayload(
+        phase: drag.phase,
+        point: renderHost.projectSolarMaterialPoint(drag.point),
+        translation: renderHost.projectSolarMaterialVector(drag.translation),
+        velocity: renderHost.projectSolarMaterialVector(drag.velocity),
+        targetBodyID: drag.targetBodyID
+      )
+    }
+    return SemanticCommand(
+      id: command.id,
+      verb: command.verb,
+      at: command.at,
+      intensity: command.intensity,
+      origin: origin,
+      payload: SemanticCommandPayload(contact: contact, drag: drag, vessel: command.payload.vessel)
+    )
   }
 
   private func startDisplayLinkIfNeeded() {
