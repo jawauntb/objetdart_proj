@@ -5,6 +5,7 @@ import Foundation
 public final class UniverseHost {
   public typealias KernelFactory = (SceneID) -> SimulationKernel
   private static let observabilityCapacity = 64
+  private static let acceptedCommandCapacity = 512
 
   public private(set) var activeScene: SceneID
   public private(set) var committedScenes: [SceneID]
@@ -20,6 +21,13 @@ public final class UniverseHost {
     let command: SemanticCommand
   }
   private var pendingCommands: [Int: PendingCommand] = [:]
+  /// Semantic action IDs are the retry/replay idempotency key. The durable
+  /// store already rejects duplicate rows; retaining the same invariant here
+  /// prevents a bridge retry from reaching a one-shot kernel twice before the
+  /// append pipeline has a chance to reconcile it.
+  private var acceptedCommandIDs: Set<String> = []
+  private var acceptedCommandRing = [String?](repeating: nil, count: UniverseHost.acceptedCommandCapacity)
+  private var acceptedCommandCursor = 0
   private var suspended = false
   private var retired = false
 
@@ -44,12 +52,26 @@ public final class UniverseHost {
 
   @discardableResult
   public func apply(_ command: SemanticCommand) -> CommandDisposition {
-    guard !retired, let ordinal = clock.enqueue(actionAt: command.at) else { return .rejected }
+    guard !retired else { return .rejected }
+    if acceptedCommandIDs.contains(command.id) { return .committed }
+    guard let ordinal = clock.enqueue(actionAt: command.at) else { return .rejected }
+    rememberAcceptedCommandID(command.id)
     record(.previewed)
     record(.durablyAppended)
     pendingCommands[ordinal] = PendingCommand(scene: activeScene, command: command)
     return .scheduled
   }
+
+  private func rememberAcceptedCommandID(_ id: String) {
+    if let evicted = acceptedCommandRing[acceptedCommandCursor] {
+      acceptedCommandIDs.remove(evicted)
+    }
+    acceptedCommandRing[acceptedCommandCursor] = id
+    acceptedCommandCursor = (acceptedCommandCursor + 1) % Self.acceptedCommandCapacity
+    acceptedCommandIDs.insert(id)
+  }
+
+  internal var acceptedCommandIDCount: Int { acceptedCommandIDs.count }
 
   @discardableResult
   public func advance(to presentationTime: TimeInterval) -> ClockFrame {

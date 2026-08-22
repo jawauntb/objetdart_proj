@@ -85,12 +85,12 @@ final class ProofKernelTests: XCTestCase {
     XCTAssertNotEqual(galaxyDigest, earthDigest)
   }
 
-  func testSolarCeremonyBodyCountStaysBounded() {
+  func testSolarCreationBodyCountStaysBounded() {
     let kernel = SolarKernel(seed: 12)
     for index in 0 ..< 100 {
-      _ = kernel.apply(SemanticCommand(id: "ceremony-\(index)", verb: .ceremony, at: Double(index)))
+      _ = kernel.apply(SemanticCommand(id: "grow-\(index)", verb: .grow, at: Double(index), origin: SemanticOrigin(x: 0.75, y: 0.5)))
     }
-    XCTAssertEqual(kernel.bodies.count, 48)
+    XCTAssertEqual(kernel.bodies.count, SolarPhysics.maxBodies)
   }
 
   func testLensCommandsDriveBothKernelsAndNonzeroCellReadingsAdvance() {

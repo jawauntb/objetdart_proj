@@ -1,3 +1,7 @@
+#if SWIFT_PACKAGE
+import ObjetUniverseCore
+#endif
+
 public enum RendererKind: String, CaseIterable, Sendable {
   case metal
   case realityKit
@@ -34,8 +38,8 @@ public struct FieldSubmission {
   /// 2 spectrum, 3 felt. It changes how the same authoritative field is
   /// drawn; it never changes the solver.
   public let representation: Int
-  /// Stable material family: 0 wave, 1 cell, 2 solar. The scalar field stays
-  /// the renderer boundary while the shader chooses a legible palette.
+  /// Stable field-material family. Solar snapshots bypass this scalar seam and
+  /// reach `SolarSystemRenderer`; the value remains for replay compatibility.
   public let materialKind: Int
 
   public init(
@@ -64,4 +68,42 @@ public struct FieldSubmission {
 /// passes them by.
 public protocol FieldSurfaceRenderer: UniverseRenderer {
   func submitField(_ submission: FieldSubmission)
+}
+
+/// A renderer for the solar kernel's bounded entity snapshot.
+///
+/// The snapshot owns no memory. Its buffers are borrowed from the kernel and
+/// are valid only for the duration of `submitSolar`; a renderer must upload
+/// into storage it already owns before returning. Keeping this seam beside the
+/// native kernel prevents body state from crossing the React Native bridge.
+public protocol SolarSystemRenderer: UniverseRenderer {
+  func submitSolar(_ snapshot: SolarRenderSnapshot)
+}
+
+/// Renderer-owned camera intent for open sky. It never enters a semantic
+/// command or mutates the solar kernel, so looking around cannot alter an
+/// orbit or create replay divergence.
+public protocol SolarCameraRenderer: UniverseRenderer {
+  func orientSolarCamera(
+    by translation: SemanticVector,
+    velocity: SemanticVector,
+    phase: SemanticGesturePhase
+  )
+
+  /// Invert the renderer's presentation camera so a contact lands in the
+  /// authoritative material frame that produced the visible body.
+  func projectSolarMaterialPoint(_ point: SemanticOrigin) -> SemanticOrigin
+  func projectSolarMaterialVector(_ vector: SemanticVector) -> SemanticVector
+}
+
+/// Chooses the visual instrument from the scene's material, not from a route
+/// name or a React remount. Solar is entity/path material; every other current
+/// proof scene remains a scalar field until it earns a dedicated renderer.
+public enum SceneRendererSelection: Equatable, Sendable {
+  case field
+  case solar
+
+  public init(scene: SceneID) {
+    self = scene == .solar ? .solar : .field
+  }
 }

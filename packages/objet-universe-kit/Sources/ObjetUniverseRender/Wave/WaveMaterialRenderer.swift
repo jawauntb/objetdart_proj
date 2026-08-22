@@ -56,12 +56,22 @@ public final class WaveMaterialRenderer: FieldSurfaceRenderer {
   public func prepare() {
     if pipeline == nil {
       do {
-        let library = try device.makeLibrary(source: WaveShaderSource.metal, options: nil)
-        let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.vertexFunction = library.makeFunction(name: "objet_wave_vertex")
-        descriptor.fragmentFunction = library.makeFunction(name: "objet_wave_fragment")
-        descriptor.colorAttachments[0].pixelFormat = layer.pixelFormat
-        pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+        let library = try MetalPipelineCache.shared.library(
+          namespace: "wave-v1",
+          device: device,
+          source: WaveShaderSource.metal
+        )
+        pipeline = try MetalPipelineCache.shared.pipeline(
+          namespace: "wave-v1",
+          device: device,
+          pixelFormat: layer.pixelFormat
+        ) {
+          let descriptor = MTLRenderPipelineDescriptor()
+          descriptor.vertexFunction = library.makeFunction(name: "objet_wave_vertex")
+          descriptor.fragmentFunction = library.makeFunction(name: "objet_wave_fragment")
+          descriptor.colorAttachments[0].pixelFormat = layer.pixelFormat
+          return try device.makeRenderPipelineState(descriptor: descriptor)
+        }
       } catch {
         // A failed compile leaves the ground colour on screen and the host
         // running; it must not take the universe down with it.

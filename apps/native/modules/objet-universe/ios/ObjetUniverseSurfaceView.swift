@@ -1,5 +1,6 @@
 import ExpoModulesCore
 import ObjetUniverseKit
+import QuartzCore
 import UIKit
 
 /// The surface the visitor's hand actually meets.
@@ -30,6 +31,9 @@ public final class ObjetUniverseSurfaceView: ExpoView {
   private var assistiveOriginX = 0.5
   private var assistiveOriginY = 0.5
   private var lastAssistiveCommandId: String?
+  private var pencilHoverActive = false
+  private var pencilHoverStartedAt: CFTimeInterval = 0
+  private var lastPencilHoverPoint = SemanticOrigin.centre
 
   public required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -44,7 +48,17 @@ public final class ObjetUniverseSurfaceView: ExpoView {
       },
       onDiscovery: { _ in }
     )
-    input = SurfaceInput(surface: self, router: router)
+    input = SurfaceInput(
+      surface: self,
+      router: router,
+      targetResolver: { [weak self] viewX, viewY in
+        guard let self else { return .openSky }
+        return self.contactTarget(at: self.materialPoint(viewX: viewX, viewY: viewY))
+      },
+      onPencilSample: { [weak self] sample in
+        self?.receivePencil(sample)
+      }
+    )
   }
 
   /// The route closes the surface while a reading surface is open: the
@@ -53,6 +67,7 @@ public final class ObjetUniverseSurfaceView: ExpoView {
   public func setEnabled(_ value: Bool) {
     enabled = value
     input?.setEnabled(value && window != nil)
+    if !value { cancelPencilHover() }
   }
 
   public func setRepresentation(_ value: Int) {
@@ -61,6 +76,10 @@ public final class ObjetUniverseSurfaceView: ExpoView {
 
   public func setMaxRepresentation(_ value: Int) {
     UniverseRuntime.shared.setMaximumRepresentation(value)
+  }
+
+  public func setReducedMotion(_ value: Bool) {
+    UniverseRuntime.shared.setReducedMotion(value)
   }
 
   public func setAssistiveVerb(_ value: String?) {
@@ -107,6 +126,71 @@ public final class ObjetUniverseSurfaceView: ExpoView {
   public override func didMoveToWindow() {
     super.didMoveToWindow()
     input?.setEnabled(enabled && window != nil)
+    if window == nil { cancelPencilHover() }
+  }
+
+  private func materialPoint(viewX: Double, viewY: Double) -> SemanticOrigin {
+    MaterialProjection.materialPoint(
+      viewX: viewX,
+      viewY: viewY,
+      viewportWidth: Double(bounds.width),
+      viewportHeight: Double(bounds.height)
+    )
+  }
+
+  private func contactTarget(at point: SemanticOrigin) -> NativeContactTarget {
+    guard UniverseRuntime.shared.isSolarScene else { return .material }
+    if let id = UniverseRuntime.shared.targetBodyID(at: point) { return .body(id: id) }
+    return .openSky
+  }
+
+  /// Hover is an invitation, never an act. Open sky receives the same typed
+  /// accretion preview as a press, but exiting or crossing a body always sends
+  /// cancel, so neither authority nor the React trail can advance.
+  private func receivePencil(_ sample: NativePencilSample) {
+    guard sample.hovering else { return }
+    guard UniverseRuntime.shared.isSolarScene else {
+      cancelPencilHover()
+      return
+    }
+    let point = materialPoint(viewX: sample.x, viewY: sample.y)
+    let endsHover = sample.phase == .release || sample.phase == .cancel
+      || contactTarget(at: point).bodyID != nil
+    if endsHover {
+      cancelPencilHover()
+      return
+    }
+
+    let now = CACurrentMediaTime()
+    let phase: SemanticGesturePhase
+    if pencilHoverActive {
+      phase = .tick
+    } else {
+      pencilHoverActive = true
+      pencilHoverStartedAt = now
+      phase = .enter
+    }
+    lastPencilHoverPoint = point
+    UniverseRuntime.shared.previewPencilHover(SemanticContactPayload(
+      phase: phase,
+      point: point,
+      durationSeconds: min(now - pencilHoverStartedAt, 0.75),
+      normalizedPressure: sample.pressure,
+      azimuth: sample.azimuth,
+      altitude: sample.altitude,
+      targetBodyID: nil
+    ))
+  }
+
+  private func cancelPencilHover() {
+    guard pencilHoverActive else { return }
+    pencilHoverActive = false
+    UniverseRuntime.shared.previewPencilHover(SemanticContactPayload(
+      phase: .cancel,
+      point: lastPencilHoverPoint,
+      durationSeconds: max(0, CACurrentMediaTime() - pencilHoverStartedAt),
+      targetBodyID: nil
+    ))
   }
 
   private func receive(_ routed: RoutedCommand) {
@@ -118,7 +202,9 @@ public final class ObjetUniverseSurfaceView: ExpoView {
         viewportHeight: Double(bounds.height)
       )
     }
-    let expressed = UniverseRuntime.shared.commit(routed, origin: origin)
+    let payload = semanticPayload(for: routed, origin: origin)
+    let expressed = UniverseRuntime.shared.commit(routed, origin: origin, payload: payload)
+    guard routed.isCommitBoundary else { return }
     onSemanticCommand([
       "verb": routed.verb.rawValue,
       "semanticVerb": GestureRouter.semanticVerb(for: routed.verb).rawValue,
@@ -129,5 +215,68 @@ public final class ObjetUniverseSurfaceView: ExpoView {
       // the hand and the ear. The guide gates on this.
       "answered": expressed,
     ])
+  }
+
+  private func semanticPayload(
+    for routed: RoutedCommand,
+    origin: SemanticOrigin?
+  ) -> SemanticCommandPayload {
+    guard let origin else { return .empty }
+
+    if case let .hold(_, elapsedMs, _, _, _, phase, pressure, altitude, azimuth, target) = routed.shape {
+      return SemanticCommandPayload(contact: SemanticContactPayload(
+        phase: Self.semanticPhase(phase),
+        point: origin,
+        durationSeconds: elapsedMs / 1_000,
+        normalizedPressure: pressure,
+        azimuth: azimuth,
+        altitude: altitude,
+        targetBodyID: target.bodyID
+      ))
+    }
+
+    if case let .tap(_, _, _, _, _, target) = routed.shape {
+      return SemanticCommandPayload(contact: SemanticContactPayload(
+        phase: .release,
+        point: origin,
+        durationSeconds: 0,
+        targetBodyID: target.bodyID
+      ))
+    }
+
+    guard case let .drag(_, phase, totalDx, totalDy, vx, vy, _, _, target) = routed.shape else {
+      return .empty
+    }
+
+    let viewportWidth = Double(bounds.width)
+    let viewportHeight = Double(bounds.height)
+    let translation = MaterialProjection.materialVector(
+      viewX: totalDx,
+      viewY: totalDy,
+      viewportWidth: viewportWidth,
+      viewportHeight: viewportHeight
+    )
+    let velocity = MaterialProjection.materialVector(
+      viewX: vx,
+      viewY: vy,
+      viewportWidth: viewportWidth,
+      viewportHeight: viewportHeight
+    )
+    return SemanticCommandPayload(drag: SemanticDragPayload(
+      phase: Self.semanticPhase(phase),
+      point: origin,
+      translation: translation,
+      velocity: velocity,
+      targetBodyID: target.bodyID
+    ))
+  }
+
+  private static func semanticPhase(_ phase: GesturePhase) -> SemanticGesturePhase {
+    switch phase {
+    case .enter: .enter
+    case .tick: .tick
+    case .release: .release
+    case .cancel: .cancel
+    }
   }
 }

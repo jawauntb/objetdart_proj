@@ -31,6 +31,8 @@ final class UniverseRuntime {
   private var committed = 0
   private var representation = 0
   private var maximumRepresentation = 3
+  private var reducedMotion = false
+  private var hoverPreviewSequence = 0
 
   /// The vessel is the device itself — tilt, shake, knock, flip — and it
   /// belongs here rather than to either view: it outlives the route, it has
@@ -57,6 +59,9 @@ final class UniverseRuntime {
   func attach(_ view: ObjetUniverseView) {
     universe = view
     view.setRepresentation(representation)
+    // Build the graph and one-shot buffers before the first touch so the
+    // interaction path only schedules an already-resident buffer.
+    AudioBus.shared.prewarm()
     subscribeVesselIfNeeded()
   }
 
@@ -73,6 +78,64 @@ final class UniverseRuntime {
     if representation > maximumRepresentation {
       representation = maximumRepresentation
       universe?.setRepresentation(representation)
+    }
+  }
+
+  func setReducedMotion(_ value: Bool) {
+    guard reducedMotion != value else { return }
+    reducedMotion = value
+    if value {
+      // Enter captures the current pose and clears any presentation velocity
+      // without snapping the camera back or mutating the solar kernel.
+      universe?.orientSolarCamera(by: .zero, velocity: .zero, phase: .enter)
+    }
+  }
+
+  /// Pencil hover borrows the typed open-sky contact preview. It deliberately
+  /// bypasses sensory answers and React receipts, and it can only enter/tick/
+  /// cancel, so hovering can never create a body or advance progression.
+  func previewPencilHover(_ contact: SemanticContactPayload) {
+    guard isSolarScene, contact.targetBodyID == nil, contact.phase != .release else { return }
+    hoverPreviewSequence += 1
+    universe?.commit(SemanticCommand(
+      id: "pencil-hover-\(hoverPreviewSequence)",
+      verb: .grow,
+      at: CACurrentMediaTime(),
+      intensity: min(0.3, 0.08 + contact.durationSeconds / 3),
+      origin: contact.point,
+      payload: SemanticCommandPayload(contact: contact)
+    ))
+  }
+
+  /// Hit testing remains a kernel query. UIKit supplies a material-space
+  /// point; the renderer never decides which body the hand selected.
+  func targetBodyID(at materialPoint: SemanticOrigin) -> UInt64? {
+    universe?.solarTargetBody(at: materialPoint)
+  }
+
+  var isSolarScene: Bool { universe?.activeScene == .solar }
+
+  /// Outcome feedback enters only as a complete event authored by the
+  /// authoritative kernel/host. This seam deliberately accepts no position,
+  /// render pulse, or guessed collision kind from which the runtime could
+  /// fabricate scientific meaning.
+  func publishAuthoritativeOutcome(_ event: SensoryEvent) {
+    _ = HapticBus.shared.schedule(event)
+    _ = AudioBus.shared.schedule(event)
+  }
+
+  /// Translate only typed results drained from the kernel. The bounded
+  /// intensity is the one cross-modal energy; raw orbital energy remains
+  /// available for scientific display but never becomes speaker gain.
+  func publishAuthoritativeOutcomes(_ outcomes: UnsafeBufferPointer<SimulationOutcome>) {
+    for outcome in outcomes {
+      publishAuthoritativeOutcome(SensoryEvent(
+        id: "kernel-\(outcome.id)",
+        signature: Self.signature(for: outcome.kind),
+        clock: SensoryClock(logicalTick: outcome.tick),
+        energy: outcome.intensity,
+        frequencyHz: outcome.frequencyHz
+      ))
     }
   }
 
@@ -109,17 +172,47 @@ final class UniverseRuntime {
   /// caused — the guide gates its entries on that, and an entry whose
   /// phenomenon has not landed stays hidden.
   @discardableResult
-  func commit(_ routed: RoutedCommand, origin: SemanticOrigin?) -> Bool {
+  func commit(
+    _ routed: RoutedCommand,
+    origin: SemanticOrigin?,
+    payload: SemanticCommandPayload = .empty
+  ) -> Bool {
     let verb = GestureRouter.semanticVerb(for: routed.verb)
     let intensity = min(max(routed.intensity, 0), 1)
-    let expressed = canApplyRepresentation(verb) && (universe?.expresses(verb) ?? false)
+    let semanticPayload: SemanticCommandPayload
+    if case let .tilt(beta, gamma) = routed.shape {
+      semanticPayload = SemanticCommandPayload(
+        vessel: SemanticVesselPayload(betaDegrees: beta, gammaDegrees: gamma)
+      )
+    } else {
+      semanticPayload = payload
+    }
+    let cameraAnswered: Bool
+    if verb == .pan, let drag = semanticPayload.drag {
+      universe?.orientSolarCamera(
+        by: drag.translation,
+        velocity: reducedMotion ? .zero : drag.velocity,
+        phase: drag.phase
+      )
+      cameraAnswered = true
+    } else {
+      cameraAnswered = false
+    }
+    let expressed = cameraAnswered || (canApplyRepresentation(verb) && (universe?.expresses(verb) ?? false))
     committed += 1
     let id = "\(routed.source.rawValue)-\(routed.verb.rawValue)-\(committed)"
 
-    if expressed {
+    if expressed && !cameraAnswered {
       advanceRepresentation(for: verb)
       universe?.commit(
-        SemanticCommand(id: id, verb: verb, at: CACurrentMediaTime(), intensity: intensity, origin: origin)
+        SemanticCommand(
+          id: id,
+          verb: verb,
+          at: CACurrentMediaTime(),
+          intensity: intensity,
+          origin: origin,
+          payload: semanticPayload
+        )
       )
     }
     if UniverseRuntime.answerable(routed.shape) {
@@ -195,8 +288,8 @@ final class UniverseRuntime {
   private static func answerable(_ shape: NativeGestureShape) -> Bool {
     switch shape {
     case .tap, .flick, .shake, .knock, .flip: true
-    case let .hold(_, _, _, _, _, phase): phase != .tick
-    case let .span(phase, _, _, _, _): phase != .tick
+    case let .hold(_, _, _, _, _, phase, _, _, _, _): phase == .enter || phase == .release
+    case let .span(phase, _, _, _, _): phase == .enter || phase == .release
     case .drag, .twist, .pinch, .scrub, .tilt, .breath: false
     }
   }
@@ -233,6 +326,17 @@ final class UniverseRuntime {
     case .tap2, .hold3, .twist3, .pinch, .pan2: .detent
     case .twist: .lens
     case .flip: .crossing
+    }
+  }
+
+  private static func signature(for outcome: SimulationOutcomeKind) -> SensorySignature {
+    switch outcome {
+    case .created: .bloom
+    case .selected: .detent
+    case .orbitLocked: .lens
+    case .collision: .crossing
+    case .consumed: .chop
+    case .escaped: .storm
     }
   }
 

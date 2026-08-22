@@ -287,3 +287,36 @@ test("accessibility labels never carry renderer-shaped keys and use a synthetic 
     }
   }
 });
+
+test("reduced motion, Pencil hover, and sensory controls cross the native shell", () => {
+  const route = readFileSync(
+    path.join(repoRoot, "apps/native/src/scenes/ProofSceneRoute.tsx"),
+    "utf8",
+  );
+  const module = readFileSync(
+    path.join(repoRoot, "apps/native/modules/objet-universe/ios/ObjetUniverseModule.swift"),
+    "utf8",
+  );
+  const surface = readFileSync(
+    path.join(repoRoot, "apps/native/modules/objet-universe/ios/ObjetUniverseSurfaceView.swift"),
+    "utf8",
+  );
+  const runtime = readFileSync(
+    path.join(repoRoot, "apps/native/modules/objet-universe/ios/UniverseRuntime.swift"),
+    "utf8",
+  );
+  const chrome = readFileSync(
+    path.join(repoRoot, "apps/native/src/design/NativeChrome.tsx"),
+    "utf8",
+  );
+
+  assert.match(route, /useReducedMotion\(\)/);
+  assert.match(route, /reducedMotion=\{reducedMotion\}/);
+  assert.match(module, /Prop\("reducedMotion"\)/);
+  assert.match(runtime, /velocity: reducedMotion \? \.zero : drag\.velocity/);
+  assert.match(surface, /onPencilSample:/);
+  assert.match(surface, /previewPencilHover\(SemanticContactPayload/);
+  assert.match(runtime, /contact\.phase != \.release/);
+  assert.match(chrome, /accessibilityRole="switch"/);
+  assert.match(chrome, /updateNativeSensoryPreferences/);
+});

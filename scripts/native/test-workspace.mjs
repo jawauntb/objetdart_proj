@@ -204,6 +204,11 @@ const waveRenderer = readText("packages/objet-universe-kit/Sources/ObjetUniverse
 const waveShaders = readText("packages/objet-universe-kit/Sources/ObjetUniverseRender/Wave/WaveShaders.swift");
 const cellKernel = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/Cell/CellKernel.swift");
 const solarKernel = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/Solar/SolarKernel.swift");
+const solarPhysics = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/Solar/SolarPhysics.swift");
+const solarSnapshot = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/Solar/SolarRenderSnapshot.swift");
+const solarRenderer = readText("packages/objet-universe-kit/Sources/ObjetUniverseRender/Solar/SolarRenderer.swift");
+const solarShaders = readText("packages/objet-universe-kit/Sources/ObjetUniverseRender/Solar/SolarShaders.swift");
+const sceneRendererFactory = readText("packages/objet-universe-kit/Sources/ObjetUniverseRender/SceneRendererFactory.swift");
 const atomKernel = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/Atoms/AtomKernel.swift");
 const moleculeKernel = readText("packages/objet-universe-kit/Sources/ObjetUniverseCore/Molecules/MoleculeKernel.swift");
 assert.match(universeView, /WaveKernel\(/, "the wave scene must run its own kernel; a probe kernel has no material to show");
@@ -223,12 +228,25 @@ assert.match(universeView, /SolarKernel\(/, "the solar scene must hand off to a 
 assert.match(universeView, /AtomKernel\(/, "the atoms scene must hand off to a real atomic kernel");
 assert.match(universeView, /MoleculeKernel\(/, "the molecules scene must hand off to a real molecular kernel");
 assert.match(universeView, /materialKind: kernel\.materialKind/, "the active material family must reach the shared renderer");
+assert.match(universeView, /renderHost\.submitSolar/, "solar snapshots must reach their entity renderer without crossing React Native");
 assert.match(cellKernel, /SurfaceSimulationKernel/, "the cell lane must provide a shared scalar surface");
 assert.match(cellKernel, /reaction.diffusion|Gray.Scott/i, "the cell lane must be governed by a reaction-diffusion law");
 assert.match(solarKernel, /SurfaceSimulationKernel/, "the solar lane must provide a shared scalar surface");
 assert.match(solarKernel, /symplectic|integrat/i, "the solar lane must advance bodies with a bounded integrator");
-assert.match(solarKernel, /maximumBodyCount = 48/, "the solar lane must bound ceremony-created bodies");
-assert.match(solarKernel, /maximumCentralMass = 4\.0/, "the solar lane must bound central growth");
+assert.match(solarPhysics, /maxBodies = 14/, "the solar lane must bound its live body population");
+assert.match(solarSnapshot, /UnsafeBufferPointer<SolarRenderBody>/, "the solar renderer boundary must borrow bounded body state");
+assert.match(solarSnapshot, /SolarAccretionPreview/, "open-sky growth must have a non-authoritative visual preview");
+assert.match(sceneRendererFactory, /case \.solar:[\s\S]*SolarRenderer/, "the scene factory must replace the field renderer for solar");
+assert.match(solarRenderer, /framesInFlight = 3/, "the solar renderer must preallocate a triple-buffered frame ring");
+assert.match(solarRenderer, /submitSolar\(_ snapshot: SolarRenderSnapshot\)/, "the solar renderer must consume typed kernel snapshots");
+assert.match(solarRenderer, /snapshot\.accretionPreview/, "the solar renderer must draw the growing-world preview");
+assert.match(solarRenderer, /orientSolarCamera/, "open-sky drag must reach a renderer-owned camera instead of moving a body");
+assert.match(solarRenderer, /SolarCameraState/, "solar camera inertia must stay bounded presentation state");
+assert.match(universeView, /renderHost\.orientSolarCamera/, "camera intent must stay inside the native host without a per-frame React bridge");
+assert.match(solarShaders, /objet_solar_background_fragment/, "the solar material must own a dedicated Metal background pass");
+assert.match(solarShaders, /objet_solar_body_fragment/, "solar bodies must be instanced material, not scalar-field colours");
+assert.match(solarKernel, /command\.payload\.vessel\?\.gammaDegrees/, "solar gravity must read signed typed vessel tilt");
+assert.match(solarKernel, /centralMass = 1 \+ normalizedGamma \* 0\.5/, "the solar lane must map tilt absolutely into the bounded 0.5...1.5 mass range");
 assert.match(atomKernel, /maximumAtoms = 8/, "the atomic lane must bound atom growth");
 assert.match(atomKernel, /fusionEnergy/, "the atomic lane must retain a fusion ledger");
 assert.match(moleculeKernel, /maximumMolecules = 18/, "the molecular lane must bound molecule growth");
@@ -272,9 +290,11 @@ assert.match(proofRoute, /unlockedLenses/, "every proof scene must gate new agen
 assert.match(progressionLogic, /UNIVERSE_PROGRESS_VERSION = 2/, "keeper progression must be versioned");
 assert.match(progression, /writeQueue/, "keeper progression writes must serialize rapid commands");
 assert.match(progressionLogic, /unlockedLenses/, "keeper progression must expose deterministic lens unlocks");
-assert.match(readingSheets, /galaxy/, "the fold must name the cosmic galaxy register");
-assert.match(readingSheets, /star/, "the fold must name the stellar register");
-assert.match(readingSheets, /Earth/, "the fold must name the Earth register");
+assert.match(readingSheets, /system/, "the solar fold must name the live system register");
+assert.match(readingSheets, /trajectories/, "the solar fold must name the trajectory register");
+assert.match(readingSheets, /harmonics/, "the solar fold must name the harmonic register");
+assert.match(readingSheets, /felt/, "the solar fold must name the multisensory register");
+assert.doesNotMatch(readingSheets, /label: "(?:galaxy|star|planet|Earth)"/, "the solar fold must not claim four simulations it does not contain");
 assert.match(readingSheets, /genome/, "the fold must name the genome register");
 assert.match(readingSheets, /protein/, "the fold must name the protein register");
 assert.match(readingSheets, /molecules/, "the fold must name the molecular register");
@@ -578,13 +598,22 @@ for (const value of ["900", "2500", "250", "280", "12", "0.6", "0.75", "0.03", "
 
 assert.match(surfaceView, /UniverseRuntime\.shared\.commit/, "the surface must reach the kernel only through the one seam");
 assert.match(surfaceView, /MaterialProjection\.materialPoint/, "contact must be projected onto the material the shader draws, or the ring lands where the finger is not");
+assert.match(surfaceView, /MaterialProjection\.materialVector/, "drag vectors must cross the same aspect-fill projection as contact points");
+assert.match(surfaceView, /SemanticDragPayload/, "drag enter, tick, and release must reach the durable semantic payload");
+assert.match(surfaceView, /SemanticContactPayload/, "hold preview, release, and Pencil axes must reach the durable semantic payload");
 assert.match(surfaceView, /isAccessibilityElement = false/, "the surface must not silence the universe's VoiceOver identity");
 assert.match(universeView, /UniverseRuntime\.shared\.attach\(self\)/, "the mounted universe must register itself as the one live host");
 
 assert.match(universeRuntime, /expresses\(verb\)/, "a command must be committed only when the medium says the verb");
 assert.match(universeRuntime, /HapticBus\.shared\.schedule/, "state must land in a second sense in the same frame");
 assert.match(universeRuntime, /AudioBus\.shared\.schedule/, "state must land in a second sense in the same frame");
+assert.match(universeRuntime, /publishAuthoritativeOutcomes/, "typed kernel outcomes must reach native sensory buses");
+assert.match(universeView, /drainSimulationOutcomes/, "frame-authored collisions and fates must be drained from the kernel");
+assert.doesNotMatch(universeRuntime, /collisionPulse/, "runtime must never infer collision meaning from render state");
 assert.match(universeRuntime, /vessel\.subscribe/, "tilt, shake, knock and flip must reach the same grammar as touch");
+assert.match(universeRuntime, /SemanticVesselPayload\(betaDegrees: beta, gammaDegrees: gamma\)/, "signed calibrated tilt axes must cross the native semantic boundary");
+assert.match(surfaceView, /guard routed\.isCommitBoundary else \{ return \}/, "continuous native previews must emit one React persistence receipt at release");
+assert.match(surfaceInput, /emitDrag\(phase: \.cancel/, "UIKit cancellation must remain distinct from an intentional release");
 assert.match(universeRuntime, /vessel\.request/, "the vessel is invited from inside a real gesture, never demanded on launch");
 assert.match(universeRuntime, /vesselRouter\.route\(shape:/, "the vessel must speak through the router like every other source");
 assert.match(universeSurfaceBridge, /maxRepresentation/, "the touch surface must receive the keeper lens ceiling");
@@ -633,10 +662,10 @@ assert.match(
 
 // The hold's phase is what keeps duration an axis, and it has to mean the
 // same thing in both languages.
-assert.match(gestureRouter, /case hold\(fingers: Int, elapsedMs: Double, x: Double, y: Double, intensity: Double, phase: GesturePhase\)/, "the Swift hold shape must carry its phase");
+assert.match(gestureRouter, /case hold\([\s\S]*?phase: GesturePhase,[\s\S]*?target: NativeContactTarget[\s\S]*?\)/, "the Swift hold shape must carry phase, Pencil axes, and stable target identity");
 assert.match(gestureActions, /kind: "hold";[^}]*phase: GesturePhase/, "the TypeScript hold shape must carry its phase");
-assert.match(gestureRouter, /if phase != \.tick, elapsedMs >= NativeGestureThresholds\.ceremonyMs/, "Swift must commit the ceremony on release, never on the way past the threshold");
-assert.match(gestureActions, /shape\.phase !== "tick" && shape\.elapsedMs >= NATIVE_GESTURE_THRESHOLDS\.ceremonyMs/, "TypeScript must commit the ceremony on release, never on the way past the threshold");
+assert.match(gestureRouter, /if phase == \.release, elapsedMs >= NativeGestureThresholds\.ceremonyMs/, "Swift must commit the ceremony on intentional release, never on tick or cancel");
+assert.match(gestureActions, /shape\.phase === "release" && shape\.elapsedMs >= NATIVE_GESTURE_THRESHOLDS\.ceremonyMs/, "TypeScript must commit the ceremony on intentional release, never on tick or cancel");
 
 // Grammar verb → durable meaning: one table in TypeScript, one switch in
 // Swift, and they must agree verb for verb.
@@ -715,8 +744,12 @@ assert.match(sensoryEvent, /SensoryFallbackPolicy/, "the sensory bus must docume
 const audioBus = readText("packages/objet-universe-kit/Sources/ObjetUniverseSensory/AudioBus.swift");
 assert.match(audioBus, /public static let shared/, "the audio bus must remain a singleton — one AVAudioSession per app");
 assert.match(audioBus, /interruption/i, "the audio bus must handle interruption + route change recovery");
+assert.match(audioBus, /public func prewarm\(\)/, "the audio graph and tone buffers must prewarm before first interaction");
+assert.match(audioBus, /performOnset\(event\)/, "delayed audio must revalidate mute and interruption state at actual onset");
 assert.match(audioBus, /appliedEventIDs/, "the audio bus must keep an authoritative ledger so recovery cannot duplicate events");
 assert.match(audioBus, /Confirmation/, "the audio bus must expose a clean async completion handle for UniverseHost.promote");
+assert.match(audioBus, /AVAudioPlayerNode/, "the audio bus must play low-latency native one-shot tones");
+assert.match(audioBus, /setPreferredIOBufferDuration/, "the audio bus must request an interactive output buffer");
 
 const hapticBus = readText("packages/objet-universe-kit/Sources/ObjetUniverseSensory/HapticBus.swift");
 assert.match(hapticBus, /public static let shared/, "the haptic bus must remain a singleton — one CHHapticEngine per app");
@@ -744,6 +777,7 @@ assert.ok(expoModuleConfig.apple?.modules?.includes("SensoryModule"), "the Expo 
 const sensoryPreferences = readText("apps/native/src/sensory/preferences.ts");
 assert.match(sensoryPreferences, /DEFAULT_SENSORY_PREFERENCES/, "preferences must publish a frozen default the bridge can seed from");
 assert.match(sensoryPreferences, /enabledSenses/, "preferences must derive the enabled sense set for the bus");
+assert.match(sensoryPreferences, /createSensoryPreferenceCoordinator/, "preferences must restore, apply, and persist through one serialized owner");
 assert.match(sensoryPreferences, /Visual scientific feedback stays authoritative/, "preferences must document that visual feedback remains authoritative");
 assert.doesNotMatch(sensoryPreferences, /visualMuted/, "preferences must never expose a visual mute — visual feedback is authoritative");
 

@@ -1,8 +1,10 @@
 import { DarkTheme, Stack, ThemeProvider, useSegments, type Theme } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+import { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { NATIVE_SCENE_IDS, type NativeSceneId } from "@objet/universe-contracts";
 import { ObjetUniverseView } from "../modules/objet-universe";
+import { restoreNativeSensoryPreferences } from "../src/sensory/nativePreferences";
 
 /**
  * The persistent native universe sits at the bottom of this tree and every
@@ -24,6 +26,22 @@ const TRANSPARENT_OVER_UNIVERSE: Theme = {
 export default function RootLayout() {
   const segments = useSegments();
   const scene = sceneFromSegment(segments[0]);
+  const [sensoryReady, setSensoryReady] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    void restoreNativeSensoryPreferences().finally(() => {
+      if (mounted) setSensoryReady(true);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // Preferences reach the process-wide buses before the first interactive
+  // surface mounts, so a saved mute cannot leak one onset during relaunch.
+  if (!sensoryReady) return <View style={styles.root} />;
+
   return (
     <View style={styles.root}>
       <ObjetUniverseView scene={scene} style={StyleSheet.absoluteFill} />

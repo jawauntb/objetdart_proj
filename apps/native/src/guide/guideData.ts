@@ -107,7 +107,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     sceneNotes: {
       wave: "one tap seeds a coherent disturbance on the water field.",
       cell: "one tap perturbs the nutrient gradient under the fingertip.",
-      solar: "one tap kicks a body into a new nearby state.",
+      solar: "tap a body and it answers at the point you touched.",
     },
   },
   {
@@ -120,7 +120,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     sceneNotes: {
       wave: "the spectral lens lowers, returning to the raw surface.",
       cell: "the lineage overlay retracts to the plain membrane.",
-      solar: "the trajectory overlay steps back to bodies without arcs.",
+      solar: "the gravity loom returns to the previous reading.",
     },
   },
   {
@@ -133,7 +133,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     sceneNotes: {
       wave: "every source point rings once in phase.",
       cell: "every membrane contracts softly in the same frame.",
-      solar: "every body ticks its harmonic interval.",
+      solar: "the live bodies answer together without changing their identities.",
     },
   },
   {
@@ -146,7 +146,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     sceneNotes: {
       wave: "a source point charges, radiating with increasing amplitude.",
       cell: "a seed plants and begins to divide along its lineage.",
-      solar: "a body accretes mass from the nearby disk.",
+      solar: "press open sky to preview matter, then release to place it.",
     },
   },
   {
@@ -159,7 +159,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     sceneNotes: {
       wave: "the whole tank rings in phase with the point you held.",
       cell: "the colony's current lineage is committed as a named strain.",
-      solar: "the current system is committed as a saved star.",
+      solar: "a deep press aligns the live bodies into one conjunction.",
     },
   },
   {
@@ -172,7 +172,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     sceneNotes: {
       wave: "wavefronts slow so phase relationships become legible.",
       cell: "division slows so lineage decisions become legible.",
-      solar: "orbits slow so resonance becomes audible.",
+      solar: "time-dilation is not bound in this gravity loom yet.",
     },
   },
   {
@@ -185,7 +185,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     sceneNotes: {
       wave: "the drag becomes a moving source with a phase history.",
       cell: "the drag feeds nutrient along the path.",
-      solar: "the drag imparts momentum to the nearest body.",
+      solar: "drag a body to reshape its trajectory; press and release open sky to place new matter.",
     },
   },
   {
@@ -198,7 +198,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     sceneNotes: {
       wave: "a wind bends the coherent medium in a stated direction.",
       cell: "the environment shifts, nudging reaction-diffusion rates.",
-      solar: "a gas drag decays orbital energy in the disk's frame.",
+      solar: "three-finger weather is not bound in this gravity loom yet.",
     },
   },
   {
@@ -211,7 +211,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     sceneNotes: {
       wave: "the release lands as a last impulse, scaled by the speed the hand had.",
       cell: "a daughter cell is thrown out of the parent's neighbourhood.",
-      solar: "a body is ejected with the hand's angular velocity.",
+      solar: "a fast release stays part of the drag; it never adds a second impulse.",
     },
   },
   {
@@ -224,7 +224,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     sceneNotes: {
       wave: "vorticity accumulates on the water field.",
       cell: "the environment mixes, homogenising the reaction field.",
-      solar: "the disk gains angular momentum along the stir.",
+      solar: "circular stirring currently lands as a bounded material intervention.",
     },
   },
   {
@@ -237,7 +237,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     sceneNotes: {
       wave: "an interval sustains a chord across two source points.",
       cell: "two cells are held apart, keeping their lineages distinct.",
-      solar: "two bodies are held at a resonance ratio.",
+      solar: "two-point resonance holding is not bound in this gravity loom yet.",
     },
   },
   {
@@ -250,7 +250,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     sceneNotes: {
       wave: "the twist opens the spectral ring — the Fourier reveal.",
       cell: "the twist opens the lineage overlay.",
-      solar: "the twist opens the orbital-element overlay.",
+      solar: "the twist moves among system, trajectories, harmonics, and felt readings.",
     },
   },
   {
@@ -263,7 +263,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     sceneNotes: {
       wave: "the medium's damping cycle steps forward.",
       cell: "the colony's day/night cycle steps forward.",
-      solar: "the system's precession phase steps forward.",
+      solar: "seasonal precession is not bound in this gravity loom yet.",
     },
   },
   {
@@ -276,7 +276,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     sceneNotes: {
       wave: "the source point pulses at the entrained tempo.",
       cell: "division cycles into synchrony with the beat.",
-      solar: "the closest orbit locks its period to the beat.",
+      solar: "rhythmic entrainment is not bound in this gravity loom yet.",
     },
   },
   {
@@ -289,7 +289,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     sceneNotes: {
       wave: "two source points are struck alternately, forming a beat pattern.",
       cell: "two colonies are fed alternately, staggering their divisions.",
-      solar: "two bodies are perturbed alternately, forming a beat orbit.",
+      solar: "two-zone percussion is not bound in this gravity loom yet.",
     },
   },
   {
@@ -302,7 +302,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     sceneNotes: {
       wave: "a staggered chord of source points forms an interference envelope.",
       cell: "several seeds plant in sequence, forming a lineage cluster.",
-      solar: "several bodies drop in sequence, forming a resonance chain.",
+      solar: "staggered body placement is not bound in this gravity loom yet.",
     },
   },
   {
@@ -315,7 +315,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     sceneNotes: {
       wave: "the field is jittered with a bounded seed-derived perturbation.",
       cell: "colonies are dispersed within their bounded neighbourhood.",
-      solar: "bodies are given a bounded seed-derived kick.",
+      solar: "the live bodies receive one bounded perturbation.",
     },
   },
   {
@@ -328,7 +328,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     sceneNotes: {
       wave: "the water field's rest slope follows the device tilt.",
       cell: "nutrient settles along the tilt vector.",
-      solar: "an ambient acceleration is added to every body.",
+      solar: "tilt changes the central mass within the kernel's bounded range.",
     },
   },
   {
@@ -341,7 +341,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     sceneNotes: {
       wave: "one radial impulse rings the field.",
       cell: "the whole colony contracts once.",
-      solar: "every body receives a small centred kick.",
+      solar: "the system receives one bounded wake impulse.",
     },
   },
   {
@@ -354,7 +354,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     sceneNotes: {
       wave: "the field damps to its rest amplitude.",
       cell: "colonies enter their slow phase.",
-      solar: "orbits proceed at the reduced tick rate.",
+      solar: "night mode is not bound in this gravity loom yet.",
     },
   },
   {
@@ -367,7 +367,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     sceneNotes: {
       wave: "breath shapes the current source point's amplitude envelope.",
       cell: "breath modulates the nutrient supply rate.",
-      solar: "breath modulates the ambient drag.",
+      solar: "breath control is not bound in this gravity loom yet.",
     },
   },
   {
@@ -380,20 +380,20 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
     sceneNotes: {
       wave: "the water field's visible extent grows or shrinks with the pinch.",
       cell: "the colony's visible neighbourhood grows or shrinks with the pinch.",
-      solar: "the orbital frame's visible radius grows or shrinks with the pinch.",
+      solar: "scale travel is not bound inside this gravity loom yet.",
     },
   },
   {
     verb: "pan2",
     layer: "chrome",
-    plain: "two-finger drag pans the frame across the world.",
-    notation: "pan: the axis chrome translates the visible frame.",
+    plain: "drag open sky with one finger to turn the frame.",
+    notation: "pan: camera-only rotation; the material state does not move.",
     semantic: "pan",
     reveal: "Transfer",
     sceneNotes: {
       wave: "the visible slice of the field translates.",
       cell: "the visible neighbourhood translates.",
-      solar: "the orbital frame's centre translates.",
+      solar: "one-finger open-sky drag turns the camera without disturbing a body.",
     },
   },
 ];

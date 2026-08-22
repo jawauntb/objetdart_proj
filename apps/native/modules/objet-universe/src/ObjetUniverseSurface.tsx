@@ -35,6 +35,8 @@ export type ObjetUniverseSurfaceProps = {
   representation?: 0 | 1 | 2 | 3;
   /** Highest keeper-unlocked lens detent; native gestures cannot skip locks. */
   maxRepresentation?: 0 | 1 | 2 | 3;
+  /** iOS Reduce Motion keeps direct manipulation but removes camera inertia. */
+  reducedMotion?: boolean;
   /** A VoiceOver/keyboard semantic command assembled by the shared action layer. */
   assistiveVerb?: SemanticVerb;
   assistiveCommandId?: string;

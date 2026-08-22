@@ -15,6 +15,36 @@ private final class HoldLinkTarget: NSObject {
   }
 }
 
+@MainActor
+private final class PencilSampleRecognizer: UIGestureRecognizer {
+  var sample: ((UITouch, GesturePhase) -> Void)?
+
+  override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+    guard let pencil = touches.first(where: { $0.type == .pencil }) else { return }
+    sample?(pencil, .enter)
+  }
+
+  override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+    guard let pencil = touches.first(where: { $0.type == .pencil }) else { return }
+    sample?(pencil, .tick)
+  }
+
+  override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+    guard let pencil = touches.first(where: { $0.type == .pencil }) else { return }
+    sample?(pencil, .release)
+    state = .ended
+  }
+
+  override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+    if let pencil = touches.first(where: { $0.type == .pencil }) {
+      sample?(pencil, .cancel)
+    }
+    state = .cancelled
+  }
+
+  override func reset() { super.reset() }
+}
+
 /// U5's other half: the contact that reaches `GestureRouter`.
 ///
 /// The router has always been able to say what a shape *means*. Nothing was
@@ -45,6 +75,8 @@ final class SurfaceInput: NSObject, UIGestureRecognizerDelegate {
 
   private weak var surface: UIView?
   private let router: GestureRouter
+  private let targetResolver: (Double, Double) -> NativeContactTarget
+  private let pencilSampleSink: (NativePencilSample) -> Void
   private let sampleSeconds: Double = 1 / NativeGestureThresholds.continuousSampleHz
 
   private var recognisers: [UIGestureRecognizer] = []
@@ -58,16 +90,29 @@ final class SurfaceInput: NSObject, UIGestureRecognizerDelegate {
   /// moment a shape is built.
   private var holdPoint: CGPoint = .zero
   private var holdFingers = 1
+  private var holdTarget: NativeContactTarget = .openSky
+  private var pencilPressure = 0.0
+  private var pencilAltitude = 0.0
+  private var pencilAzimuth = 0.0
+  private var pencilContactActive = false
 
   // Continuous sampling clocks.
   private var dragSampledAt: CFTimeInterval = 0
-  private var dragLastPoint: CGPoint = .zero
+  private var dragStartPoint: CGPoint = .zero
+  private var dragTarget: NativeContactTarget = .openSky
   private var twistSampledAt: CFTimeInterval = 0
   private var pinchSampledAt: CFTimeInterval = 0
 
-  init(surface: UIView, router: GestureRouter) {
+  init(
+    surface: UIView,
+    router: GestureRouter,
+    targetResolver: @escaping (Double, Double) -> NativeContactTarget = { _, _ in .openSky },
+    onPencilSample: @escaping (NativePencilSample) -> Void = { _ in }
+  ) {
     self.surface = surface
     self.router = router
+    self.targetResolver = targetResolver
+    pencilSampleSink = onPencilSample
     super.init()
     holdLinkTarget.input = self
     install(on: surface)
@@ -84,7 +129,7 @@ final class SurfaceInput: NSObject, UIGestureRecognizerDelegate {
   /// it later.
   func setEnabled(_ enabled: Bool) {
     for recogniser in recognisers { recogniser.isEnabled = enabled }
-    if !enabled { stopHold(committing: false) }
+    if !enabled { stopHold(phase: .cancel) }
   }
 
   private func install(on view: UIView) {
@@ -115,6 +160,17 @@ final class SurfaceInput: NSObject, UIGestureRecognizerDelegate {
 
     add(UIRotationGestureRecognizer(target: self, action: #selector(handleTwist(_:))), on: view)
     add(UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:))), on: view)
+
+    let pencil = PencilSampleRecognizer()
+    pencil.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
+    pencil.sample = { [weak self] touch, phase in self?.emitPencil(touch, phase: phase) }
+    add(pencil, on: view)
+
+    if #available(iOS 13.4, *) {
+      let hover = UIHoverGestureRecognizer(target: self, action: #selector(handlePencilHover(_:)))
+      hover.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
+      add(hover, on: view)
+    }
   }
 
   private func add(_ recogniser: UIGestureRecognizer, on view: UIView) {
@@ -134,6 +190,7 @@ final class SurfaceInput: NSObject, UIGestureRecognizerDelegate {
     guard recogniser.state == .ended, let view = surface else { return }
     guard let point = normalised(recogniser.location(in: view)) else { return }
     let rung = router.advanceTapTrain()
+    let target = targetResolver(point.x, point.y)
     // The rung is the ladder: a train reaches the material as one deeper
     // strike, never as thirty identical ones.
     let intensity = min(
@@ -146,7 +203,8 @@ final class SurfaceInput: NSObject, UIGestureRecognizerDelegate {
         count: rung,
         x: point.x,
         y: point.y,
-        intensity: intensity
+        intensity: intensity,
+        target: target
       )
     )
   }
@@ -157,18 +215,23 @@ final class SurfaceInput: NSObject, UIGestureRecognizerDelegate {
     case .began:
       holdFingers = recogniser.numberOfTouchesRequired
       holdPoint = recogniser.location(in: view)
+      if let point = normalised(holdPoint) {
+        holdTarget = targetResolver(point.x, point.y)
+      }
       // The recogniser only speaks once the dwell threshold has passed, so
       // the contact began `dwellMs` ago; elapsed time is measured from there
       // rather than from now.
       let now = CACurrentMediaTime()
       holdStartedAt = now - NativeGestureThresholds.dwellMs / 1_000
       holdSampledAt = now
-      emitHold(phase: .enter, elapsedMs: NativeGestureThresholds.dwellMs)
+      emitHold(phase: .enter, elapsedMs: NativeGestureThresholds.dwellMs, commitsReceipt: false)
       startLink()
     case .changed:
       holdPoint = recogniser.location(in: view)
-    case .ended, .cancelled, .failed:
-      stopHold(committing: recogniser.state == .ended)
+    case .ended:
+      stopHold(phase: .release)
+    case .cancelled, .failed:
+      stopHold(phase: .cancel)
     default:
       break
     }
@@ -178,31 +241,97 @@ final class SurfaceInput: NSObject, UIGestureRecognizerDelegate {
     guard let view = surface else { return }
     let raw = recogniser.location(in: view)
     guard let point = normalised(raw) else { return }
-    let fingers = recogniser.minimumNumberOfTouches
     let now = CACurrentMediaTime()
     let velocity = recogniser.velocity(in: view)
-    // px/ms — the unit `flickVel` is stated in.
-    let vx = Double(velocity.x) / 1_000
-    let vy = Double(velocity.y) / 1_000
+    // View-normalized units per second. `ObjetUniverseSurfaceView` projects
+    // them through the same aspect-fill law as the rendered material.
+    let vx = Double(velocity.x / max(view.bounds.width, 1))
+    let vy = Double(velocity.y / max(view.bounds.height, 1))
 
     switch recogniser.state {
     case .began:
       dragSampledAt = now
-      dragLastPoint = raw
+      dragStartPoint = raw
+      dragTarget = targetResolver(point.x, point.y)
+      emitDrag(phase: .enter, recogniser: recogniser, point: point, raw: raw, vx: vx, vy: vy)
     case .changed:
       guard now - dragSampledAt >= sampleSeconds else { return }
       dragSampledAt = now
-      let dx = Double(raw.x - dragLastPoint.x)
-      let dy = Double(raw.y - dragLastPoint.y)
-      dragLastPoint = raw
-      emit(.drag(fingers: fingers, dx: dx, dy: dy, vx: vx, vy: vy, x: point.x, y: point.y))
+      emitDrag(phase: .tick, recogniser: recogniser, point: point, raw: raw, vx: vx, vy: vy)
     case .ended:
-      let speed = (vx * vx + vy * vy).squareRoot()
-      guard speed >= NativeGestureThresholds.flickVel else { return }
-      emit(.flick(fingers: fingers, speed: speed, angle: atan2(vy, vx), x: point.x, y: point.y))
+      // Release belongs to the same continuous act. A slow placement still
+      // commits, while a quick throw never receives a second flick impulse.
+      emitDrag(phase: .release, recogniser: recogniser, point: point, raw: raw, vx: vx, vy: vy)
+    case .cancelled, .failed:
+      // UIKit cancellation is interruption, not an intentional lift. The
+      // kernel receives a cancel preview so it can unwind transient state;
+      // React receives no progression/trail receipt.
+      emitDrag(phase: .cancel, recogniser: recogniser, point: point, raw: raw, vx: 0, vy: 0)
     default:
       break
     }
+  }
+
+  private func emitDrag(
+    phase: GesturePhase,
+    recogniser: UIPanGestureRecognizer,
+    point: (x: Double, y: Double),
+    raw: CGPoint,
+    vx: Double,
+    vy: Double
+  ) {
+    guard let view = surface else { return }
+    emit(.drag(
+      fingers: recogniser.minimumNumberOfTouches,
+      phase: phase,
+      totalDx: Double((raw.x - dragStartPoint.x) / max(view.bounds.width, 1)),
+      totalDy: Double((raw.y - dragStartPoint.y) / max(view.bounds.height, 1)),
+      vx: vx,
+      vy: vy,
+      x: point.x,
+      y: point.y,
+      target: dragTarget
+    ), commitsReceipt: phase == .release)
+  }
+
+  @available(iOS 13.4, *)
+  @objc private func handlePencilHover(_ recogniser: UIHoverGestureRecognizer) {
+    guard let view = surface, let point = normalised(recogniser.location(in: view)) else { return }
+    let phase: GesturePhase
+    switch recogniser.state {
+    case .began: phase = .enter
+    case .ended: phase = .release
+    case .cancelled: phase = .cancel
+    default: phase = .tick
+    }
+    pencilSampleSink(NativePencilSample(
+      phase: phase,
+      x: point.x,
+      y: point.y,
+      pressure: 0,
+      altitude: .pi / 2,
+      azimuth: 0,
+      hovering: true
+    ))
+  }
+
+  private func emitPencil(_ touch: UITouch, phase: GesturePhase) {
+    guard let view = surface, let point = normalised(touch.location(in: view)) else { return }
+    let pressure = touch.maximumPossibleForce > 0 ? Double(touch.force / touch.maximumPossibleForce) : 0
+    pencilContactActive = true
+    pencilPressure = min(max(pressure, 0), 1)
+    pencilAltitude = Double(touch.altitudeAngle)
+    pencilAzimuth = Double(touch.azimuthAngle(in: view))
+    pencilSampleSink(NativePencilSample(
+      phase: phase,
+      x: point.x,
+      y: point.y,
+      pressure: min(max(pressure, 0), 1),
+      altitude: Double(touch.altitudeAngle),
+      azimuth: Double(touch.azimuthAngle(in: view)),
+      hovering: false
+    ))
+    if phase == .release || phase == .cancel { pencilContactActive = false }
   }
 
   @objc private func handleTwist(_ recogniser: UIRotationGestureRecognizer) {
@@ -221,7 +350,8 @@ final class SurfaceInput: NSObject, UIGestureRecognizerDelegate {
         fingers: max(2, recogniser.numberOfTouches),
         angleRad: angle,
         velocity: Double(recogniser.velocity)
-      )
+      ),
+      commitsReceipt: recogniser.state == .ended
     )
   }
 
@@ -232,7 +362,10 @@ final class SurfaceInput: NSObject, UIGestureRecognizerDelegate {
     let now = CACurrentMediaTime()
     guard now - pinchSampledAt >= sampleSeconds else { return }
     pinchSampledAt = now
-    emit(.pinch(scale: scale, velocity: Double(recogniser.velocity)))
+    emit(
+      .pinch(scale: scale, velocity: Double(recogniser.velocity)),
+      commitsReceipt: recogniser.state == .ended
+    )
   }
 
   // MARK: - The hold, deepening
@@ -247,10 +380,10 @@ final class SurfaceInput: NSObject, UIGestureRecognizerDelegate {
   fileprivate func deepenHold(at now: CFTimeInterval) {
     guard holdLink != nil, now - holdSampledAt >= sampleSeconds else { return }
     holdSampledAt = now
-    emitHold(phase: .tick, elapsedMs: (now - holdStartedAt) * 1_000)
+    emitHold(phase: .tick, elapsedMs: (now - holdStartedAt) * 1_000, commitsReceipt: false)
   }
 
-  private func stopHold(committing: Bool) {
+  private func stopHold(phase: GesturePhase) {
     guard holdLink != nil else { return }
     stopLink()
     let elapsedMs = (CACurrentMediaTime() - holdStartedAt) * 1_000
@@ -258,8 +391,9 @@ final class SurfaceInput: NSObject, UIGestureRecognizerDelegate {
     // but it never commits the ceremony: the solemn act belongs to a hand
     // that let go on purpose.
     emitHold(
-      phase: .release,
-      elapsedMs: committing ? elapsedMs : min(elapsedMs, NativeGestureThresholds.ceremonyMs - 1)
+      phase: phase,
+      elapsedMs: phase == .release ? elapsedMs : min(elapsedMs, NativeGestureThresholds.ceremonyMs - 1),
+      commitsReceipt: phase == .release
     )
   }
 
@@ -268,7 +402,7 @@ final class SurfaceInput: NSObject, UIGestureRecognizerDelegate {
     holdLink = nil
   }
 
-  private func emitHold(phase: GesturePhase, elapsedMs: Double) {
+  private func emitHold(phase: GesturePhase, elapsedMs: Double, commitsReceipt: Bool) {
     guard let point = normalised(holdPoint) else { return }
     // Duration is the axis: a press keeps arriving harder for as long as it
     // is held, reaching full weight at the ceremony threshold.
@@ -280,15 +414,24 @@ final class SurfaceInput: NSObject, UIGestureRecognizerDelegate {
         x: point.x,
         y: point.y,
         intensity: intensity,
-        phase: phase
-      )
+        phase: phase,
+        pressure: pencilContactActive ? pencilPressure : 0,
+        altitude: pencilContactActive ? pencilAltitude : 0,
+        azimuth: pencilContactActive ? pencilAzimuth : 0,
+        target: holdTarget
+      ),
+      commitsReceipt: commitsReceipt
     )
   }
 
   // MARK: - Plumbing
 
-  private func emit(_ shape: NativeGestureShape) {
-    router.route(shape: shape, source: .touch, logicalTimeMs: CACurrentMediaTime() * 1_000)
+  private func emit(_ shape: NativeGestureShape, commitsReceipt: Bool = true) {
+    router.route(shape: shape,
+      source: .touch,
+      logicalTimeMs: CACurrentMediaTime() * 1_000,
+      isCommitBoundary: commitsReceipt
+    )
   }
 
   /// Contact in the surface's own normalised frame. The projection onto the

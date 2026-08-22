@@ -140,6 +140,25 @@ function main(): void {
     }
   }
 
+  for (const entry of GUIDE_ENTRIES) {
+    assert.doesNotMatch(
+      entry.sceneNotes.solar,
+      /galaxy|Earth|biosphere|saved star/i,
+      `${entry.verb}: solar copy must name only the gravity loom that exists`,
+    );
+  }
+
+  assert.equal(
+    GUIDE_ENTRIES_BY_VERB.drag.sceneNotes.solar,
+    "drag a body to reshape its trajectory; press and release open sky to place new matter.",
+    "solar body drag and open-sky accretion must not be described as the same gesture",
+  );
+  assert.equal(
+    GUIDE_ENTRIES_BY_VERB.pan2.plain,
+    "drag open sky with one finger to turn the frame.",
+    "the camera instruction must name the one-finger gesture the native router actually accepts",
+  );
+
   const coverageByStep = new Map<GuideRevealStep, number>();
   for (const step of REVEAL_STEPS) coverageByStep.set(step, entriesForRevealStep(step).length);
   assert.ok(

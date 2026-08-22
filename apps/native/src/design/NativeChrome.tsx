@@ -5,8 +5,9 @@
  * The persistent `<ObjetUniverseView>` renders below the entire chrome
  * layer; `NativeChrome` never paints over the active material. It provides
  * the sought affordances (fold, trail, `?`) in the safe-area corners and
- * a small guide sheet host — all volunteered, never auto-opened. There is
- * no tab bar, no first-launch modal, no coach mark, no HUD.
+ * a small guide sheet host and an explicit sensory preference popover — all
+ * volunteered, never auto-opened. There is no tab bar, no first-launch modal,
+ * no coach mark, no HUD.
  *
  * An affordance appears only when it leads somewhere. `fold` and `trail`
  * belong to lanes that have not landed, and a chip that answers a press with
@@ -40,6 +41,14 @@ import { sceneStyle } from "./sceneStyle";
 import { GuideSheet } from "../guide/GuideSheet";
 import { GUIDE_ENTRIES_BY_VERB, type GuideEntry, type GuideVerb } from "../guide/guideData";
 import { EMPTY_REVEAL, type SceneReveal } from "../guide/reveal";
+import {
+  currentNativeSensoryPreferences,
+  updateNativeSensoryPreferences,
+} from "../sensory/nativePreferences";
+import {
+  toggleSensoryPreference,
+  type SensoryPreferences,
+} from "../sensory/preferences";
 
 /**
  * The reveal state — which phenomena the visitor has *caused* — is the guide's
@@ -118,7 +127,7 @@ export function NativeChrome({
           )}
         </View>
         <View pointerEvents="box-none" style={styles.bottomRow}>
-          <View />
+          <SensoryControl />
           <ChromeAffordance
             label="?"
             accessibilityLabel={`Open the ${scene} scene guide`}
@@ -139,6 +148,93 @@ export function NativeChrome({
         />
       ) : null}
     </View>
+  );
+}
+
+function SensoryControl() {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [preferences, setPreferences] = useState<SensoryPreferences>(
+    currentNativeSensoryPreferences,
+  );
+  const summary = `${preferences.audioMuted ? "sound off" : "sound on"}, ${
+    preferences.hapticsMuted ? "haptics off" : "haptics on"
+  }`;
+
+  const toggle = useCallback((sense: "audio" | "haptic") => {
+    if (saving) return;
+    const previous = preferences;
+    const next = toggleSensoryPreference(previous, sense);
+    setPreferences(next);
+    setSaving(true);
+    void updateNativeSensoryPreferences(next).then(
+      setPreferences,
+      () => setPreferences(previous),
+    ).finally(() => setSaving(false));
+  }, [preferences, saving]);
+
+  return (
+    <View pointerEvents="box-none" style={styles.sensoryHost}>
+      {open ? (
+        <View
+          style={styles.sensoryPanel}
+          accessibilityLabel="Sensory controls"
+        >
+          <SensorySwitch
+            label="sound"
+            enabled={!preferences.audioMuted}
+            disabled={saving}
+            onPress={() => toggle("audio")}
+          />
+          <SensorySwitch
+            label="haptics"
+            enabled={!preferences.hapticsMuted}
+            disabled={saving}
+            onPress={() => toggle("haptic")}
+          />
+        </View>
+      ) : null}
+      <ChromeAffordance
+        label="sense"
+        accessibilityLabel={`${open ? "Close" : "Open"} sensory controls. ${summary}`}
+        onPress={() => setOpen((value) => !value)}
+        variant="leading"
+      />
+    </View>
+  );
+}
+
+function SensorySwitch({
+  label,
+  enabled,
+  disabled,
+  onPress,
+}: Readonly<{
+  label: string;
+  enabled: boolean;
+  disabled: boolean;
+  onPress: () => void;
+}>) {
+  return (
+    <Pressable
+      accessibilityRole="switch"
+      accessibilityLabel={label}
+      accessibilityState={{ checked: enabled, disabled }}
+      accessibilityValue={{ text: enabled ? "on" : "off" }}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.sensoryOption,
+        pressed ? styles.affordancePressed : null,
+      ]}
+    >
+      <Text style={styles.sensoryLabel} allowFontScaling maxFontSizeMultiplier={2}>
+        {label}
+      </Text>
+      <Text style={styles.sensoryValue} allowFontScaling maxFontSizeMultiplier={2}>
+        {enabled ? "on" : "off"}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -239,5 +335,38 @@ const styles = StyleSheet.create({
     fontFamily: TYPOGRAPHY.system.family,
     fontSize: TYPOGRAPHY.system.sizes.title,
     fontWeight: TYPOGRAPHY.system.weight,
+  },
+  sensoryHost: {
+    position: "relative",
+    alignSelf: "flex-end",
+  },
+  sensoryPanel: {
+    position: "absolute",
+    left: 0,
+    bottom: MIN_TOUCH_TARGET + SPACING.small,
+    width: 184,
+    padding: SPACING.small,
+    borderRadius: SPACING.medium,
+    backgroundColor: PALETTE.night.dark,
+    borderWidth: 1,
+    borderColor: "rgba(139, 194, 229, 0.24)",
+  },
+  sensoryOption: {
+    minHeight: MIN_TOUCH_TARGET,
+    paddingHorizontal: SPACING.small,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderRadius: SPACING.small,
+  },
+  sensoryLabel: {
+    color: PALETTE.ink.plain,
+    fontFamily: TYPOGRAPHY.system.family,
+    fontSize: TYPOGRAPHY.system.sizes.body,
+  },
+  sensoryValue: {
+    color: PALETTE.sea.glimmer,
+    fontFamily: TYPOGRAPHY.notation.family,
+    fontSize: TYPOGRAPHY.notation.sizes.body,
   },
 });

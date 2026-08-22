@@ -4,6 +4,7 @@ import { StyleSheet, View } from "react-native";
 import type { NativeSceneId } from "@objet/universe-contracts";
 import { ObjetUniverseSurface, type SurfaceCommand } from "../../modules/objet-universe";
 import { UniverseActions } from "../accessibility/UniverseActions";
+import { useReducedMotion } from "../accessibility/useReducedMotion";
 import type { NativeSemanticCommand } from "../universe/actions";
 import { NativeChrome } from "../design/NativeChrome";
 import { EMPTY_REVEAL, revealAfter, type SceneReveal } from "../guide/reveal";
@@ -33,7 +34,7 @@ import {
 const SCENE_LABEL: Record<NativeSceneId, string> = {
   wave: "wave field",
   cell: "cell colony",
-  solar: "solar nursery",
+  solar: "solar gravity loom",
   molecules: "molecular field",
   atoms: "atomic field",
 };
@@ -46,6 +47,7 @@ const SCENE_LABEL: Record<NativeSceneId, string> = {
  */
 export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
   const router = useRouter();
+  const reducedMotion = useReducedMotion();
   const [reveal, setReveal] = useState<SceneReveal>(EMPTY_REVEAL);
   const [reading, setReading] = useState(false);
   const [foldOpen, setFoldOpen] = useState(false);
@@ -134,6 +136,7 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
           enabled={!reading && !foldOpen && !trailOpen}
           representation={representation}
           maxRepresentation={unlockedRepresentations[unlockedRepresentations.length - 1]}
+          reducedMotion={reducedMotion}
           assistiveVerb={assistiveCommand?.verb}
           assistiveIntensity={assistiveCommand?.intensity}
           assistiveOriginX={assistiveCommand?.originX}
@@ -145,6 +148,7 @@ export function ProofSceneRoute({ scene }: Readonly<{ scene: NativeSceneId }>) {
       <NativeChrome
         scene={scene}
         reveal={reveal}
+        reducedMotion={reducedMotion}
         onOpenFold={() => {
           setTrailOpen(false);
           setFoldOpen(true);
