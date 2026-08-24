@@ -236,6 +236,52 @@ final class ProofKernelTests: XCTestCase {
     XCTAssertLessThanOrEqual(first.atoms.count, 8)
   }
 
+  func testAtomRenderSnapshotCarriesKernelIdentityAndCovalentRelations() {
+    let kernel = AtomKernel(seed: 0)
+    kernel.withAtomRenderSnapshot { snapshot in
+      XCTAssertEqual(snapshot.tick, kernel.tick)
+      XCTAssertEqual(snapshot.bodies.count, kernel.atoms.count)
+      XCTAssertEqual(snapshot.bodies[0].atomicNumber, UInt32(kernel.atoms[0].element.z))
+      XCTAssertEqual(snapshot.bodies[0].shellCount, UInt32(kernel.atoms[0].element.shells.count))
+      XCTAssertEqual(snapshot.bodies[0].valence, UInt32(kernel.atoms[0].element.valence))
+    }
+
+    _ = kernel.apply(SemanticCommand(id: "atom-render-boron", verb: .grow, at: 0, origin: .centre))
+    _ = kernel.apply(SemanticCommand(id: "atom-render-carbon", verb: .grow, at: 1, origin: .centre))
+    kernel.withAtomRenderSnapshot { snapshot in
+      XCTAssertEqual(snapshot.bodies.count, kernel.atoms.count)
+      XCTAssertFalse(snapshot.bonds.isEmpty, "two compatible kernel atoms at one material point must reach the renderer as a bond")
+      for bond in snapshot.bonds {
+        XCTAssertLessThan(Int(bond.firstIndex), snapshot.bodies.count)
+        XCTAssertLessThan(Int(bond.secondIndex), snapshot.bodies.count)
+        XCTAssertGreaterThan(bond.order, 0)
+      }
+    }
+
+    _ = kernel.apply(SemanticCommand(id: "atom-render-fuse", verb: .ceremony, at: 2, intensity: 1))
+    _ = kernel.advance(ticks: 3)
+    kernel.setRepresentation(3)
+    XCTAssertGreaterThan(kernel.fusionEnergy, 0, "the snapshot must carry a real fusion ledger after the ceremony")
+    kernel.withAtomRenderSnapshot { snapshot in
+      XCTAssertEqual(snapshot.tick, kernel.tick)
+      XCTAssertEqual(snapshot.representation, kernel.representation)
+      XCTAssertEqual(snapshot.fusionEnergy, Float(kernel.fusionEnergy), accuracy: 0.0001)
+      XCTAssertEqual(snapshot.bodies.count, kernel.atoms.count)
+      for (body, atom) in zip(snapshot.bodies, kernel.atoms) {
+        XCTAssertEqual(body.position.x, Float(atom.x), accuracy: 0.0001)
+        XCTAssertEqual(body.position.y, Float(atom.y), accuracy: 0.0001)
+        XCTAssertEqual(body.velocity.x, Float(atom.vx), accuracy: 0.0001)
+        XCTAssertEqual(body.velocity.y, Float(atom.vy), accuracy: 0.0001)
+        XCTAssertEqual(body.excitation, Float(min(max(atom.excitation, 0), 1)), accuracy: 0.0001)
+        XCTAssertEqual(body.atomicNumber, UInt32(atom.element.z))
+      }
+      for bond in snapshot.bonds {
+        XCTAssertLessThan(Int(bond.firstIndex), snapshot.bodies.count)
+        XCTAssertLessThan(Int(bond.secondIndex), snapshot.bodies.count)
+      }
+    }
+  }
+
   func testAtomLensesAndFusionLedgerRemainDistinct() {
     let kernel = AtomKernel(seed: 5)
     var projections = [[Float]]()

@@ -301,6 +301,12 @@ public final class ObjetUniverseView: ExpoView {
   /// allocates nothing.
   nonisolated private func submitActiveSurface() {
     guard let kernel = surfaceKernels.kernel else { return }
+    if let atoms = kernel as? any AtomSnapshotProviding {
+      atoms.withAtomRenderSnapshot { snapshot in
+        renderHost.submitAtoms(snapshot)
+      }
+      return
+    }
     if let solar = kernel as? any SolarSnapshotProviding {
       solar.withSolarRenderSnapshot { snapshot in
         renderHost.submitSolar(snapshot)

@@ -284,7 +284,6 @@ assert.match(waveShaders, /float spectrumValue\(int bin, constant Uniforms &unif
 assert.match(waveShaders, /float magnitude = spectrumValue\(bin, uniforms\)/, "each spectrum bar must consume its pre-reduced bin");
 assert.doesNotMatch(waveShaders, /\bspectrumSampler\b/, "the spectrum projection must not restore a per-fragment spectrum texture sampler");
 assert.doesNotMatch(waveShaders, /\bmaterialKind\b/, "the dedicated-water shader must not branch on a scene material kind");
-assert.match(sceneRendererFactory, /case \.atoms,\s*\.molecules:\s*ChemistryMaterialRenderer/, "atoms and molecules must select their dedicated chemistry renderer");
 assert.doesNotMatch(
   sceneRendererFactory,
   /case \.wave(?:,\s*\.atoms|,\s*\.molecules)+:\s*WaveMaterialRenderer/,

@@ -6,6 +6,7 @@ public final class RenderHost {
   public private(set) var clockStarts = 0
   public private(set) var renderedFrameCount = 0
   public private(set) var submittedFieldCount = 0
+  public private(set) var submittedAtomCount = 0
   public private(set) var submittedSolarCount = 0
   public var activeRendererCount: Int { running ? renderers.count : 0 }
 
@@ -39,6 +40,17 @@ public final class RenderHost {
       (renderer as? FieldSurfaceRenderer)?.submitField(submission)
     }
     submittedFieldCount += 1
+  }
+
+  /// Upload a bounded atomic snapshot only while the renderer is live. The
+  /// snapshot's borrowed records never cross the React Native bridge or
+  /// outlive this call.
+  public func submitAtoms(_ snapshot: AtomRenderSnapshot) {
+    guard running else { return }
+    for renderer in renderers.values {
+      (renderer as? AtomSystemRenderer)?.submitAtoms(snapshot)
+    }
+    submittedAtomCount += 1
   }
 
   /// Upload one bounded solar snapshot to the installed solar renderer. As
