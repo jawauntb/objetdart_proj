@@ -278,10 +278,18 @@ assert.match(moleculeKernel, /maximumMolecules = 18/, "the molecular lane must b
 assert.match(moleculeKernel, /reactionFor/, "the molecular lane must expose a deterministic reaction table");
 assert.match(waveRenderer, /MTLRenderPipelineState/, "the wave material must reach the screen through a Metal pipeline");
 assert.match(waveRenderer, /representation/, "the renderer must receive the selected wave representation");
-assert.match(waveRenderer, /materialKind/, "the renderer must receive the active material family");
+assert.match(waveRenderer, /materialKind == 0/, "the Wave renderer must accept water fields only");
 assert.match(waveShaders, /objet_wave_fragment/, "the material is a shader, not a canvas-2D fallback");
-assert.match(waveShaders, /spectrumSampler/, "the spectrum projection must derive bars from the field texture");
-assert.match(waveShaders, /materialKind/, "the shader must select a material palette from the active scene");
+assert.match(waveShaders, /float spectrumValue\(int bin, constant Uniforms &uniforms\)/, "the spectrum projection must read pre-reduced spectrum bins");
+assert.match(waveShaders, /float magnitude = spectrumValue\(bin, uniforms\)/, "each spectrum bar must consume its pre-reduced bin");
+assert.doesNotMatch(waveShaders, /\bspectrumSampler\b/, "the spectrum projection must not restore a per-fragment spectrum texture sampler");
+assert.doesNotMatch(waveShaders, /\bmaterialKind\b/, "the dedicated-water shader must not branch on a scene material kind");
+assert.match(sceneRendererFactory, /case \.atoms,\s*\.molecules:\s*ChemistryMaterialRenderer/, "atoms and molecules must select their dedicated chemistry renderer");
+assert.doesNotMatch(
+  sceneRendererFactory,
+  /case \.wave(?:,\s*\.atoms|,\s*\.molecules)+:\s*WaveMaterialRenderer/,
+  "the water renderer must not share a factory branch with chemistry scenes",
+);
 assert.doesNotMatch(
   waveField,
   /arc4random|SystemRandomNumberGenerator|\.random\(/,

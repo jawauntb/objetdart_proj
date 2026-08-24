@@ -1,5 +1,44 @@
 import Foundation
 
+/// Keeps presentation-only motion continuous as accessibility preferences
+/// change. A renderer's authoritative field remains on its own clock; this
+/// state only carries the decorative phase a shader is permitted to hold.
+struct MetalPresentationTiming {
+  private(set) var reducedMotion = false
+  private(set) var frozenElapsed: Float = 0
+  private var phaseOffset: Float = 0
+  private var latestSourceElapsed: Float = 0
+  private var lastPresentationElapsed: Float = 0
+  private var hasPresentedFrame = false
+
+  mutating func recordSubmitted(elapsed: Float) {
+    latestSourceElapsed = elapsed
+  }
+
+  mutating func presentationElapsed(for sourceElapsed: Float) -> Float {
+    latestSourceElapsed = sourceElapsed
+    guard !reducedMotion else { return sourceElapsed }
+    let presentationElapsed = sourceElapsed + phaseOffset
+    lastPresentationElapsed = presentationElapsed
+    hasPresentedFrame = true
+    return presentationElapsed
+  }
+
+  mutating func setReducedMotion(_ enabled: Bool) {
+    guard reducedMotion != enabled else { return }
+    if enabled {
+      frozenElapsed = hasPresentedFrame
+        ? lastPresentationElapsed
+        : latestSourceElapsed + phaseOffset
+    } else {
+      // Resume from the held phase without changing solver state or flashing
+      // one luminance frame at the accessibility boundary.
+      phaseOffset = frozenElapsed - latestSourceElapsed
+    }
+    reducedMotion = enabled
+  }
+}
+
 /// Publishes a complete immutable pipeline in one lock transition. Rendering
 /// sees either a ready pipeline or none at all; it can never observe a
 /// partially compiled state.
