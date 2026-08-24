@@ -285,6 +285,8 @@ final class SolarSubmissionTests: XCTestCase {
     }
     let layer = CAMetalLayer()
     XCTAssertTrue(SceneRendererFactory.make(for: .wave, layer: layer, waveBreathSeconds: 7) is WaveMaterialRenderer)
+    XCTAssertTrue(SceneRendererFactory.make(for: .atoms, layer: layer, waveBreathSeconds: 7) is ChemistryMaterialRenderer)
+    XCTAssertTrue(SceneRendererFactory.make(for: .molecules, layer: layer, waveBreathSeconds: 7) is ChemistryMaterialRenderer)
     XCTAssertTrue(SceneRendererFactory.make(for: .cell, layer: layer, waveBreathSeconds: 7) is CellMaterialRenderer)
     XCTAssertTrue(SceneRendererFactory.make(for: .solar, layer: layer, waveBreathSeconds: 7) is SolarRenderer)
   }
@@ -294,6 +296,64 @@ final class SolarSubmissionTests: XCTestCase {
     XCTAssertTrue(CellMaterialRenderer.acceptsFieldDimensions(width: kernel.width, height: kernel.height))
     XCTAssertFalse(CellMaterialRenderer.acceptsFieldDimensions(width: kernel.width - 1, height: kernel.height))
     XCTAssertFalse(CellMaterialRenderer.acceptsFieldDimensions(width: kernel.width, height: kernel.height + 1))
+  }
+
+  func testWaveRendererAdmitsOnlyItsAuthoritativeWaterSubmission() {
+    let field = WaveField(seed: 0x57A7_E)
+    XCTAssertTrue(WaveMaterialRenderer.acceptsSubmission(
+      materialKind: 0,
+      width: field.width,
+      height: field.height
+    ))
+    for materialKind in [1, 3] {
+      XCTAssertFalse(WaveMaterialRenderer.acceptsSubmission(
+        materialKind: materialKind,
+        width: field.width,
+        height: field.height
+      ))
+    }
+    XCTAssertFalse(WaveMaterialRenderer.acceptsSubmission(
+      materialKind: 0,
+      width: field.width - 1,
+      height: field.height
+    ))
+    XCTAssertFalse(WaveMaterialRenderer.acceptsSubmission(
+      materialKind: 0,
+      width: field.width,
+      height: field.height + 1
+    ))
+  }
+
+  func testChemistryRendererAdmitsAuthoritativeAtomAndMoleculeSubmissionsOnly() {
+    let atom = AtomKernel(seed: 0xA70A)
+    let molecule = MoleculeKernel(seed: 0xC0DE)
+    XCTAssertTrue(ChemistryMaterialRenderer.acceptsSubmission(
+      materialKind: atom.materialKind,
+      width: atom.width,
+      height: atom.height
+    ))
+    XCTAssertTrue(ChemistryMaterialRenderer.acceptsSubmission(
+      materialKind: molecule.materialKind,
+      width: molecule.width,
+      height: molecule.height
+    ))
+    for materialKind in [0, 2, 5] {
+      XCTAssertFalse(ChemistryMaterialRenderer.acceptsSubmission(
+        materialKind: materialKind,
+        width: atom.width,
+        height: atom.height
+      ))
+    }
+    XCTAssertFalse(ChemistryMaterialRenderer.acceptsSubmission(
+      materialKind: atom.materialKind,
+      width: atom.width - 1,
+      height: atom.height
+    ))
+    XCTAssertFalse(ChemistryMaterialRenderer.acceptsSubmission(
+      materialKind: molecule.materialKind,
+      width: molecule.width,
+      height: molecule.height + 1
+    ))
   }
 
   func testMetalPipelineCacheLetsAnIndependentBuildProceedDuringAnotherKey() throws {

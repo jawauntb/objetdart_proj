@@ -15,8 +15,10 @@ public enum SceneRendererFactory {
     waveBreathSeconds: Double
   ) -> (any UniverseRenderer)? {
     switch scene {
-    case .wave, .atoms, .molecules:
+    case .wave:
       WaveMaterialRenderer(layer: layer, breathSeconds: waveBreathSeconds)
+    case .atoms, .molecules:
+      ChemistryMaterialRenderer(layer: layer)
     case .cell:
       CellMaterialRenderer(layer: layer)
     case .solar:

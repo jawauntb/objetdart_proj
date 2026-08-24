@@ -1,16 +1,8 @@
-/// The wave material, written in Metal Shading Language.
+/// The native water material, written in Metal Shading Language.
 ///
-/// It is carried as source and compiled once at `prepare()` rather than
-/// shipped as a `.metal` file because the kit is packaged twice — as a Swift
-/// package for `swift test` and as a CocoaPod for the Expo prebuild — and only
-/// one of those two paths would produce a `default.metallib` the other could
-/// find. One embedded string compiles identically under both, at a cost paid
-/// once per launch off the frame path.
-///
-/// The palette is the shared one: `night` is the ground, `sea` is the coherent
-/// medium, `ember` is the decisive event. The values are the sRGB hexes in
-/// `apps/native/src/design/tokens.ts`; changing one here without changing it
-/// there splits the palette in two.
+/// It is carried as source because SwiftPM and the Expo CocoaPod package the
+/// renderer differently. One embedded source gives both paths the same water,
+/// compiled once away from the display link.
 public enum WaveShaderSource {
   public static let metal = """
   #include <metal_stdlib>
@@ -19,12 +11,13 @@ public enum WaveShaderSource {
   struct Uniforms {
     float2 viewport;
     float2 fieldSize;
-    float elapsed;
-    float exposure;
-    float representation;
-    float materialKind;
-    float breathSeconds;
-    float pad;
+    // elapsed, exposure, representation, reduced-motion flag.
+    float4 state;
+    // frozen elapsed, breath seconds, reserved, reserved.
+    float4 presentation;
+    float4 spectrum0;
+    float4 spectrum1;
+    float4 spectrum2;
   };
 
   struct VertexOut {
@@ -32,22 +25,63 @@ public enum WaveShaderSource {
     float2 uv;
   };
 
-  // #050914 night.deep, #0E2A44 sea.deep, #3A88C1 sea.lit,
-  // #8BC2E5 sea.glimmer, #E7A34C ember.warm.
-  constant float3 kNightDeep = float3(0.0196, 0.0353, 0.0784);
-  constant float3 kSeaDeep = float3(0.0549, 0.1647, 0.2667);
-  constant float3 kSeaLit = float3(0.2275, 0.5333, 0.7569);
-  constant float3 kSeaGlimmer = float3(0.5451, 0.7608, 0.8980);
-  constant float3 kEmberWarm = float3(0.9059, 0.6392, 0.2980);
+  constant float3 kNight = float3(0.0196, 0.0353, 0.0784);
+  constant float3 kAbyss = float3(0.027, 0.097, 0.178);
+  constant float3 kTrough = float3(0.047, 0.185, 0.286);
+  constant float3 kWater = float3(0.090, 0.365, 0.505);
+  constant float3 kShallow = float3(0.318, 0.725, 0.782);
+  constant float3 kFoam = float3(0.725, 0.918, 0.902);
+  constant float3 kEmber = float3(0.9059, 0.6392, 0.2980);
 
   vertex VertexOut objet_wave_vertex(uint vertexID [[vertex_id]]) {
-    // One oversized triangle covering the clip volume: no vertex buffer, no
-    // per-frame geometry upload.
     float2 corner = float2(float((vertexID << 1) & 2u), float(vertexID & 2u));
     VertexOut out;
     out.position = float4(corner * 2.0 - 1.0, 0.0, 1.0);
     out.uv = float2(corner.x, 1.0 - corner.y);
     return out;
+  }
+
+  float spectrumValue(int bin, constant Uniforms &uniforms) {
+    if (bin < 4) { return uniforms.spectrum0[bin]; }
+    if (bin < 8) { return uniforms.spectrum1[bin - 4]; }
+    return uniforms.spectrum2[bin - 8];
+  }
+
+  float3 surfaceMaterial(
+    VertexOut in,
+    float amplitude,
+    float slopeX,
+    float slopeY,
+    float curvature,
+    float steepness,
+    float breath
+  ) {
+    float3 normal = normalize(float3(-slopeX * 5.8, -slopeY * 5.8, 1.0));
+    float3 light = normalize(float3(-0.46, 0.36, 0.81));
+    float3 eye = normalize(float3(0.0, 0.20, 1.0));
+    float lambert = saturate(dot(normal, light));
+    float glint = pow(saturate(dot(reflect(-light, normal), eye)), 42.0);
+
+    // Rest is visible structure before a visitor ever makes a crest. This is
+    // not auto-gain: it maps the field's declared amplitude to a quiet sea.
+    float restingContrast = smoothstep(0.008, 0.12, abs(amplitude));
+    float trough = smoothstep(-0.78, -0.04, amplitude);
+    float crest = smoothstep(0.10, 0.82, amplitude);
+    float breaker = smoothstep(0.26, 0.98, abs(amplitude) + steepness * 0.34);
+    float caustic = pow(saturate(1.0 - steepness * 0.62 + abs(curvature) * 0.48), 10.0)
+      * smoothstep(0.10, 0.55, abs(amplitude) + abs(curvature) * 1.5);
+
+    float3 colour = mix(kNight, kAbyss, 0.22 + 0.12 * breath);
+    colour = mix(colour, kTrough, trough * 0.66 + restingContrast * 0.13);
+    colour = mix(colour, kWater, crest * (0.38 + 0.22 * lambert));
+    colour += kShallow * lambert * (0.018 + 0.09 * restingContrast);
+    colour += kFoam * (caustic * (0.025 + 0.08 * breath) + glint * 0.38);
+    colour += kFoam * breaker * (0.08 + 0.18 * breath);
+    colour += kEmber * smoothstep(0.72, 1.16, abs(amplitude)) * 0.36;
+
+    float2 fromCentre = (in.uv - 0.5) * 2.0;
+    float vignette = 1.0 - 0.34 * smoothstep(0.20, 1.48, dot(fromCentre, fromCentre));
+    return colour * vignette;
   }
 
   fragment float4 objet_wave_fragment(
@@ -56,194 +90,76 @@ public enum WaveShaderSource {
     sampler surfaceSampler [[sampler(0)]],
     constant Uniforms &uniforms [[buffer(0)]]
   ) {
-    // Aspect-fill: the tank is square and the screen is not, so the short
-    // axis is cropped rather than letterboxed. Wavelength stays isotropic.
+    // Aspect-fill agrees with MaterialProjection: portrait crops the short
+    // axis instead of stretching a physical wavelength into an oval.
     float longest = max(uniforms.viewport.x, uniforms.viewport.y);
     float2 cover = uniforms.viewport / max(longest, 1.0);
     float2 fieldUV = (in.uv - 0.5) * cover + 0.5;
-
-    float amplitude = surface.sample(surfaceSampler, fieldUV).r * uniforms.exposure;
-
-    if (uniforms.materialKind > 1.5) {
-      if (uniforms.materialKind > 2.5 && uniforms.materialKind < 3.5) {
-        if (uniforms.representation < 0.5) {
-          float shell = smoothstep(0.02, 0.42, amplitude);
-          float orbit = 0.5 + 0.5 * sin(length((in.uv - 0.5) * 2.0) * 34.0 - uniforms.elapsed * 1.2);
-          float3 atom = mix(kNightDeep, float3(0.18, 0.08, 0.28), shell * 0.75);
-          atom += float3(0.36, 0.20, 0.82) * shell * orbit * 0.7;
-          atom += kSeaGlimmer * smoothstep(0.55, 1.0, amplitude) * 0.4;
-          return float4(atom, 1.0);
-        }
-        if (uniforms.representation < 1.5) {
-          float grid = step(0.88, fract(in.uv.x * 7.0)) + step(0.88, fract(in.uv.y * 6.0));
-          float periodic = smoothstep(0.08, 0.55, amplitude);
-          float3 table = mix(kNightDeep, float3(0.27, 0.10, 0.18), periodic * 0.65);
-          table += kEmberWarm * grid * 0.35;
-          table += kSeaGlimmer * smoothstep(0.65, 1.0, amplitude) * 0.28;
-          return float4(table, 1.0);
-        }
-        if (uniforms.representation < 2.5) {
-          float bond = smoothstep(0.18, 0.62, amplitude);
-          float strand = 0.5 + 0.5 * sin(in.uv.x * 46.0 + uniforms.elapsed * 0.8);
-          float3 shared = mix(kNightDeep, float3(0.12, 0.32, 0.38), bond);
-          shared += kSeaGlimmer * bond * strand * 0.55;
-          shared += kEmberWarm * smoothstep(0.72, 1.0, amplitude) * 0.3;
-          return float4(shared, 1.0);
-        }
-        float flash = smoothstep(0.18, 0.9, amplitude);
-        float radial = 1.0 - smoothstep(0.0, 0.7, length((in.uv - 0.5) * 2.0));
-        float3 fusion = mix(kNightDeep, float3(0.30, 0.05, 0.08), flash);
-        fusion += kEmberWarm * flash * radial;
-        fusion += kSeaGlimmer * smoothstep(0.78, 1.0, amplitude) * 0.35;
-        return float4(fusion, 1.0);
-      }
-
-      if (uniforms.materialKind > 3.5) {
-        if (uniforms.representation < 0.5) {
-          float mixture = smoothstep(0.02, 0.48, amplitude);
-          float drift = 0.5 + 0.5 * sin(in.uv.x * 9.0 + in.uv.y * 7.0 + uniforms.elapsed * 0.32);
-          float3 field = mix(kNightDeep, float3(0.06, 0.27, 0.30), mixture);
-          field += kSeaGlimmer * mixture * drift * 0.35;
-          return float4(field, 1.0);
-        }
-        if (uniforms.representation < 1.5) {
-          float scaffold = smoothstep(0.16, 0.55, amplitude);
-          float bond = 1.0 - smoothstep(0.0, 0.06, abs(sin(in.uv.x * 16.0) - sin(in.uv.y * 13.0)));
-          float3 structure = mix(kNightDeep, float3(0.08, 0.34, 0.42), scaffold);
-          structure += kEmberWarm * bond * scaffold * 0.65;
-          return float4(structure, 1.0);
-        }
-        if (uniforms.representation < 2.5) {
-          float reaction = smoothstep(0.12, 0.82, amplitude);
-          float pulse = 0.5 + 0.5 * sin(uniforms.elapsed * 2.0);
-          float3 reactionColour = mix(kNightDeep, float3(0.32, 0.10, 0.06), reaction);
-          reactionColour += kEmberWarm * reaction * pulse * 0.7;
-          reactionColour += kSeaGlimmer * smoothstep(0.72, 1.0, amplitude) * 0.2;
-          return float4(reactionColour, 1.0);
-        }
-        float vibration = 0.5 + 0.5 * sin(in.uv.y * 32.0 + uniforms.elapsed * 2.4);
-        float3 vibrational = mix(kNightDeep, float3(0.12, 0.24, 0.40), smoothstep(0.1, 0.6, amplitude));
-        vibrational += kSeaGlimmer * vibration * smoothstep(0.24, 0.9, amplitude) * 0.5;
-        vibrational += kEmberWarm * smoothstep(0.78, 1.0, amplitude) * 0.25;
-        return float4(vibrational, 1.0);
-      }
-
-      if (uniforms.representation < 0.5) {
-        float density = smoothstep(0.01, 0.35, amplitude);
-        float3 galaxy = mix(kNightDeep, float3(0.08, 0.06, 0.20), density * 0.8);
-        galaxy += float3(0.46, 0.24, 0.68) * smoothstep(0.35, 0.9, amplitude);
-        galaxy += kSeaGlimmer * smoothstep(0.75, 1.0, amplitude) * 0.4;
-        return float4(galaxy, 1.0);
-      }
-      if (uniforms.representation < 1.5) {
-        float core = smoothstep(0.08, 0.75, amplitude);
-        float halo = smoothstep(0.02, 0.18, amplitude) * 0.38;
-        float3 starColour = mix(kNightDeep, float3(0.28, 0.10, 0.025), halo);
-        starColour = mix(starColour, kEmberWarm, core);
-        starColour += float3(1.0, 0.75, 0.35) * smoothstep(0.72, 1.0, amplitude) * 0.35;
-        return float4(starColour, 1.0);
-      }
-      if (uniforms.representation < 2.5) {
-        float2 centred = (in.uv - 0.5) * 2.0;
-        float radius = length(centred);
-        float disc = 1.0 - smoothstep(0.78, 0.88, radius);
-        float land = smoothstep(0.45, 0.75, amplitude);
-        float3 planet = mix(float3(0.02, 0.10, 0.18), float3(0.24, 0.48, 0.22), land);
-        planet = mix(kNightDeep, planet, disc);
-        planet += kEmberWarm * smoothstep(0.70, 0.95, amplitude) * 0.22;
-        return float4(planet, 1.0);
-      }
-      float2 earthCentre = (in.uv - 0.5) * 2.0;
-      float earthRadius = length(earthCentre);
-      float earthDisc = 1.0 - smoothstep(0.78, 0.88, earthRadius);
-      float ocean = smoothstep(0.12, 0.52, amplitude);
-      float cloud = smoothstep(0.62, 0.92, amplitude);
-      float3 earth = mix(float3(0.025, 0.14, 0.25), float3(0.18, 0.52, 0.28), ocean);
-      earth = mix(earth, kSeaGlimmer, cloud * 0.45);
-      earth += float3(0.16, 0.28, 0.52) * (1.0 - smoothstep(0.78, 0.95, earthRadius)) * 0.3;
-      earth = mix(kNightDeep, earth, earthDisc);
-      return float4(earth, 1.0);
-    }
-
-    // Slope of the surface, read from the same texture: the medium lights
-    // itself from its own gradient rather than from a decorative gloss.
     float2 texel = 1.0 / max(uniforms.fieldSize, float2(1.0));
-    float slopeX = (surface.sample(surfaceSampler, fieldUV + float2(texel.x, 0.0)).r
-                  - surface.sample(surfaceSampler, fieldUV - float2(texel.x, 0.0)).r) * uniforms.exposure;
-    float slopeY = (surface.sample(surfaceSampler, fieldUV + float2(0.0, texel.y)).r
-                  - surface.sample(surfaceSampler, fieldUV - float2(0.0, texel.y)).r) * uniforms.exposure;
-    float3 normal = normalize(float3(-slopeX * 6.0, -slopeY * 6.0, 1.0));
-    float3 lightDirection = normalize(float3(0.32, 0.56, 0.76));
-    float lambert = saturate(dot(normal, lightDirection));
-    float specular = pow(lambert, 24.0);
+    float exposure = uniforms.state.y;
+    float phaseElapsed = uniforms.state.w > 0.5 ? uniforms.presentation.x : uniforms.state.x;
+    float breath = 0.58 + 0.42 * sin(6.2831853 * phaseElapsed / max(uniforms.presentation.y, 0.001));
+    float representation = uniforms.state.z;
 
-    // The 7 s breath, continued across the frame by the caller's interpolated
-    // elapsed time so the ground never steps.
-    float breath = 0.55 + 0.45 * sin(6.2831853 * uniforms.elapsed / max(uniforms.breathSeconds, 0.001));
-
-    // The same field can be looked at as a line or as a spectrum. These are
-    // projections of the authoritative surface texture, not decorative
-    // overlays: every bar and every trace is sampled from the wave state.
-    if (uniforms.representation > 0.5 && uniforms.representation < 1.5) {
-      float signal = surface.sample(surfaceSampler, float2(fieldUV.x, 0.5)).r * uniforms.exposure;
-      float traceY = 0.5 - signal * 0.24;
-      float trace = 1.0 - smoothstep(0.004, 0.024, abs(in.uv.y - traceY));
-      float3 equation = mix(kNightDeep, kSeaDeep, 0.35 + 0.35 * breath);
-      equation += kSeaGlimmer * trace;
-      equation += kEmberWarm * smoothstep(0.55, 1.0, abs(signal)) * trace;
-      return float4(equation, 1.0);
+    if (representation > 0.5 && representation < 1.5) {
+      // Equation is a reading of the same water: a centre-line signal and its
+      // local zero crossings, not a generic chart placed over the tank.
+      float amplitude = surface.sample(surfaceSampler, fieldUV).r * exposure;
+      float signal = surface.sample(surfaceSampler, float2(fieldUV.x, 0.5)).r * exposure;
+      float signalLeft = surface.sample(surfaceSampler, float2(max(fieldUV.x - texel.x, 0.0), 0.5)).r * exposure;
+      float signalRight = surface.sample(surfaceSampler, float2(min(fieldUV.x + texel.x, 1.0), 0.5)).r * exposure;
+      float traceY = 0.52 - signal * 0.24;
+      float trace = 1.0 - smoothstep(0.0035, 0.018, abs(in.uv.y - traceY));
+      float turning = smoothstep(0.005, 0.085, abs(signalRight - signalLeft));
+      float contour = 1.0 - smoothstep(0.010, 0.030, abs(amplitude));
+      float3 colour = mix(kNight, kAbyss, 0.36 + 0.22 * breath);
+      colour += kWater * contour * 0.18;
+      colour += kShallow * trace * (0.68 + 0.18 * turning);
+      colour += kEmber * trace * smoothstep(0.58, 1.0, abs(signal)) * 0.42;
+      float2 fromCentre = (in.uv - 0.5) * 2.0;
+      return float4(colour * (1.0 - 0.28 * dot(fromCentre, fromCentre)), 1.0);
     }
 
-    if (uniforms.representation > 1.5 && uniforms.representation < 2.5) {
-      constexpr sampler spectrumSampler(coord::normalized, address::clamp_to_edge, filter::linear);
-      const int sampleCount = 32;
+    if (representation > 1.5 && representation < 2.5) {
+      // Twelve bins arrive pre-reduced from the authoritative surface. The
+      // field costs one small CPU sum per submission, never a DFT per pixel.
       const int binCount = 12;
       int bin = min(binCount - 1, int(in.uv.x * float(binCount)));
-      float realPart = 0.0;
-      float imaginaryPart = 0.0;
-      for (int k = 0; k < sampleCount; k++) {
-        float sampleX = float(k) / float(sampleCount - 1);
-        float value = surface.sample(spectrumSampler, float2(sampleX, 0.5)).r * uniforms.exposure;
-        float angle = 6.2831853 * float(bin * k) / float(sampleCount);
-        realPart += value * cos(angle);
-        imaginaryPart -= value * sin(angle);
-      }
-      float magnitude = sqrt(realPart * realPart + imaginaryPart * imaginaryPart) / float(sampleCount);
-      float barHeight = clamp(magnitude * 0.75, 0.015, 0.62);
-      float barTop = 0.82 - barHeight;
-      float bar = step(barTop, in.uv.y) * step(in.uv.y, 0.82);
-      float3 spectrum = mix(kNightDeep, kSeaDeep, 0.25 + 0.4 * breath);
-      spectrum += mix(kSeaLit, kEmberWarm, float(bin) / float(binCount - 1)) * bar;
-      return float4(spectrum, 1.0);
+      float magnitude = spectrumValue(bin, uniforms);
+      float barHeight = 0.055 + magnitude * 0.58;
+      float withinBin = fract(in.uv.x * float(binCount));
+      float column = smoothstep(0.06, 0.14, withinBin) * (1.0 - smoothstep(0.82, 0.94, withinBin));
+      float bar = column * step(0.86 - barHeight, in.uv.y) * step(in.uv.y, 0.86);
+      float glow = column * (1.0 - smoothstep(0.0, 0.10, abs(in.uv.y - (0.86 - barHeight))));
+      float baseline = 1.0 - smoothstep(0.006, 0.018, abs(in.uv.y - 0.86));
+      float hue = float(bin) / float(binCount - 1);
+      float3 binColour = mix(kShallow, kEmber, hue * 0.72);
+      float3 colour = mix(kNight, kAbyss, 0.30 + 0.22 * breath);
+      colour += kWater * baseline * 0.24;
+      colour += binColour * (bar * 0.88 + glow * 0.24);
+      float2 fromCentre = (in.uv - 0.5) * 2.0;
+      return float4(colour * (1.0 - 0.26 * dot(fromCentre, fromCentre)), 1.0);
     }
 
-    float3 colour = mix(kNightDeep, kSeaDeep, 0.55 + 0.45 * breath);
-    // Resting amplitudes are physically small beside a struck crest, but they
-    // still have sign and structure. Map that real low-amplitude band into a
-    // visible trough/crest contrast instead of inventing decorative motion.
-    float restingContrast = smoothstep(0.008, 0.12, abs(amplitude));
-    float3 restingTone = amplitude >= 0.0 ? kSeaLit : kNightDeep;
-    colour = mix(colour, restingTone, restingContrast * 0.48);
-    colour += kSeaGlimmer * restingContrast * (0.06 + 0.08 * breath);
-    colour = mix(colour, kSeaLit, smoothstep(-0.35, 0.85, amplitude));
-    colour = mix(colour, kSeaGlimmer, smoothstep(0.55, 1.05, amplitude) * 0.7);
-    // A crest or trough that reaches the medium's declared range is the
-    // decisive event: constructive interference, and it burns.
-    colour += kEmberWarm * smoothstep(0.82, 1.15, abs(amplitude)) * 0.55;
-    colour += kSeaGlimmer * specular * (0.18 + 0.30 * breath);
-
-    if (uniforms.representation > 2.5) {
-      // Felt keeps the water's causal shading but gives the visitor a warmer,
-      // slower reading of the same amplitude, matching the web lens's third
-      // station without inventing another physical state.
-      colour = mix(colour, kEmberWarm, smoothstep(0.15, 0.9, abs(amplitude)) * 0.24);
-      colour += kSeaGlimmer * (0.04 + 0.05 * breath);
+    float amplitude = surface.sample(surfaceSampler, fieldUV).r * exposure;
+    float left = surface.sample(surfaceSampler, fieldUV - float2(texel.x, 0.0)).r * exposure;
+    float right = surface.sample(surfaceSampler, fieldUV + float2(texel.x, 0.0)).r * exposure;
+    float up = surface.sample(surfaceSampler, fieldUV - float2(0.0, texel.y)).r * exposure;
+    float down = surface.sample(surfaceSampler, fieldUV + float2(0.0, texel.y)).r * exposure;
+    float slopeX = right - left;
+    float slopeY = down - up;
+    float curvature = left + right + up + down - 4.0 * amplitude;
+    float steepness = length(float2(slopeX, slopeY));
+    float3 colour = surfaceMaterial(
+      in, amplitude, slopeX, slopeY, curvature, steepness, breath
+    );
+    if (representation > 2.5) {
+      // Felt remains causally tied to the field, but lets a decisive crest
+      // keep its warmth longer than the analytical surface station does.
+      float felt = smoothstep(0.025, 0.48, abs(amplitude) + steepness * 0.62);
+      colour = mix(colour, kEmber, felt * 0.38);
+      colour += kFoam * felt * (0.055 + 0.080 * breath);
     }
-
-    // The tank has edges. A soft fall-off says so without drawing a frame.
-    float2 fromCentre = (in.uv - 0.5) * 2.0;
-    colour *= mix(1.0, 0.68, saturate(dot(fromCentre, fromCentre) * 0.55));
-
     return float4(colour, 1.0);
   }
   """
