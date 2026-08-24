@@ -1,4 +1,5 @@
 import Foundation
+import simd
 
 /// A bounded molecular instrument built from a curated real-compound register.
 ///
@@ -6,7 +7,7 @@ import Foundation
 /// enough to make formula, geometry, bond order, reaction energy, and vibration
 /// tangible without pretending the app contains a general-purpose chemistry
 /// engine. Unsupported pairs stay inert until a curated equation exists.
-public final class MoleculeKernel: SurfaceSimulationKernel {
+public final class MoleculeKernel: SurfaceSimulationKernel, MoleculeSnapshotProviding {
   public enum Shape: String, Equatable, Sendable {
     case bent
     case linear
@@ -64,6 +65,12 @@ public final class MoleculeKernel: SurfaceSimulationKernel {
     Compound(key: "H2", name: "hydrogen", formula: "H₂", shape: .diatomic, atomCount: 2, energy: 0),
     Compound(key: "NaCl", name: "salt", formula: "NaCl", shape: .ionic, atomCount: 2, energy: -411),
   ]
+  public static let maximumMolecules = 18
+  private static let compoundIndices = Dictionary(
+    uniqueKeysWithValues: compounds.enumerated().map { index, compound in
+      (compound.key, UInt32(clamping: index))
+    }
+  )
 
   private static let curatedReactions: [String: Reaction] = [
     "H2|O2": Reaction(reactants: ["H2", "H2", "O2"], products: ["H2O", "H2O"], energy: 572),
@@ -86,14 +93,22 @@ public final class MoleculeKernel: SurfaceSimulationKernel {
   public private(set) var reactions: [Reaction] = []
 
   private var surface: [Float]
+  private var surfaceNeedsProjection: Bool
+  /// Fixed-capacity presentation records rebuilt with authoritative state.
+  /// The scalar surface remains for cross-platform compatibility, while native
+  /// Metal receives this richer ledger directly.
+  private var renderBodies: [MoleculeRenderBody]
+  private var presentationReactionEnergy = 0.0
   private let seed: UInt64
-  private let maximumMolecules = 18
 
   public init(seed: UInt64 = 0, secondsPerTick: TimeInterval = UniverseClock.defaultStepSeconds) {
     precondition(secondsPerTick > 0)
     self.seed = seed
     self.secondsPerTick = secondsPerTick
     surface = [Float](repeating: 0, count: width * height)
+    surfaceNeedsProjection = true
+    renderBodies = []
+    renderBodies.reserveCapacity(Self.maximumMolecules)
     var random = SplitMix64(seed: seed &+ 0xC8E0_2026)
     molecules = []
     for index in 0 ..< 8 {
@@ -107,16 +122,30 @@ public final class MoleculeKernel: SurfaceSimulationKernel {
         vibration: random.nextUnitDouble() * 0.4
       ))
     }
-    projectSurface()
+    refreshPresentation()
   }
 
   public func withSurface<T>(_ body: (UnsafePointer<Float>, Int, Int) -> T) -> T {
-    surface.withUnsafeBufferPointer { body($0.baseAddress!, width, height) }
+    materializeSurfaceIfNeeded()
+    return surface.withUnsafeBufferPointer { body($0.baseAddress!, width, height) }
+  }
+
+  public func withMoleculeRenderSnapshot<T>(_ body: (MoleculeRenderSnapshot) -> T) -> T {
+    renderBodies.withUnsafeBufferPointer { bodies in
+      body(MoleculeRenderSnapshot(
+        tick: tick,
+        elapsedSeconds: elapsedSeconds,
+        secondsPerTick: secondsPerTick,
+        representation: representation,
+        reactionEnergy: Float(presentationReactionEnergy),
+        bodies: bodies
+      ))
+    }
   }
 
   public func setRepresentation(_ rawValue: Int) {
     representation = min(max(rawValue, 0), 3)
-    projectSurface()
+    refreshPresentation()
   }
 
   public func prepare() {}
@@ -152,13 +181,14 @@ public final class MoleculeKernel: SurfaceSimulationKernel {
     case .train, .scale, .season, .pan, .weather, .timeDilation, .night, .breath:
       break
     }
-    projectSurface()
+    refreshPresentation()
     return output()
   }
 
   public func advance(ticks: Int) -> KernelOutput {
     guard ticks > 0 else { return output() }
     for _ in 0 ..< ticks { step() }
+    refreshPresentation()
     return output()
   }
 
@@ -175,7 +205,6 @@ public final class MoleculeKernel: SurfaceSimulationKernel {
     }
     elapsedSeconds += secondsPerTick
     tick += 1
-    projectSurface()
   }
 
   private func seedMolecule(x: Double, y: Double, intensity: Double) {
@@ -194,7 +223,7 @@ public final class MoleculeKernel: SurfaceSimulationKernel {
   }
 
   private func addMolecule(x: Double, y: Double, intensity: Double) {
-    guard molecules.count < maximumMolecules else { seedMolecule(x: x, y: y, intensity: intensity); return }
+    guard molecules.count < Self.maximumMolecules else { seedMolecule(x: x, y: y, intensity: intensity); return }
     let index = molecules.count
     let compound = Self.compounds[(index * 3 + Int(seed % UInt64(Self.compounds.count))) % Self.compounds.count]
     molecules.append(Molecule(compound: compound, x: x, y: y, vx: 0.03 * intensity, vy: -0.02 * intensity, vibration: 0.25 + intensity * 0.55))
@@ -235,6 +264,7 @@ public final class MoleculeKernel: SurfaceSimulationKernel {
       ))
     }
     if reactions.count > 32 { reactions.removeFirst(reactions.count - 32) }
+    presentationReactionEnergy = reactions.suffix(4).reduce(0) { $0 + $1.energy }
   }
 
   public func reactionFor(_ first: String, _ second: String) -> Reaction {
@@ -262,7 +292,14 @@ public final class MoleculeKernel: SurfaceSimulationKernel {
     return selected
   }
 
-  private func projectSurface() {
+  private func refreshPresentation() {
+    energy = molecules.reduce(0) { $0 + $1.vibration } + reactions.suffix(8).reduce(0) { $0 + abs($1.energy) / 500 }
+    rebuildRenderSnapshot()
+    surfaceNeedsProjection = true
+  }
+
+  private func materializeSurfaceIfNeeded() {
+    guard surfaceNeedsProjection else { return }
     surface.withUnsafeMutableBufferPointer { output in
       for index in output.indices { output[index] = 0 }
       switch representation {
@@ -273,7 +310,33 @@ public final class MoleculeKernel: SurfaceSimulationKernel {
       default: break
       }
     }
-    energy = molecules.reduce(0) { $0 + $1.vibration } + reactions.suffix(8).reduce(0) { $0 + abs($1.energy) / 500 }
+    surfaceNeedsProjection = false
+  }
+
+  private func rebuildRenderSnapshot() {
+    renderBodies.removeAll(keepingCapacity: true)
+    for molecule in molecules {
+      let compoundIndex = Self.compoundIndices[molecule.compound.key] ?? 0
+      renderBodies.append(MoleculeRenderBody(
+        position: SIMD2<Float>(Float(molecule.x), Float(molecule.y)),
+        velocity: SIMD2<Float>(Float(molecule.vx), Float(molecule.vy)),
+        compoundIndex: compoundIndex,
+        shape: Self.renderShape(for: molecule.compound.shape),
+        atomCount: UInt32(clamping: molecule.compound.atomCount),
+        vibration: Float(min(max(molecule.vibration, 0), 1))
+      ))
+    }
+  }
+
+  private static func renderShape(for shape: Shape) -> MoleculeRenderShape {
+    switch shape {
+    case .bent: .bent
+    case .linear: .linear
+    case .tetrahedral: .tetrahedral
+    case .trigonal: .trigonal
+    case .diatomic: .diatomic
+    case .ionic: .ionic
+    }
   }
 
   private func projectMixture(into output: inout UnsafeMutableBufferPointer<Float>) {

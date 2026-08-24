@@ -325,6 +325,32 @@ final class ProofKernelTests: XCTestCase {
     XCTAssertLessThanOrEqual(first.molecules.count, 18)
   }
 
+  func testMoleculeRenderSnapshotCarriesCompoundGeometryAndReactionLedger() {
+    let kernel = MoleculeKernel(seed: 0xC8E0)
+    kernel.withMoleculeRenderSnapshot { snapshot in
+      XCTAssertEqual(snapshot.tick, kernel.tick)
+      XCTAssertEqual(snapshot.bodies.count, kernel.molecules.count)
+      XCTAssertEqual(snapshot.representation, kernel.representation)
+      XCTAssertEqual(snapshot.bodies[0].shape, .bent)
+      XCTAssertEqual(snapshot.bodies[0].atomCount, 3)
+    }
+
+    _ = kernel.apply(SemanticCommand(id: "molecule-render-grow", verb: .grow, at: 0, origin: .centre))
+    _ = kernel.apply(SemanticCommand(id: "molecule-render-vibrate", verb: .tutti, at: 1, intensity: 1))
+    _ = kernel.advance(ticks: 3)
+    kernel.setRepresentation(3)
+    kernel.withMoleculeRenderSnapshot { snapshot in
+      XCTAssertEqual(snapshot.representation, 3)
+      XCTAssertEqual(snapshot.bodies.count, kernel.molecules.count)
+      for (body, molecule) in zip(snapshot.bodies, kernel.molecules) {
+        XCTAssertEqual(body.position.x, Float(molecule.x), accuracy: 0.0001)
+        XCTAssertEqual(body.position.y, Float(molecule.y), accuracy: 0.0001)
+        XCTAssertEqual(body.vibration, Float(min(max(molecule.vibration, 0), 1)), accuracy: 0.0001)
+        XCTAssertEqual(body.atomCount, UInt32(molecule.compound.atomCount))
+      }
+    }
+  }
+
   func testMoleculeLensesAndReactionChangeTheField() {
     let kernel = MoleculeKernel(seed: 31)
     let before = surface(kernel)

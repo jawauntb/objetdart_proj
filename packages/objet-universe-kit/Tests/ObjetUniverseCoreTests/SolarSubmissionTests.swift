@@ -28,6 +28,26 @@ final class SolarSubmissionTests: XCTestCase {
     XCTAssertEqual(renderer.submittedAtomCount, 1)
   }
 
+  func testMoleculeSnapshotIsForwardedOnlyWhileHostIsRunning() {
+    let kernel = MoleculeKernel(seed: 0xC8E0)
+    let host = RenderHost()
+    let renderer = RendererProbe(kind: .metal)
+    host.install(renderer)
+
+    kernel.withMoleculeRenderSnapshot { host.submitMolecules($0) }
+    XCTAssertEqual(renderer.submittedMoleculeCount, 0)
+
+    host.resume()
+    kernel.withMoleculeRenderSnapshot { host.submitMolecules($0) }
+    XCTAssertEqual(renderer.submittedMoleculeCount, 1)
+    XCTAssertEqual(renderer.lastMoleculeBodyCount, kernel.molecules.count)
+    XCTAssertEqual(renderer.lastMoleculeTick, 0)
+
+    host.suspend()
+    kernel.withMoleculeRenderSnapshot { host.submitMolecules($0) }
+    XCTAssertEqual(renderer.submittedMoleculeCount, 1)
+  }
+
   func testSolarSnapshotIsForwardedOnlyWhileHostIsRunning() {
     let kernel = SolarKernel(seed: 0x501A)
     let host = RenderHost()
@@ -89,6 +109,27 @@ final class SolarSubmissionTests: XCTestCase {
     XCTAssertEqual(replacement.prepareCount, 1)
     XCTAssertEqual(replacement.resumeCount, 1)
     XCTAssertEqual(replacement.submittedSolarCount, 1)
+    XCTAssertEqual(replacement.suspendCount, 1)
+  }
+
+  func testReplacingMoleculeRendererRetiresOldOwnerBeforeNextSubmission() {
+    let kernel = MoleculeKernel(seed: 0xC8E0)
+    let host = RenderHost()
+    let first = RendererProbe(kind: .metal)
+    let replacement = RendererProbe(kind: .metal)
+    host.install(first)
+    host.resume()
+    kernel.withMoleculeRenderSnapshot { host.submitMolecules($0) }
+
+    host.install(replacement)
+    kernel.withMoleculeRenderSnapshot { host.submitMolecules($0) }
+    host.suspend()
+
+    XCTAssertEqual(first.submittedMoleculeCount, 1)
+    XCTAssertEqual(first.retireCount, 1)
+    XCTAssertEqual(replacement.prepareCount, 1)
+    XCTAssertEqual(replacement.resumeCount, 1)
+    XCTAssertEqual(replacement.submittedMoleculeCount, 1)
     XCTAssertEqual(replacement.suspendCount, 1)
   }
 
@@ -306,7 +347,7 @@ final class SolarSubmissionTests: XCTestCase {
     let layer = CAMetalLayer()
     XCTAssertTrue(SceneRendererFactory.make(for: .wave, layer: layer, waveBreathSeconds: 7) is WaveMaterialRenderer)
     XCTAssertTrue(SceneRendererFactory.make(for: .atoms, layer: layer, waveBreathSeconds: 7) is AtomRenderer)
-    XCTAssertTrue(SceneRendererFactory.make(for: .molecules, layer: layer, waveBreathSeconds: 7) is ChemistryMaterialRenderer)
+    XCTAssertTrue(SceneRendererFactory.make(for: .molecules, layer: layer, waveBreathSeconds: 7) is MoleculeRenderer)
     XCTAssertTrue(SceneRendererFactory.make(for: .cell, layer: layer, waveBreathSeconds: 7) is CellMaterialRenderer)
     XCTAssertTrue(SceneRendererFactory.make(for: .solar, layer: layer, waveBreathSeconds: 7) is SolarRenderer)
   }
@@ -344,36 +385,93 @@ final class SolarSubmissionTests: XCTestCase {
     ))
   }
 
-  func testChemistryRendererAdmitsAuthoritativeAtomAndMoleculeSubmissionsOnly() {
-    let atom = AtomKernel(seed: 0xA70A)
+  func testMoleculeRendererAdmitsOnlyTheBoundedAuthoritativeSnapshot() {
     let molecule = MoleculeKernel(seed: 0xC0DE)
-    XCTAssertTrue(ChemistryMaterialRenderer.acceptsSubmission(
-      materialKind: atom.materialKind,
-      width: atom.width,
-      height: atom.height
-    ))
-    XCTAssertTrue(ChemistryMaterialRenderer.acceptsSubmission(
-      materialKind: molecule.materialKind,
-      width: molecule.width,
-      height: molecule.height
-    ))
-    for materialKind in [0, 2, 5] {
-      XCTAssertFalse(ChemistryMaterialRenderer.acceptsSubmission(
-        materialKind: materialKind,
-        width: atom.width,
-        height: atom.height
-      ))
+    molecule.withMoleculeRenderSnapshot { snapshot in
+      XCTAssertTrue(MoleculeRenderer.acceptsSnapshot(bodyCount: snapshot.bodies.count))
     }
-    XCTAssertFalse(ChemistryMaterialRenderer.acceptsSubmission(
-      materialKind: atom.materialKind,
-      width: atom.width - 1,
-      height: atom.height
+    XCTAssertFalse(MoleculeRenderer.acceptsSnapshot(bodyCount: MoleculeKernel.maximumMolecules + 1))
+    XCTAssertFalse(MoleculeRenderer.acceptsSnapshot(bodyCount: -1))
+  }
+
+  func testMoleculeRendererPacksCompoundGeometryWithoutInventingIdentity() throws {
+    let records = [
+      MoleculeRenderBody(
+        position: SIMD2<Float>(-0.2, 0.3), velocity: SIMD2<Float>(0.1, -0.2), compoundIndex: 0,
+        shape: .bent, atomCount: 3, vibration: 1.4
+      ),
+      MoleculeRenderBody(
+        position: SIMD2<Float>(0.4, -0.1), velocity: SIMD2<Float>(-0.3, 0.2), compoundIndex: 99,
+        shape: .ionic, atomCount: 9, vibration: -0.4
+      ),
+    ]
+    var packed = [MoleculeGPUBody](repeating: MoleculeGPUBody(), count: MoleculeKernel.maximumMolecules)
+    try records.withUnsafeBufferPointer { bodies in
+      let snapshot = MoleculeRenderSnapshot(
+        tick: 7,
+        elapsedSeconds: 1.5,
+        secondsPerTick: UniverseClock.defaultStepSeconds,
+        representation: 2,
+        reactionEnergy: 572,
+        bodies: bodies
+      )
+      let bodyCount = try XCTUnwrap(packed.withUnsafeMutableBufferPointer {
+        MoleculeRenderer.pack(snapshot, bodies: $0)
+      })
+      XCTAssertEqual(bodyCount, 2)
+    }
+    XCTAssertEqual(packed[0].positionVibration, SIMD4<Float>(-0.2, 0.3, 1, 0))
+    XCTAssertEqual(packed[0].geometryVelocity, SIMD4<Float>(0, 3, 0.1, -0.2))
+    XCTAssertEqual(packed[1].positionVibration, SIMD4<Float>(0.4, -0.1, 0, 7))
+    XCTAssertEqual(packed[1].geometryVelocity, SIMD4<Float>(5, 5, -0.3, 0.2))
+  }
+
+  func testMoleculeRendererRejectsMalformedOrOversizedUploads() {
+    let valid = MoleculeRenderBody(
+      position: SIMD2<Float>(0, 0), velocity: SIMD2<Float>(0, 0), compoundIndex: 0,
+      shape: .bent, atomCount: 3, vibration: 0.5
+    )
+
+    func pack(_ records: [MoleculeRenderBody], destinationCount: Int) -> Int? {
+      var destination = [MoleculeGPUBody](repeating: MoleculeGPUBody(), count: destinationCount)
+      return records.withUnsafeBufferPointer { bodies in
+        let snapshot = MoleculeRenderSnapshot(
+          tick: 0,
+          elapsedSeconds: 0,
+          secondsPerTick: UniverseClock.defaultStepSeconds,
+          representation: 0,
+          reactionEnergy: 0,
+          bodies: bodies
+        )
+        return destination.withUnsafeMutableBufferPointer {
+          MoleculeRenderer.pack(snapshot, bodies: $0)
+        }
+      }
+    }
+
+    XCTAssertNil(pack([valid], destinationCount: MoleculeKernel.maximumMolecules - 1))
+    XCTAssertNil(pack(
+      Array(repeating: valid, count: MoleculeKernel.maximumMolecules + 1),
+      destinationCount: MoleculeKernel.maximumMolecules
     ))
-    XCTAssertFalse(ChemistryMaterialRenderer.acceptsSubmission(
-      materialKind: molecule.materialKind,
-      width: molecule.width,
-      height: molecule.height + 1
-    ))
+    XCTAssertNil(pack([
+      MoleculeRenderBody(
+        position: SIMD2<Float>(.nan, 0), velocity: .zero, compoundIndex: 0,
+        shape: .bent, atomCount: 3, vibration: 0.5
+      ),
+    ], destinationCount: MoleculeKernel.maximumMolecules))
+    XCTAssertNil(pack([
+      MoleculeRenderBody(
+        position: .zero, velocity: SIMD2<Float>(.infinity, 0), compoundIndex: 0,
+        shape: .bent, atomCount: 3, vibration: 0.5
+      ),
+    ], destinationCount: MoleculeKernel.maximumMolecules))
+    XCTAssertNil(pack([
+      MoleculeRenderBody(
+        position: .zero, velocity: .zero, compoundIndex: 0,
+        shape: .bent, atomCount: 3, vibration: .nan
+      ),
+    ], destinationCount: MoleculeKernel.maximumMolecules))
   }
 
   func testAtomRendererAdmitsTheBoundedAuthoritativeSnapshotOnly() {

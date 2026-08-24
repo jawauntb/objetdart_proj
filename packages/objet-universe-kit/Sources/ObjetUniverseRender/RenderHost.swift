@@ -7,6 +7,7 @@ public final class RenderHost {
   public private(set) var renderedFrameCount = 0
   public private(set) var submittedFieldCount = 0
   public private(set) var submittedAtomCount = 0
+  public private(set) var submittedMoleculeCount = 0
   public private(set) var submittedSolarCount = 0
   public var activeRendererCount: Int { running ? renderers.count : 0 }
 
@@ -51,6 +52,17 @@ public final class RenderHost {
       (renderer as? AtomSystemRenderer)?.submitAtoms(snapshot)
     }
     submittedAtomCount += 1
+  }
+
+  /// Upload a bounded molecule snapshot only while the material is live.
+  /// The borrowed compound records are copied by the renderer during this
+  /// call, never retained across a React Native boundary.
+  public func submitMolecules(_ snapshot: MoleculeRenderSnapshot) {
+    guard running else { return }
+    for renderer in renderers.values {
+      (renderer as? MoleculeSystemRenderer)?.submitMolecules(snapshot)
+    }
+    submittedMoleculeCount += 1
   }
 
   /// Upload one bounded solar snapshot to the installed solar renderer. As
