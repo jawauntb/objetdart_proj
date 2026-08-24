@@ -83,6 +83,13 @@ public protocol AtomSystemRenderer: UniverseRenderer {
   func submitAtoms(_ snapshot: AtomRenderSnapshot)
 }
 
+/// A renderer for molecule identities, geometry, and reaction energy. This is
+/// deliberately separate from the scalar field seam: molecule shape and
+/// compound identity are information the renderer must not guess.
+public protocol MoleculeSystemRenderer: UniverseRenderer {
+  func submitMolecules(_ snapshot: MoleculeRenderSnapshot)
+}
+
 /// A renderer for the solar kernel's bounded entity snapshot.
 ///
 /// The snapshot owns no memory. Its buffers are borrowed from the kernel and

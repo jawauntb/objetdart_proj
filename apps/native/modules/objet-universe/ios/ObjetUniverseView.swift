@@ -296,14 +296,20 @@ public final class ObjetUniverseView: ExpoView {
     }
   }
 
-  /// Hand the frame's authoritative field to the material. The pointer never
-  /// escapes the closure and nothing is copied on the way, so the frame path
-  /// allocates nothing.
+  /// Hand the frame's authoritative material to its renderer. Entity scenes
+  /// borrow their bounded ledger directly; scalar scenes keep the field
+  /// pointer inside this closure. Neither path allocates in the frame loop.
   nonisolated private func submitActiveSurface() {
     guard let kernel = surfaceKernels.kernel else { return }
     if let atoms = kernel as? any AtomSnapshotProviding {
       atoms.withAtomRenderSnapshot { snapshot in
         renderHost.submitAtoms(snapshot)
+      }
+      return
+    }
+    if let molecules = kernel as? any MoleculeSnapshotProviding {
+      molecules.withMoleculeRenderSnapshot { snapshot in
+        renderHost.submitMolecules(snapshot)
       }
       return
     }

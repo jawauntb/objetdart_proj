@@ -20,7 +20,7 @@ public enum SceneRendererFactory {
     case .atoms:
       AtomRenderer(layer: layer)
     case .molecules:
-      ChemistryMaterialRenderer(layer: layer)
+      MoleculeRenderer(layer: layer)
     case .cell:
       CellMaterialRenderer(layer: layer)
     case .solar:
