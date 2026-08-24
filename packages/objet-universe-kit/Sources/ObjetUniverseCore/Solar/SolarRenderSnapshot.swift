@@ -11,6 +11,10 @@ public enum SolarBodyKind: UInt8, Codable, Sendable {
 /// must never write them back into the simulation.
 public struct SolarRenderBody: Sendable {
   public let id: UInt64
+  /// Stable procedural material identity. It is carried separately from the
+  /// palette so a blue world is not merely a differently tinted copy of its
+  /// neighbor.
+  public let materialSeed: UInt32
   public let kind: SolarBodyKind
   public let previousPosition: SIMD3<Float>
   public let position: SIMD3<Float>
