@@ -489,6 +489,7 @@ public final class SolarKernel: SurfaceSimulationKernel, SolarSnapshotProviding,
       }
       renderBodies.append(.init(
         id: renderedState.id,
+        materialSeed: renderedState.seed,
         kind: renderedState.kind,
         previousPosition: projectedPosition(renderedState, previous: true),
         position: projectedPosition(renderedState),

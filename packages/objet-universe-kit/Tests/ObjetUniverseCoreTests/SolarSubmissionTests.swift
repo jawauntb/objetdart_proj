@@ -68,6 +68,17 @@ final class SolarSubmissionTests: XCTestCase {
     XCTAssertEqual(renderer.submittedSolarCount, 1)
   }
 
+  func testSolarSnapshotCarriesEachWorldsStableMaterialSeed() {
+    let kernel = SolarKernel(seed: 0x501A)
+    kernel.withSolarRenderSnapshot { snapshot in
+      XCTAssertEqual(
+        snapshot.bodies.map(\.materialSeed),
+        kernel.bodies.map(\.seed),
+        "the renderer's surface identity must come from the authoritative world seed"
+      )
+    }
+  }
+
   func testPublicSceneSelectionKeepsScalarLanesSourceCompatible() {
     XCTAssertEqual(SceneRendererSelection(scene: .wave), .field)
     XCTAssertEqual(SceneRendererSelection(scene: .cell), .field)
