@@ -76,6 +76,13 @@ public protocol FieldSurfaceRenderer: UniverseRenderer {
   func submitField(_ submission: FieldSubmission)
 }
 
+/// A renderer for the atomic kernel's bounded identities and covalent
+/// relations. Atoms use this direct seam because shell count, element number,
+/// and bond order are not recoverable from a scalar intensity field.
+public protocol AtomSystemRenderer: UniverseRenderer {
+  func submitAtoms(_ snapshot: AtomRenderSnapshot)
+}
+
 /// A renderer for the solar kernel's bounded entity snapshot.
 ///
 /// The snapshot owns no memory. Its buffers are borrowed from the kernel and

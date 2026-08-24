@@ -8,6 +8,26 @@ import QuartzCore
 #endif
 
 final class SolarSubmissionTests: XCTestCase {
+  func testAtomSnapshotIsForwardedOnlyWhileHostIsRunning() {
+    let kernel = AtomKernel(seed: 0xA70A)
+    let host = RenderHost()
+    let renderer = RendererProbe(kind: .metal)
+    host.install(renderer)
+
+    kernel.withAtomRenderSnapshot { host.submitAtoms($0) }
+    XCTAssertEqual(renderer.submittedAtomCount, 0)
+
+    host.resume()
+    kernel.withAtomRenderSnapshot { host.submitAtoms($0) }
+    XCTAssertEqual(renderer.submittedAtomCount, 1)
+    XCTAssertEqual(renderer.lastAtomBodyCount, kernel.atoms.count)
+    XCTAssertEqual(renderer.lastAtomTick, 0)
+
+    host.suspend()
+    kernel.withAtomRenderSnapshot { host.submitAtoms($0) }
+    XCTAssertEqual(renderer.submittedAtomCount, 1)
+  }
+
   func testSolarSnapshotIsForwardedOnlyWhileHostIsRunning() {
     let kernel = SolarKernel(seed: 0x501A)
     let host = RenderHost()
@@ -285,7 +305,7 @@ final class SolarSubmissionTests: XCTestCase {
     }
     let layer = CAMetalLayer()
     XCTAssertTrue(SceneRendererFactory.make(for: .wave, layer: layer, waveBreathSeconds: 7) is WaveMaterialRenderer)
-    XCTAssertTrue(SceneRendererFactory.make(for: .atoms, layer: layer, waveBreathSeconds: 7) is ChemistryMaterialRenderer)
+    XCTAssertTrue(SceneRendererFactory.make(for: .atoms, layer: layer, waveBreathSeconds: 7) is AtomRenderer)
     XCTAssertTrue(SceneRendererFactory.make(for: .molecules, layer: layer, waveBreathSeconds: 7) is ChemistryMaterialRenderer)
     XCTAssertTrue(SceneRendererFactory.make(for: .cell, layer: layer, waveBreathSeconds: 7) is CellMaterialRenderer)
     XCTAssertTrue(SceneRendererFactory.make(for: .solar, layer: layer, waveBreathSeconds: 7) is SolarRenderer)
@@ -354,6 +374,68 @@ final class SolarSubmissionTests: XCTestCase {
       width: molecule.width,
       height: molecule.height + 1
     ))
+  }
+
+  func testAtomRendererAdmitsTheBoundedAuthoritativeSnapshotOnly() {
+    let atom = AtomKernel(seed: 0xA70A)
+    atom.withAtomRenderSnapshot { snapshot in
+      XCTAssertTrue(AtomRenderer.acceptsSnapshot(bodyCount: snapshot.bodies.count, bondCount: snapshot.bonds.count))
+    }
+    XCTAssertFalse(AtomRenderer.acceptsSnapshot(bodyCount: AtomKernel.maximumAtoms + 1, bondCount: 0))
+    XCTAssertFalse(AtomRenderer.acceptsSnapshot(
+      bodyCount: 0,
+      bondCount: AtomKernel.maximumAtoms * (AtomKernel.maximumAtoms - 1) / 2 + 1
+    ))
+    XCTAssertFalse(AtomRenderer.acceptsSnapshot(bodyCount: -1, bondCount: 0))
+  }
+
+  func testAtomRendererPacksKernelBodiesAndFiltersMalformedInRangeBonds() throws {
+    let records = [
+      AtomRenderBody(
+        position: SIMD2<Float>(-0.2, 0.3), velocity: SIMD2<Float>(0.1, -0.2), atomicNumber: 6,
+        shellCount: 2, valence: 4, excitation: 1.4
+      ),
+      AtomRenderBody(
+        position: SIMD2<Float>(0.4, -0.1), velocity: SIMD2<Float>(-0.3, 0.2), atomicNumber: 8,
+        shellCount: 2, valence: 2, excitation: -0.4
+      ),
+    ]
+    let relations = [
+      AtomRenderBond(firstIndex: 0, secondIndex: 1, order: 2),
+      AtomRenderBond(firstIndex: 1, secondIndex: 1, order: 1),
+      AtomRenderBond(firstIndex: 0, secondIndex: 2, order: 1),
+    ]
+    var packedBodies = [AtomGPUBody](repeating: AtomGPUBody(), count: AtomKernel.maximumAtoms)
+    var packedBonds = [AtomGPUBond](
+      repeating: AtomGPUBond(),
+      count: AtomKernel.maximumAtoms * (AtomKernel.maximumAtoms - 1) / 2
+    )
+
+    try records.withUnsafeBufferPointer { bodies in
+      try relations.withUnsafeBufferPointer { bonds in
+        let snapshot = AtomRenderSnapshot(
+          tick: 7,
+          elapsedSeconds: 1.5,
+          secondsPerTick: UniverseClock.defaultStepSeconds,
+          representation: 2,
+          fusionEnergy: 0.75,
+          bodies: bodies,
+          bonds: bonds
+        )
+        let upload = try XCTUnwrap(packedBodies.withUnsafeMutableBufferPointer { packedBodies in
+          packedBonds.withUnsafeMutableBufferPointer { packedBonds in
+            AtomRenderer.pack(snapshot, bodies: packedBodies, bonds: packedBonds)
+          }
+        })
+        XCTAssertEqual(upload.bodyCount, 2)
+        XCTAssertEqual(upload.bondCount, 1)
+      }
+    }
+
+    XCTAssertEqual(packedBodies[0].positionExcitation, SIMD4<Float>(-0.2, 0.3, 1, 6))
+    XCTAssertEqual(packedBodies[1].positionExcitation, SIMD4<Float>(0.4, -0.1, 0, 8))
+    XCTAssertEqual(packedBonds[0].endpoints, SIMD4<Float>(-0.2, 0.3, 0.4, -0.1))
+    XCTAssertEqual(packedBonds[0].relation, SIMD4<Float>(2, 6, 8, 0.5))
   }
 
   func testMetalPipelineCacheLetsAnIndependentBuildProceedDuringAnotherKey() throws {

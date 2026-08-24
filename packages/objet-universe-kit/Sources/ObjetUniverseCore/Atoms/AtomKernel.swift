@@ -1,4 +1,5 @@
 import Foundation
+import simd
 
 /// A bounded atomic instrument for the first chemistry band.
 ///
@@ -7,7 +8,7 @@ import Foundation
 /// energy. It is deliberately not a quantum solver. The scalar surface is a
 /// projection of those ledgers, so the same atom that glows also names the
 /// bond or fusion event in the trail and guide.
-public final class AtomKernel: SurfaceSimulationKernel {
+public final class AtomKernel: SurfaceSimulationKernel, AtomSnapshotProviding {
   public struct Element: Equatable, Sendable {
     public let z: Int
     public let symbol: String
@@ -78,6 +79,7 @@ public final class AtomKernel: SurfaceSimulationKernel {
     Element(z: 25, symbol: "Mn", mass: 55, shells: [2, 8, 13, 2], valence: 2, electronegativity: 1.55),
     Element(z: 26, symbol: "Fe", mass: 56, shells: [2, 8, 14, 2], valence: 3, electronegativity: 1.83),
   ]
+  public static let maximumAtoms = 8
 
   public let scene: SceneID = .atoms
   public let materialKind = 3
@@ -95,14 +97,22 @@ public final class AtomKernel: SurfaceSimulationKernel {
   public private(set) var fusionEnergy = 0.0
 
   private var surface: [Float]
+  /// Fixed-capacity presentation records. They are rebuilt with the same
+  /// authoritative step that projects the scalar surface, so reading a frame
+  /// borrows state rather than allocating or deriving a second atom world.
+  private var renderBodies: [AtomRenderBody]
+  private var renderBonds: [AtomRenderBond]
   private let seed: UInt64
-  private let maximumAtoms = 8
 
   public init(seed: UInt64 = 0, secondsPerTick: TimeInterval = UniverseClock.defaultStepSeconds) {
     precondition(secondsPerTick > 0)
     self.seed = seed
     self.secondsPerTick = secondsPerTick
     surface = [Float](repeating: 0, count: width * height)
+    renderBodies = []
+    renderBonds = []
+    renderBodies.reserveCapacity(Self.maximumAtoms)
+    renderBonds.reserveCapacity(Self.maximumAtoms * (Self.maximumAtoms - 1) / 2)
     var random = SplitMix64(seed: seed &+ 0xA70A_2026)
     atoms = []
     for index in 0 ..< 4 {
@@ -125,6 +135,22 @@ public final class AtomKernel: SurfaceSimulationKernel {
 
   public func withSurface<T>(_ body: (UnsafePointer<Float>, Int, Int) -> T) -> T {
     surface.withUnsafeBufferPointer { body($0.baseAddress!, width, height) }
+  }
+
+  public func withAtomRenderSnapshot<T>(_ body: (AtomRenderSnapshot) -> T) -> T {
+    renderBodies.withUnsafeBufferPointer { bodyBuffer in
+      renderBonds.withUnsafeBufferPointer { bondBuffer in
+        body(AtomRenderSnapshot(
+          tick: tick,
+          elapsedSeconds: elapsedSeconds,
+          secondsPerTick: secondsPerTick,
+          representation: representation,
+          fusionEnergy: Float(fusionEnergy),
+          bodies: bodyBuffer,
+          bonds: bondBuffer
+        ))
+      }
+    }
   }
 
   public func setRepresentation(_ rawValue: Int) {
@@ -209,7 +235,7 @@ public final class AtomKernel: SurfaceSimulationKernel {
   }
 
   private func addAtom(x: Double, y: Double, intensity: Double) {
-    guard atoms.count < maximumAtoms else {
+    guard atoms.count < Self.maximumAtoms else {
       strikeNearest(x: x, y: y, intensity: intensity)
       return
     }
@@ -293,6 +319,30 @@ public final class AtomKernel: SurfaceSimulationKernel {
       }
     }
     energy = atoms.reduce(0) { $0 + $1.excitation } + max(0, fusionEnergy)
+    rebuildRenderSnapshot()
+  }
+
+  private func rebuildRenderSnapshot() {
+    renderBodies.removeAll(keepingCapacity: true)
+    for atom in atoms {
+      renderBodies.append(AtomRenderBody(
+        position: SIMD2<Float>(Float(atom.x), Float(atom.y)),
+        velocity: SIMD2<Float>(Float(atom.vx), Float(atom.vy)),
+        atomicNumber: UInt32(clamping: atom.element.z),
+        shellCount: UInt32(clamping: atom.element.shells.count),
+        valence: UInt32(clamping: atom.element.valence),
+        excitation: Float(min(max(atom.excitation, 0), 1))
+      ))
+    }
+
+    renderBonds.removeAll(keepingCapacity: true)
+    for bond in bonds where bond.first < atoms.count && bond.second < atoms.count {
+      renderBonds.append(AtomRenderBond(
+        firstIndex: UInt32(clamping: bond.first),
+        secondIndex: UInt32(clamping: bond.second),
+        order: UInt32(clamping: bond.order)
+      ))
+    }
   }
 
   private func projectOrbit(into output: inout UnsafeMutableBufferPointer<Float>) {
