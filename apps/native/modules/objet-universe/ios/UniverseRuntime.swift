@@ -59,6 +59,7 @@ final class UniverseRuntime {
   func attach(_ view: ObjetUniverseView) {
     universe = view
     view.setRepresentation(representation)
+    view.setReducedMotion(reducedMotion)
     // Build the graph and one-shot buffers before the first touch so the
     // interaction path only schedules an already-resident buffer.
     AudioBus.shared.prewarm()
@@ -84,6 +85,7 @@ final class UniverseRuntime {
   func setReducedMotion(_ value: Bool) {
     guard reducedMotion != value else { return }
     reducedMotion = value
+    universe?.setReducedMotion(value)
     if value {
       // Enter captures the current pose and clears any presentation velocity
       // without snapping the camera back or mutating the solar kernel.
@@ -120,8 +122,7 @@ final class UniverseRuntime {
   /// render pulse, or guessed collision kind from which the runtime could
   /// fabricate scientific meaning.
   func publishAuthoritativeOutcome(_ event: SensoryEvent) {
-    _ = HapticBus.shared.schedule(event)
-    _ = AudioBus.shared.schedule(event)
+    scheduleSensoryPresentation(event)
   }
 
   /// Translate only typed results drained from the kernel. The bounded
@@ -308,8 +309,16 @@ final class UniverseRuntime {
       clock: SensoryClock(logicalTick: universe?.logicalTick ?? 0),
       energy: energy
     )
-    _ = HapticBus.shared.schedule(event)
-    _ = AudioBus.shared.schedule(event)
+    scheduleSensoryPresentation(event)
+  }
+
+  /// Reduced motion only attenuates physical presentation. The event stays on
+  /// its authoritative clock, with its original identity and spectral meaning
+  /// intact, before both shared buses receive the exact same projection.
+  private func scheduleSensoryPresentation(_ event: SensoryEvent) {
+    let presentation = SensoryPresentation.event(event, reducedMotion: reducedMotion)
+    _ = HapticBus.shared.schedule(presentation)
+    _ = AudioBus.shared.schedule(presentation)
   }
 
   /// Signature is a shape, not a loudness: which gesture this was, in the

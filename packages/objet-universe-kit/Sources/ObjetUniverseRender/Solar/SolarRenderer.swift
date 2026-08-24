@@ -96,7 +96,7 @@ public final class SolarRenderer: SolarSystemRenderer, SolarCameraRenderer, @unc
   private let device: MTLDevice
   private let queue: MTLCommandQueue
   private let frames: [FrameResources]
-  private let availableFrames = SolarFrameLeasePool(capacity: SolarRenderer.framesInFlight)
+  private let frameSlots = MetalFrameSlotPool(capacity: SolarRenderer.framesInFlight)
   private let pass = MTLRenderPassDescriptor()
   private struct PipelineBundle {
     let background: MTLRenderPipelineState
@@ -104,10 +104,8 @@ public final class SolarRenderer: SolarSystemRenderer, SolarCameraRenderer, @unc
     let mark: MTLRenderPipelineState
     let body: MTLRenderPipelineState
   }
-  private let pipelinePublication = SolarPipelinePublication<PipelineBundle>()
-  private var writeIndex = 0
-  private var currentFrame: FrameResources
-  private var frameIsReserved = false
+  private let pipelinePublication = MetalPipelinePublication<PipelineBundle>()
+  private var reservedFrameIndex: Int?
   private var camera = SolarCameraState()
   private var lastPresentationTimestamp: CFTimeInterval?
   private var running = false
@@ -125,7 +123,6 @@ public final class SolarRenderer: SolarSystemRenderer, SolarCameraRenderer, @unc
     self.device = device
     self.queue = queue
     self.frames = frames
-    currentFrame = frames[0]
     layer.device = device
     layer.pixelFormat = .bgra8Unorm
     layer.framebufferOnly = true
@@ -157,16 +154,15 @@ public final class SolarRenderer: SolarSystemRenderer, SolarCameraRenderer, @unc
   }
 
   public func submitSolar(_ snapshot: SolarRenderSnapshot) {
-    if !frameIsReserved {
-      guard availableFrames.tryAcquire() else {
+    if reservedFrameIndex == nil {
+      guard let acquired = frameSlots.tryAcquire() else {
         droppedSubmissionCount += 1
         return
       }
-      writeIndex = (writeIndex + 1) % frames.count
-      currentFrame = frames[writeIndex]
-      frameIsReserved = true
+      reservedFrameIndex = acquired
     }
-    let frame = currentFrame
+    guard let reservedFrameIndex else { return }
+    let frame = frames[reservedFrameIndex]
     let bodyCount = min(snapshot.bodies.count, Self.maximumBodies)
     let trailCount = min(snapshot.trailPoints.count, Self.maximumTrailPoints)
     let predictionCount = min(snapshot.predictionPoints.count, Self.maximumPredictionPoints)
@@ -262,7 +258,7 @@ public final class SolarRenderer: SolarSystemRenderer, SolarCameraRenderer, @unc
   }
 
   public func render(interpolation: Double) {
-    guard running, frameIsReserved else { return }
+    guard running, let reservedFrameIndex else { return }
     guard let pipelines = preparedPipelines() else {
       releaseReservedFrame()
       return
@@ -273,8 +269,8 @@ public final class SolarRenderer: SolarSystemRenderer, SolarCameraRenderer, @unc
       return
     }
 
-    let frame = currentFrame
-    frameIsReserved = false
+    let frame = frames[reservedFrameIndex]
+    self.reservedFrameIndex = nil
     let uniforms = frame.uniforms.contents().bindMemory(to: Uniforms.self, capacity: 1)
     let now = CACurrentMediaTime()
     let delta = lastPresentationTimestamp.map { now - $0 } ?? (1.0 / 60.0)
@@ -288,7 +284,7 @@ public final class SolarRenderer: SolarSystemRenderer, SolarCameraRenderer, @unc
 
     guard let commandBuffer = queue.makeCommandBuffer(), let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
       pass.colorAttachments[0].texture = nil
-      availableFrames.release()
+      frameSlots.release(reservedFrameIndex)
       return
     }
     // The encoder retains its attachments. Clearing the reusable descriptor
@@ -335,8 +331,8 @@ public final class SolarRenderer: SolarSystemRenderer, SolarCameraRenderer, @unc
     }
     encoder.endEncoding()
     commandBuffer.present(drawable)
-    let availableFrames = self.availableFrames
-    commandBuffer.addCompletedHandler { _ in availableFrames.release() }
+    let frameSlots = self.frameSlots
+    commandBuffer.addCompletedHandler { _ in frameSlots.release(reservedFrameIndex) }
     commandBuffer.commit()
   }
 
@@ -353,9 +349,9 @@ public final class SolarRenderer: SolarSystemRenderer, SolarCameraRenderer, @unc
   }
 
   private func releaseReservedFrame() {
-    guard frameIsReserved else { return }
-    frameIsReserved = false
-    availableFrames.release()
+    guard let reservedFrameIndex else { return }
+    self.reservedFrameIndex = nil
+    frameSlots.release(reservedFrameIndex)
   }
 
   private func preparedPipelines() -> PipelineBundle? {
@@ -443,61 +439,4 @@ public final class SolarRenderer: SolarSystemRenderer, SolarCameraRenderer, @unc
   }
 }
 
-/// Publishes a complete immutable pipeline bundle in one lock transition.
-/// Rendering sees either the previous complete bundle or no bundle at all;
-/// it can never observe a partially compiled set of Metal states.
-final class SolarPipelinePublication<Value>: @unchecked Sendable {
-  private let lock = NSLock()
-  private var value: Value?
-  private var preparationStarted = false
-  private var retired = false
-
-  func beginPreparation() -> Bool {
-    lock.lock()
-    defer { lock.unlock() }
-    guard value == nil, !preparationStarted, !retired else { return false }
-    preparationStarted = true
-    return true
-  }
-
-  func publish(_ prepared: Value) {
-    lock.lock()
-    defer { lock.unlock() }
-    preparationStarted = false
-    if !retired { value = prepared }
-  }
-
-  func failPreparation() {
-    lock.lock()
-    preparationStarted = false
-    lock.unlock()
-  }
-
-  func snapshot() -> Value? {
-    lock.lock()
-    defer { lock.unlock() }
-    return value
-  }
-
-  func retire() {
-    lock.lock()
-    retired = true
-    value = nil
-    lock.unlock()
-  }
-}
-
-/// A nonblocking frame lease. Presentation is allowed to drop a snapshot when
-/// the GPU is behind; it may never stall the main-thread display link.
-final class SolarFrameLeasePool: @unchecked Sendable {
-  private let semaphore: DispatchSemaphore
-
-  init(capacity: Int) {
-    precondition(capacity > 0)
-    semaphore = DispatchSemaphore(value: capacity)
-  }
-
-  func tryAcquire() -> Bool { semaphore.wait(timeout: .now()) == .success }
-  func release() { semaphore.signal() }
-}
 #endif

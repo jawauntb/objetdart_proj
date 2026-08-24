@@ -6,11 +6,16 @@ import Foundation
 /// to a fixed lattice and seeded from the universe seed, so the same command
 /// trace produces the same colony on every device. The renderer receives B as
 /// a scalar surface; identity and lineage can grow around this kernel later.
-public final class CellKernel: SurfaceSimulationKernel {
+public final class CellKernel: SurfaceSimulationKernel, ReducedMotionSimulationKernel {
+  /// The fixed authoritative lattice CellMaterialRenderer borrows. A future
+  /// resolution change must update this shared contract rather than silently
+  /// allocating a different presentation surface.
+  public static let latticeWidth = 128
+  public static let latticeHeight = 128
   public let scene: SceneID = .cell
   public let materialKind = 1
-  public let width = 128
-  public let height = 128
+  public let width = CellKernel.latticeWidth
+  public let height = CellKernel.latticeHeight
   public let secondsPerTick: TimeInterval
   public private(set) var tick = 0
   public private(set) var representation = 0
@@ -25,6 +30,11 @@ public final class CellKernel: SurfaceSimulationKernel {
   private var nextA: [Float]
   private var nextB: [Float]
   private var surface: [Float]
+  private var frozenProjectionElapsedSeconds: Double?
+  /// The time-derived readings are presentation only. Keeping their phase
+  /// offset separate lets reduced motion release from the held image instead
+  /// of snapping forward to all of the solver time that passed while held.
+  private var projectionPhaseOffset = 0.0
 
   public init(seed: UInt64 = 0, secondsPerTick: TimeInterval = UniverseClock.defaultStepSeconds) {
     precondition(secondsPerTick > 0)
@@ -47,6 +57,23 @@ public final class CellKernel: SurfaceSimulationKernel {
 
   public func setRepresentation(_ rawValue: Int) {
     selectRepresentation(rawValue)
+    projectSurface()
+  }
+
+  /// Holds only the time-derived strands and folds used by the non-primary
+  /// lens readings. The Gray–Scott state continues to advance and remains
+  /// the source of every surface value.
+  public func setReducedMotion(_ enabled: Bool) {
+    guard enabled != (frozenProjectionElapsedSeconds != nil) else { return }
+    if enabled {
+      frozenProjectionElapsedSeconds = elapsedSeconds + projectionPhaseOffset
+    } else {
+      // Resume from the phase that was visible at the detent. This does not
+      // alter the reaction state, tick, or replayable output; it only prevents
+      // a one-frame relocation of the spectrum and felt projections.
+      projectionPhaseOffset = (frozenProjectionElapsedSeconds ?? elapsedSeconds) - elapsedSeconds
+      frozenProjectionElapsedSeconds = nil
+    }
     projectSurface()
   }
 
@@ -158,18 +185,24 @@ public final class CellKernel: SurfaceSimulationKernel {
   /// material projections for learning: no second genome or molecular solver
   /// is smuggled in behind the lens.
   private func projectSurface() {
+    let projectionElapsedSeconds = frozenProjectionElapsedSeconds ?? (elapsedSeconds + projectionPhaseOffset)
     surface.withUnsafeMutableBufferPointer { output in
       switch representation {
       case 0:
         for index in output.indices { output[index] = b[index] }
       case 1:
         for index in output.indices {
-          output[index] = min(1, abs(b[index] - a[index]) * 1.35 + b[index] * 0.22)
+          let displacedNutrient = max(0, 1 - a[index])
+          // The readable reaction front lies between an exhausted and an
+          // untouched concentration. This keeps the nutrient lens dark at
+          // either extreme and makes the changing boundary itself luminous.
+          let reactionFront = b[index] * max(0, 1 - b[index])
+          output[index] = min(1, reactionFront * (2.2 + 0.8 * displacedNutrient))
         }
       case 2:
         for y in 0 ..< height {
           let ny = Float(y) / Float(max(1, height - 1))
-          let phase = ny * Float.pi * 10 + Float(elapsedSeconds * 0.55)
+          let phase = ny * Float.pi * 10 + Float(projectionElapsedSeconds * 0.55)
           let offset = 0.18 * sin(phase)
           for x in 0 ..< width {
             let nx = Float(x) / Float(max(1, width - 1))
@@ -185,7 +218,7 @@ public final class CellKernel: SurfaceSimulationKernel {
           let ny = Float(y) / Float(max(1, height - 1))
           for x in 0 ..< width {
             let nx = Float(x) / Float(max(1, width - 1))
-            let fold = abs(sin(nx * 11 + ny * 7 + Float(elapsedSeconds * 0.18)))
+            let fold = abs(sin(nx * 11 + ny * 7 + Float(projectionElapsedSeconds * 0.18)))
             let pocket = max(0, 1 - abs(fold - 0.62) * 5)
             let local = b[y * width + x]
             output[y * width + x] = min(1, local * 0.42 + pocket * 0.58)

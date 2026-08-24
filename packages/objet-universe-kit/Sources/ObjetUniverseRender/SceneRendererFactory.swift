@@ -14,9 +14,11 @@ public enum SceneRendererFactory {
     layer: CAMetalLayer,
     waveBreathSeconds: Double
   ) -> (any UniverseRenderer)? {
-    switch SceneRendererSelection(scene: scene) {
-    case .field:
+    switch scene {
+    case .wave, .atoms, .molecules:
       WaveMaterialRenderer(layer: layer, breathSeconds: waveBreathSeconds)
+    case .cell:
+      CellMaterialRenderer(layer: layer)
     case .solar:
       SolarRenderer(layer: layer)
     }

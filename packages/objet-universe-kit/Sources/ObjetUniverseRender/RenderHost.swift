@@ -11,12 +11,14 @@ public final class RenderHost {
 
   private var renderers: [RendererKind: UniverseRenderer] = [:]
   private var running = false
+  private var reducedMotion = false
 
   public init() {}
 
   public func install(_ renderer: UniverseRenderer) {
     renderers[renderer.kind]?.retire()
     renderers[renderer.kind] = renderer
+    (renderer as? ReducedMotionRenderer)?.setReducedMotion(reducedMotion)
     renderer.prepare()
     if running { renderer.resume() }
   }
@@ -62,6 +64,16 @@ public final class RenderHost {
         velocity: velocity,
         phase: phase
       )
+    }
+  }
+
+  /// Preserve the kernel's clock while asking motion-aware materials to hold
+  /// decorative oscillation at a stable visual detent.
+  public func setReducedMotion(_ enabled: Bool) {
+    guard reducedMotion != enabled else { return }
+    reducedMotion = enabled
+    for renderer in renderers.values {
+      (renderer as? ReducedMotionRenderer)?.setReducedMotion(enabled)
     }
   }
 

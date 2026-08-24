@@ -44,6 +44,16 @@ public final class ObjetUniverseView: ExpoView {
   private nonisolated(unsafe) var lastAccessibilityTick = -60
 
   private var metalLayer: CAMetalLayer? { layer as? CAMetalLayer }
+  private var reducedMotionEnabled = false
+  /// A transient Metal allocation failure must not make the React route and
+  /// native authority diverge. A foreground return or explicit route request
+  /// gets a fresh, bounded chance before committing this scene handoff.
+  private var pendingScene: SceneID?
+  private let pendingSceneRetries = SceneConstructionRetryPolicy()
+  /// RenderHost owns the renderer instances, while this view owns the route
+  /// intent. Keeping the installed scene here lets a Metal allocation failure
+  /// on the initial route retry without pretending the current renderer exists.
+  private var rendererScene: SceneID?
 
   public required init(appContext: AppContext? = nil) {
     let box = SurfaceKernelBox()
@@ -107,6 +117,7 @@ public final class ObjetUniverseView: ExpoView {
     guard size.width >= 1, size.height >= 1 else { return }
     metalLayer.contentsScale = scale
     if metalLayer.drawableSize != size { metalLayer.drawableSize = size }
+    retryPendingSceneIfDue()
   }
 
   private func suspendUniverse() {
@@ -119,6 +130,8 @@ public final class ObjetUniverseView: ExpoView {
     guard window != nil else { return }
     host.resume(at: CACurrentMediaTime())
     renderHost.resume()
+    pendingSceneRetries.reset(at: CACurrentMediaTime())
+    retryPendingSceneIfNeeded()
     startDisplayLinkIfNeeded()
     displayLink?.isPaused = false
   }
@@ -146,6 +159,14 @@ public final class ObjetUniverseView: ExpoView {
   /// now understands the same projection control.
   func setWaveRepresentation(_ rawValue: Int) {
     setRepresentation(rawValue)
+  }
+
+  /// The active kernel remains authoritative and keeps advancing. Only a
+  /// material's decorative presentation may hold at an accessible detent.
+  func setReducedMotion(_ value: Bool) {
+    reducedMotionEnabled = value
+    (surfaceKernels.kernel as? any ReducedMotionSimulationKernel)?.setReducedMotion(value)
+    renderHost.setReducedMotion(value)
   }
 
   /// Resolve a touch to one authoritative solar identity. The input layer can
@@ -183,18 +204,74 @@ public final class ObjetUniverseView: ExpoView {
 
   public func setScene(_ rawScene: String) {
     guard let destination = SceneID(rawValue: rawScene) else { return }
+    // Expo may send the current scene again on mount. Do not let a discarded
+    // renderer reconfigure the shared CAMetalLayer under the live material.
+    if destination == host.activeScene, rendererScene == destination {
+      clearPendingScene()
+      return
+    }
+    queuePendingScene(destination)
+    retryPendingSceneIfNeeded()
+  }
+
+  private func retryPendingSceneIfNeeded() {
+    guard let destination = pendingScene else { return }
+    if destination == host.activeScene {
+      guard rendererScene != destination else {
+        clearPendingScene()
+        return
+      }
+      guard pendingSceneRetries.beginAttempt(at: CACurrentMediaTime()) else { return }
+      guard let renderer = makeMaterialRenderer(for: destination) else { return }
+      renderHost.install(renderer)
+      rendererScene = destination
+      clearPendingScene()
+      return
+    }
+    // Material setup is allowed to decline when Metal cannot provide its
+    // bounded resources. Build before committing the scientific handoff so a
+    // Cell state can never be rendered through the scene just left behind.
+    guard pendingSceneRetries.beginAttempt(at: CACurrentMediaTime()) else { return }
+    guard let renderer = makeMaterialRenderer(for: destination) else { return }
     do {
       if try host.handoff(to: destination) {
+        // The host factory has just made a fresh kernel. Replaying the
+        // preference here keeps a newly entered Cell lens at the same visual
+        // detent as the scene the visitor just left.
+        (surfaceKernels.kernel as? any ReducedMotionSimulationKernel)?.setReducedMotion(reducedMotionEnabled)
         accessibilityLabel = accessibilityDescription(for: destination)
-        installMaterialRenderer(for: destination)
+        renderHost.install(renderer)
+        rendererScene = destination
+        clearPendingScene()
+      } else {
+        renderer.retire()
+        if host.activeScene == destination { clearPendingScene() }
       }
     } catch {
+      renderer.retire()
       // The last stable scene remains visible. U4 persists this boundary; U3
       // intentionally keeps the failure local and non-destructive.
     }
   }
 
+  private func retryPendingSceneIfDue() {
+    guard pendingScene != nil else { return }
+    retryPendingSceneIfNeeded()
+  }
+
+  private func queuePendingScene(_ destination: SceneID) {
+    pendingScene = destination
+    pendingSceneRetries.reset(at: CACurrentMediaTime())
+  }
+
+  private func clearPendingScene() {
+    pendingScene = nil
+  }
+
   nonisolated fileprivate func advanceFrame(at timestamp: CFTimeInterval) {
+    MainActor.assumeIsolated {
+      self.retryPendingSceneIfDue()
+    }
     let frame = host.advance(to: timestamp)
     publishFrameOutcomes()
     submitActiveSurface()
@@ -250,13 +327,21 @@ public final class ObjetUniverseView: ExpoView {
   /// stays on its ground colour rather than installing a stand-in that counts
   /// frames and draws nothing.
   private func installMaterialRenderer(for scene: SceneID) {
-    guard let metalLayer else { return }
-    guard let renderer = SceneRendererFactory.make(
+    guard let renderer = makeMaterialRenderer(for: scene) else {
+      queuePendingScene(scene)
+      return
+    }
+    renderHost.install(renderer)
+    rendererScene = scene
+  }
+
+  private func makeMaterialRenderer(for scene: SceneID) -> (any UniverseRenderer)? {
+    guard let metalLayer else { return nil }
+    return SceneRendererFactory.make(
       for: scene,
       layer: metalLayer,
       waveBreathSeconds: WaveField.breathSeconds
-    ) else { return }
-    renderHost.install(renderer)
+    )
   }
 
   /// The input surface has already inverted the viewport's aspect cover.
