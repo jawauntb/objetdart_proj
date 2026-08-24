@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import ObjetUniverseCore
 @testable import ObjetUniverseRender
@@ -27,12 +28,27 @@ final class SolarSubmissionTests: XCTestCase {
     XCTAssertEqual(renderer.submittedSolarCount, 1)
   }
 
-  func testSceneSelectionKeepsSolarOffTheScalarFieldRenderer() {
+  func testPublicSceneSelectionKeepsScalarLanesSourceCompatible() {
     XCTAssertEqual(SceneRendererSelection(scene: .wave), .field)
     XCTAssertEqual(SceneRendererSelection(scene: .cell), .field)
     XCTAssertEqual(SceneRendererSelection(scene: .molecules), .field)
     XCTAssertEqual(SceneRendererSelection(scene: .atoms), .field)
     XCTAssertEqual(SceneRendererSelection(scene: .solar), .solar)
+  }
+
+  func testSceneConstructionRetriesAreCadencedBoundedAndRearmedOnlyAtABoundary() {
+    let retries = SceneConstructionRetryPolicy()
+    retries.reset(at: 10)
+
+    XCTAssertTrue(retries.beginAttempt(at: 10))
+    XCTAssertFalse(retries.beginAttempt(at: 10.5), "layout churn must not bypass the retry cadence")
+    XCTAssertTrue(retries.beginAttempt(at: 11))
+    XCTAssertTrue(retries.beginAttempt(at: 12))
+    XCTAssertFalse(retries.beginAttempt(at: 13), "a persistent allocation failure must reach a terminal retry state")
+    XCTAssertEqual(retries.attempts, SceneConstructionRetryPolicy.maximumAttempts)
+
+    retries.reset(at: 20)
+    XCTAssertTrue(retries.beginAttempt(at: 20), "a foreground return or new route request gets one fresh bounded window")
   }
 
   func testReplacingSolarRendererRetiresOldOwnerBeforeNextSubmission() {
@@ -139,21 +155,27 @@ final class SolarSubmissionTests: XCTestCase {
   }
 
   #if canImport(Metal) && canImport(QuartzCore)
-  func testSolarFrameLeaseDropsInsteadOfBlockingWhenGPUIsBehind() {
-    let pool = SolarFrameLeasePool(capacity: 3)
-    XCTAssertTrue(pool.tryAcquire())
-    XCTAssertTrue(pool.tryAcquire())
-    XCTAssertTrue(pool.tryAcquire())
-    XCTAssertFalse(pool.tryAcquire(), "the display link must drop rather than wait for the GPU")
-    pool.release()
-    XCTAssertTrue(pool.tryAcquire())
-    pool.release()
-    pool.release()
-    pool.release()
+  func testMetalFrameSlotsDropInsteadOfBlockingAndReturnTheirOwnResources() throws {
+    let pool = MetalFrameSlotPool(capacity: 3)
+    let first = try XCTUnwrap(pool.tryAcquire())
+    let second = try XCTUnwrap(pool.tryAcquire())
+    let third = try XCTUnwrap(pool.tryAcquire())
+    XCTAssertNil(pool.tryAcquire(), "the display link must drop rather than wait for the GPU")
+
+    pool.release(second)
+    let returned = try XCTUnwrap(pool.tryAcquire())
+    XCTAssertEqual(
+      returned,
+      second,
+      "a completed frame must return its own resources, not an arbitrary in-flight slot"
+    )
+    pool.release(returned)
+    pool.release(first)
+    pool.release(third)
   }
 
-  func testSolarPipelinesPublishAsOneAtomicReadyBundle() {
-    let publication = SolarPipelinePublication<(Int, Int, Int, Int)>()
+  func testMetalPipelinesPublishAsOneAtomicReadyBundle() {
+    let publication = MetalPipelinePublication<(Int, Int, Int, Int)>()
     XCTAssertTrue(publication.beginPreparation())
     XCTAssertFalse(publication.beginPreparation(), "only one background compiler may own preparation")
     XCTAssertNil(publication.snapshot(), "rendering must not observe a partial pipeline set")
@@ -165,8 +187,54 @@ final class SolarSubmissionTests: XCTestCase {
     XCTAssertFalse(publication.beginPreparation(), "a ready bundle must be reused")
   }
 
-  func testRetiredSolarRendererRejectsLatePipelinePublication() {
-    let publication = SolarPipelinePublication<Int>()
+  func testMetalPipelinePreparationCanRetryAfterFailure() {
+    let publication = MetalPipelinePublication<Int>()
+    XCTAssertTrue(publication.beginPreparation())
+    XCTAssertTrue(publication.isPreparing())
+    publication.failPreparation()
+
+    XCTAssertNil(publication.snapshot(), "a failed compiler must publish no partial pipeline")
+    XCTAssertFalse(publication.isPreparing())
+    XCTAssertTrue(publication.beginPreparation(), "a failed compiler must release preparation for a later retry")
+    publication.publish(42)
+    XCTAssertEqual(publication.snapshot(), 42)
+  }
+
+  func testMetalPipelineRetryPolicyKeepsTheTransitionBriefThenShowsItsOwnGround() {
+    let policy = MetalPipelineRetryPolicy()
+    XCTAssertEqual(policy.nextAction(isPreparing: true), .retainCurrentDrawable)
+
+    for attempt in 1 ... MetalPipelineRetryPolicy.maximumPreparationAttempts {
+      policy.recordPreparationAttempt()
+      if attempt == MetalPipelineRetryPolicy.maximumPreparationAttempts {
+        XCTAssertEqual(policy.nextAction(isPreparing: false), .presentFallback)
+        XCTAssertEqual(policy.nextAction(isPreparing: false), .retainCurrentDrawable)
+        continue
+      }
+      XCTAssertEqual(policy.nextAction(isPreparing: false), .retainCurrentDrawable)
+      XCTAssertEqual(policy.nextAction(isPreparing: false), .retainCurrentDrawable)
+      XCTAssertEqual(policy.nextAction(isPreparing: false), .retryPreparation)
+    }
+    for _ in 0 ..< (MetalPipelineRetryPolicy.fallbackRearmFrames - 1) {
+      XCTAssertEqual(policy.nextAction(isPreparing: false), .retainCurrentDrawable)
+    }
+    XCTAssertEqual(policy.nextAction(isPreparing: false), .retryPreparation)
+
+    for _ in 0 ..< MetalPipelineRetryPolicy.maximumPreparationAttempts {
+      policy.recordPreparationAttempt()
+    }
+    XCTAssertEqual(policy.nextAction(isPreparing: false), .presentFallback)
+    XCTAssertEqual(policy.nextAction(isPreparing: false), .retainCurrentDrawable)
+
+    policy.resetAfterSuspend()
+    XCTAssertEqual(policy.nextAction(isPreparing: false), .retryPreparation)
+    policy.recordPreparationAttempt()
+    policy.recordPipelineReady()
+    XCTAssertEqual(policy.preparationAttempts, 0)
+  }
+
+  func testRetiredMetalRendererRejectsLatePipelinePublication() {
+    let publication = MetalPipelinePublication<Int>()
     XCTAssertTrue(publication.beginPreparation())
     publication.retire()
     publication.publish(42)
@@ -190,6 +258,22 @@ final class SolarSubmissionTests: XCTestCase {
     XCTAssertEqual(renderer.solarCameraIntentCount, 1)
   }
 
+  func testRenderHostCarriesReducedMotionToExistingAndReplacementMaterials() {
+    let host = RenderHost()
+    host.setReducedMotion(true)
+
+    let first = RendererProbe(kind: .metal)
+    host.install(first)
+    XCTAssertEqual(first.reducedMotion, true)
+
+    host.setReducedMotion(false)
+    XCTAssertEqual(first.reducedMotion, false)
+
+    let replacement = RendererProbe(kind: .metal)
+    host.install(replacement)
+    XCTAssertEqual(replacement.reducedMotion, false)
+  }
+
   #if canImport(Metal) && canImport(QuartzCore)
   func testFactoryBuildsTheMaterialSpecificRendererWhenMetalExists() throws {
     guard MTLCreateSystemDefaultDevice() != nil else {
@@ -201,7 +285,107 @@ final class SolarSubmissionTests: XCTestCase {
     }
     let layer = CAMetalLayer()
     XCTAssertTrue(SceneRendererFactory.make(for: .wave, layer: layer, waveBreathSeconds: 7) is WaveMaterialRenderer)
+    XCTAssertTrue(SceneRendererFactory.make(for: .cell, layer: layer, waveBreathSeconds: 7) is CellMaterialRenderer)
     XCTAssertTrue(SceneRendererFactory.make(for: .solar, layer: layer, waveBreathSeconds: 7) is SolarRenderer)
+  }
+
+  func testCellRendererAcceptsTheAuthoritativeCellLatticeAndRejectsDrift() {
+    let kernel = CellKernel(seed: 0xC311_C011)
+    XCTAssertTrue(CellMaterialRenderer.acceptsFieldDimensions(width: kernel.width, height: kernel.height))
+    XCTAssertFalse(CellMaterialRenderer.acceptsFieldDimensions(width: kernel.width - 1, height: kernel.height))
+    XCTAssertFalse(CellMaterialRenderer.acceptsFieldDimensions(width: kernel.width, height: kernel.height + 1))
+  }
+
+  func testMetalPipelineCacheLetsAnIndependentBuildProceedDuringAnotherKey() throws {
+    guard let device = MTLCreateSystemDefaultDevice() else {
+      throw XCTSkip("this local host exposes no Metal device")
+    }
+    let resources = try MetalCacheTestResources(device: device, source: Self.cacheShaderSource)
+    let cache = MetalPipelineCache.shared
+    let slowNamespace = "cache-slow-\(UUID().uuidString)"
+    let fastNamespace = "cache-fast-\(UUID().uuidString)"
+    let slowStarted = DispatchSemaphore(value: 0)
+    let releaseSlow = DispatchSemaphore(value: 0)
+    let fastStarted = DispatchSemaphore(value: 0)
+    let slowFinished = expectation(description: "slow pipeline build finishes")
+    let fastFinished = expectation(description: "independent pipeline build finishes")
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        _ = try cache.pipeline(
+          namespace: slowNamespace,
+          device: resources.device,
+          pixelFormat: .bgra8Unorm
+        ) {
+          slowStarted.signal()
+          releaseSlow.wait()
+          return try resources.makePipeline()
+        }
+      } catch {
+        XCTFail("slow cache build failed: \(error)")
+      }
+      slowFinished.fulfill()
+    }
+
+    XCTAssertEqual(slowStarted.wait(timeout: .now() + 1), .success)
+    defer {
+      releaseSlow.signal()
+      wait(for: [slowFinished, fastFinished], timeout: 5)
+    }
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        _ = try cache.pipeline(
+          namespace: fastNamespace,
+          device: resources.device,
+          pixelFormat: .bgra8Unorm
+        ) {
+          fastStarted.signal()
+          return try resources.makePipeline()
+        }
+      } catch {
+        XCTFail("independent cache build failed: \(error)")
+      }
+      fastFinished.fulfill()
+    }
+
+    XCTAssertEqual(
+      fastStarted.wait(timeout: .now() + 1),
+      .success,
+      "a slow Cell-like build must not hold the cache lock across an unrelated pipeline build"
+    )
+  }
+
+  private static let cacheShaderSource = """
+  #include <metal_stdlib>
+  using namespace metal;
+
+  vertex float4 objet_cache_vertex(uint vertexID [[vertex_id]]) {
+    float2 corners[3] = { float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0) };
+    return float4(corners[vertexID], 0.0, 1.0);
+  }
+
+  fragment half4 objet_cache_fragment() {
+    return half4(0.0);
+  }
+  """
+
+  private final class MetalCacheTestResources: @unchecked Sendable {
+    let device: MTLDevice
+    private let library: MTLLibrary
+
+    init(device: MTLDevice, source: String) throws {
+      self.device = device
+      library = try device.makeLibrary(source: source, options: nil)
+    }
+
+    func makePipeline() throws -> MTLRenderPipelineState {
+      let descriptor = MTLRenderPipelineDescriptor()
+      descriptor.vertexFunction = library.makeFunction(name: "objet_cache_vertex")
+      descriptor.fragmentFunction = library.makeFunction(name: "objet_cache_fragment")
+      descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
+      return try device.makeRenderPipelineState(descriptor: descriptor)
+    }
   }
   #endif
 }

@@ -17,6 +17,12 @@ public protocol UniverseRenderer: AnyObject {
   func retire()
 }
 
+/// Presentation-only motion preference. The authoritative kernel keeps
+/// advancing; a material may hold decorative movement at a readable detent.
+public protocol ReducedMotionRenderer: UniverseRenderer {
+  func setReducedMotion(_ enabled: Bool)
+}
+
 /// One authoritative surface, handed to the renderers without a copy.
 ///
 /// `values` points at the kernel's live field and is valid only for the
@@ -96,9 +102,9 @@ public protocol SolarCameraRenderer: UniverseRenderer {
   func projectSolarMaterialVector(_ vector: SemanticVector) -> SemanticVector
 }
 
-/// Chooses the visual instrument from the scene's material, not from a route
-/// name or a React remount. Solar is entity/path material; every other current
-/// proof scene remains a scalar field until it earns a dedicated renderer.
+/// A stable public grouping for callers that need to distinguish the scalar
+/// lanes from the solar entity/path renderer. The factory may still select a
+/// dedicated implementation within the scalar group.
 public enum SceneRendererSelection: Equatable, Sendable {
   case field
   case solar

@@ -64,40 +64,6 @@ public enum WaveShaderSource {
 
     float amplitude = surface.sample(surfaceSampler, fieldUV).r * uniforms.exposure;
 
-    // Cell and solar scenes share the field transport with waves, but their
-    // visual grammar is different. These branches stay on the GPU so the
-    // simulation can remain a compact scalar projection without adding a
-    // second entity renderer or per-frame geometry allocation.
-    if (uniforms.materialKind > 0.5 && uniforms.materialKind < 1.5) {
-      if (uniforms.representation > 1.5 && uniforms.representation < 2.5) {
-        float phase = in.uv.y * 31.0 + uniforms.elapsed * 0.55;
-        float strandA = 1.0 - smoothstep(0.0, 0.045, abs(in.uv.x - (0.5 + 0.18 * sin(phase))));
-        float strandB = 1.0 - smoothstep(0.0, 0.045, abs(in.uv.x - (0.5 - 0.18 * sin(phase))));
-        float rung = (1.0 - smoothstep(0.0, 0.035, abs(in.uv.x - 0.5))) * (0.35 + 0.65 * abs(sin(phase)));
-        float3 genome = mix(kNightDeep, float3(0.10, 0.07, 0.25), 0.45 + 0.35 * amplitude);
-        genome += float3(0.36, 0.18, 0.78) * max(strandA, strandB);
-        genome += kSeaGlimmer * rung * 0.35;
-        return float4(genome, 1.0);
-      }
-      if (uniforms.representation > 2.5) {
-        float fold = abs(sin(in.uv.x * 12.0 + in.uv.y * 8.0 + uniforms.elapsed * 0.18));
-        float pocket = 1.0 - smoothstep(0.0, 0.2, abs(fold - 0.62));
-        float3 protein = mix(float3(0.025, 0.045, 0.06), float3(0.64, 0.29, 0.12), amplitude * 0.72);
-        protein += float3(0.86, 0.63, 0.28) * pocket * 0.45;
-        return float4(protein, 1.0);
-      }
-      float colony = smoothstep(0.04, 0.55, amplitude);
-      float edge = smoothstep(0.04, 0.0, abs(amplitude - 0.36));
-      float breathing = 0.5 + 0.5 * sin(uniforms.elapsed * 1.7 + in.uv.x * 9.0 + in.uv.y * 7.0);
-      float3 cellDeep = float3(0.015, 0.055, 0.060);
-      float3 cellTeal = float3(0.10, 0.53, 0.43);
-      float3 cellLime = float3(0.62, 0.84, 0.39);
-      float3 cellColour = mix(cellDeep, cellTeal, colony);
-      cellColour = mix(cellColour, cellLime, edge * (0.72 + 0.2 * breathing));
-      cellColour += kSeaGlimmer * smoothstep(0.62, 1.0, amplitude) * 0.18;
-      return float4(cellColour, 1.0);
-    }
-
     if (uniforms.materialKind > 1.5) {
       if (uniforms.materialKind > 2.5 && uniforms.materialKind < 3.5) {
         if (uniforms.representation < 0.5) {

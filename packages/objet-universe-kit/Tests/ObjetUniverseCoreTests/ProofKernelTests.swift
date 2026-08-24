@@ -26,6 +26,30 @@ final class ProofKernelTests: XCTestCase {
     XCTAssertNotEqual(before, surface(first), "growth must alter the authoritative colony")
   }
 
+  func testCellReactionFieldRetainsBoundedTransitionRegions() {
+    let kernel = CellKernel(seed: 0xC311_C011)
+    _ = kernel.advance(ticks: 900)
+    let settled = surface(kernel)
+    let transitionCount = settled.filter { $0 > 0.03 && $0 < 0.97 }.count
+    let mean = settled.reduce(0, +) / Float(settled.count)
+    let variance = settled.reduce(Float.zero) { sum, value in
+      let delta = value - mean
+      return sum + delta * delta
+    } / Float(settled.count)
+
+    XCTAssertTrue(settled.allSatisfy { $0.isFinite && $0 >= 0 && $0 <= 1 })
+    XCTAssertGreaterThan(
+      transitionCount,
+      settled.count / 100,
+      "a reaction–diffusion colony needs transition regions; a binary checkerboard cannot form membrane contours"
+    )
+    XCTAssertGreaterThan(
+      variance,
+      0.0001,
+      "a uniform mid-value field has transitions but cannot produce a legible colony"
+    )
+  }
+
   func testSolarIsASeededOrbitalSurface() {
     let first = SolarKernel(seed: 42)
     let second = SolarKernel(seed: 42)
@@ -52,6 +76,74 @@ final class ProofKernelTests: XCTestCase {
       for second in (first + 1) ..< 4 {
         XCTAssertNotEqual(projections[first], projections[second], "cell lens \(first) and \(second) must remain distinct")
       }
+    }
+  }
+
+  func testCellReducedMotionFreezesTimeDerivedLensPhasesWithoutStoppingTheReaction() {
+    for lens in [2, 3] {
+      let ordinary = CellKernel(seed: 0xC311_C011)
+      let reduced = CellKernel(seed: 0xC311_C011)
+      ordinary.setRepresentation(lens)
+      reduced.setRepresentation(lens)
+      reduced.setReducedMotion(true)
+
+      XCTAssertEqual(surface(ordinary), surface(reduced))
+      _ = ordinary.advance(ticks: 180)
+      _ = reduced.advance(ticks: 180)
+
+      XCTAssertNotEqual(
+        surface(ordinary),
+        surface(reduced),
+        "lens \(lens) must hold its decorative phase when reduced motion is on"
+      )
+
+      ordinary.setRepresentation(0)
+      reduced.setRepresentation(0)
+      XCTAssertEqual(
+        surface(ordinary),
+        surface(reduced),
+        "reduced motion must not pause or alter the authoritative reaction field"
+      )
+    }
+  }
+
+  func testCellReducedMotionCanEnterAndLeaveWithoutProjectionOrStateDrift() {
+    for lens in [2, 3] {
+      let ordinary = CellKernel(seed: 0xC311_C011)
+      let toggled = CellKernel(seed: 0xC311_C011)
+      ordinary.setRepresentation(lens)
+      toggled.setRepresentation(lens)
+      _ = ordinary.advance(ticks: 180)
+      _ = toggled.advance(ticks: 180)
+
+      let beforeDetent = surface(toggled)
+      toggled.setReducedMotion(true)
+      XCTAssertEqual(
+        surface(toggled),
+        beforeDetent,
+        "lens \(lens) must not snap when reduced motion begins at a live phase"
+      )
+
+      _ = ordinary.advance(ticks: 180)
+      _ = toggled.advance(ticks: 180)
+      XCTAssertNotEqual(surface(ordinary), surface(toggled))
+
+      let heldProjection = surface(toggled)
+      toggled.setReducedMotion(false)
+      XCTAssertEqual(
+        surface(toggled),
+        heldProjection,
+        "lens \(lens) must resume from its held phase without a one-frame projection jump"
+      )
+      XCTAssertNotEqual(
+        surface(toggled),
+        surface(ordinary),
+        "lens \(lens) must not release all suppressed decorative time at once"
+      )
+
+      ordinary.setRepresentation(0)
+      toggled.setRepresentation(0)
+      XCTAssertEqual(surface(toggled), surface(ordinary))
     }
   }
 

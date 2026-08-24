@@ -5,7 +5,7 @@ import ObjetUniverseCore
 /// The test double for the renderer lifecycle. It counts calls and draws
 /// nothing, which is exactly why no shipping surface may install it: a probe
 /// behind the persistent view is a blank screen.
-public final class RendererProbe: FieldSurfaceRenderer, SolarSystemRenderer, SolarCameraRenderer {
+public final class RendererProbe: FieldSurfaceRenderer, SolarSystemRenderer, SolarCameraRenderer, ReducedMotionRenderer {
   public let kind: RendererKind
   public private(set) var prepareCount = 0
   public private(set) var resumeCount = 0
@@ -19,6 +19,7 @@ public final class RendererProbe: FieldSurfaceRenderer, SolarSystemRenderer, Sol
   public private(set) var lastSolarBodyCount: Int?
   public private(set) var lastSolarTick: Int?
   public private(set) var solarCameraIntentCount = 0
+  public private(set) var reducedMotion: Bool?
   public private(set) var suspendCount = 0
   public private(set) var retireCount = 0
 
@@ -49,6 +50,7 @@ public final class RendererProbe: FieldSurfaceRenderer, SolarSystemRenderer, Sol
   }
   public func projectSolarMaterialPoint(_ point: SemanticOrigin) -> SemanticOrigin { point }
   public func projectSolarMaterialVector(_ vector: SemanticVector) -> SemanticVector { vector }
+  public func setReducedMotion(_ enabled: Bool) { reducedMotion = enabled }
 
   public func suspend() { suspendCount += 1 }
   public func retire() { retireCount += 1 }

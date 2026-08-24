@@ -291,6 +291,12 @@ public protocol SimulationKernel: AnyObject {
   func expresses(_ verb: SemanticVerb) -> Bool
 }
 
+/// A kernel may hold presentation-only motion without pausing its
+/// authoritative clock or changing replayable state.
+public protocol ReducedMotionSimulationKernel: SimulationKernel {
+  func setReducedMotion(_ enabled: Bool)
+}
+
 /// A simulation that can hand one scalar material field to the shared native
 /// renderer. The field is a projection of the kernel state; it is never the
 /// authority itself and it never crosses into React Native.
