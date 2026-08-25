@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import ObjetUniverseCore
 
@@ -254,5 +255,302 @@ final class H2RHFTests: XCTestCase {
     let decoded = try JSONDecoder().decode(H2RHFSnapshot.self, from: data)
     XCTAssertEqual(decoded, snapshot)
     XCTAssertEqual(decoded.traceLength, 3)
+  }
+
+  private struct FixtureTolerances: Codable, Equatable {
+    let densityMatrixMaxAbs: Double
+    let totalEnergyMaxAbs: Double
+    let electronCountMaxAbs: Double
+    let canonicalNumericTolerance: Double
+  }
+
+  private struct FixtureMetadata: Codable, Equatable {
+    let fixtureVersion: Int
+    let lane: String
+    let cassetteVersion: Int
+    let model: String
+    let modelVersion: String
+    let cassettePayloadSha256: String
+    let quantizationVersion: String
+    let traceVersion: Int
+    let tolerances: FixtureTolerances
+  }
+
+  private struct FixtureAction: Codable, Equatable {
+    let ordinal: Int
+    let logicalTick: Int
+    let kind: String
+    let separationAngstrom: Double?
+    let rawSeparationAngstrom: Double?
+    let targetId: String?
+    let contactEpoch: H2RHFContactEpoch?
+    let presentationDeltaMs: Double?
+  }
+
+  private struct FixtureInput: Codable {
+    let metadata: FixtureMetadata
+    let scenario: String
+    let actions: [FixtureAction]
+  }
+
+  private struct FixtureCheckpoint: Codable {
+    let targetId: String
+    let separationAngstrom: Double
+    let density: [Double]
+    let energy: Double
+    let electronCount: Double
+    let promotionGeneration: Int
+    let digest: String
+
+    init(_ value: H2RHFCheckpoint) {
+      targetId = value.targetId
+      separationAngstrom = value.separationAngstrom
+      density = value.density
+      energy = value.energy
+      electronCount = value.electronCount
+      promotionGeneration = value.promotionGeneration
+      digest = value.digest
+    }
+  }
+
+  private struct FixtureCandidate: Codable {
+    let targetId: String
+    let contactEpoch: H2RHFContactEpoch
+    let status: String
+    let rawSeparationAngstrom: Double
+    let requestSeparationAngstrom: Double
+    let density: [Double]
+    let energy: Double
+    let residual: Double?
+    let energyDelta: Double?
+    let electronCount: Double
+    let electronCountError: Double
+    let iteration: Int
+    let gateStreak: Int
+
+    private enum CodingKeys: String, CodingKey {
+      case targetId, contactEpoch, status, rawSeparationAngstrom, requestSeparationAngstrom, density, energy, residual, energyDelta, electronCount, electronCountError, iteration, gateStreak
+    }
+
+    init(_ value: H2RHFCandidateSnapshot) {
+      targetId = value.targetId
+      contactEpoch = value.contactEpoch
+      status = value.status
+      rawSeparationAngstrom = value.rawSeparationAngstrom
+      requestSeparationAngstrom = value.requestSeparationAngstrom
+      density = value.density
+      energy = value.energy
+      residual = value.residual
+      energyDelta = value.energyDelta
+      electronCount = value.electronCount
+      electronCountError = value.electronCountError
+      iteration = value.iteration
+      gateStreak = value.gateStreak
+    }
+
+    func encode(to encoder: Encoder) throws {
+      var container = encoder.container(keyedBy: CodingKeys.self)
+      try container.encode(targetId, forKey: .targetId)
+      try container.encode(contactEpoch, forKey: .contactEpoch)
+      try container.encode(status, forKey: .status)
+      try container.encode(rawSeparationAngstrom, forKey: .rawSeparationAngstrom)
+      try container.encode(requestSeparationAngstrom, forKey: .requestSeparationAngstrom)
+      try container.encode(density, forKey: .density)
+      try container.encode(energy, forKey: .energy)
+      try container.encode(residual, forKey: .residual)
+      try container.encode(energyDelta, forKey: .energyDelta)
+      try container.encode(electronCount, forKey: .electronCount)
+      try container.encode(electronCountError, forKey: .electronCountError)
+      try container.encode(iteration, forKey: .iteration)
+      try container.encode(gateStreak, forKey: .gateStreak)
+    }
+  }
+
+  private struct FixtureTraceEvent: Codable {
+    let kind: String
+    let tick: Int
+    let contactEpoch: H2RHFContactEpoch?
+    let targetId: String?
+    let disposition: String
+    let iteration: Int
+    let gateStreak: Int
+    let separationAngstrom: Double?
+    let residual: Double?
+    let energyDelta: Double?
+    let electronCountError: Double?
+    let promotionGeneration: Int
+    let checkpointDigest: String?
+    let gatePass: Bool
+
+    private enum CodingKeys: String, CodingKey {
+      case kind, tick, contactEpoch, targetId, disposition, iteration, gateStreak, separationAngstrom, residual, energyDelta, electronCountError, promotionGeneration, checkpointDigest, gatePass
+    }
+
+    init(_ value: H2RHFTraceEvent) {
+      kind = value.kind.rawValue
+      tick = value.tick
+      contactEpoch = value.contactEpoch
+      targetId = value.targetId
+      disposition = value.disposition.rawValue
+      iteration = value.iteration
+      gateStreak = value.gateStreak
+      separationAngstrom = value.separationAngstrom
+      residual = value.residual
+      energyDelta = value.energyDelta
+      electronCountError = value.electronCountError
+      promotionGeneration = value.promotionGeneration
+      checkpointDigest = value.checkpointDigest
+      gatePass = value.gatePass
+    }
+
+    func encode(to encoder: Encoder) throws {
+      var container = encoder.container(keyedBy: CodingKeys.self)
+      try container.encode(kind, forKey: .kind)
+      try container.encode(tick, forKey: .tick)
+      try container.encode(contactEpoch, forKey: .contactEpoch)
+      try container.encode(targetId, forKey: .targetId)
+      try container.encode(disposition, forKey: .disposition)
+      try container.encode(iteration, forKey: .iteration)
+      try container.encode(gateStreak, forKey: .gateStreak)
+      try container.encode(separationAngstrom, forKey: .separationAngstrom)
+      try container.encode(residual, forKey: .residual)
+      try container.encode(energyDelta, forKey: .energyDelta)
+      try container.encode(electronCountError, forKey: .electronCountError)
+      try container.encode(promotionGeneration, forKey: .promotionGeneration)
+      try container.encode(checkpointDigest, forKey: .checkpointDigest)
+      try container.encode(gatePass, forKey: .gatePass)
+    }
+  }
+
+  private struct FixtureSnapshot: Codable {
+    let tick: Int
+    let contactEpoch: H2RHFContactEpoch?
+    let targetId: String?
+    let contactActive: Bool
+    let outsideEnvelopeLatched: Bool
+    let disposition: String
+    let movingCandidate: FixtureCandidate?
+    let frozenCandidate: FixtureCandidate?
+    let candidate: FixtureCandidate?
+    let lastGood: FixtureCheckpoint?
+    let gateStreak: Int
+    let perRequestIterations: Int
+    let promotionGeneration: Int
+    let traceLength: Int
+    let milestones: [FixtureTraceEvent]
+
+    private enum CodingKeys: String, CodingKey {
+      case tick, contactEpoch, targetId, contactActive, outsideEnvelopeLatched, disposition, movingCandidate, frozenCandidate, candidate, lastGood, gateStreak, perRequestIterations, promotionGeneration, traceLength, milestones
+    }
+
+    init(_ value: H2RHFSnapshot) {
+      tick = value.tick
+      contactEpoch = value.contactEpoch
+      targetId = value.targetId
+      contactActive = value.contactActive
+      outsideEnvelopeLatched = value.outsideEnvelopeLatched
+      disposition = value.disposition.rawValue
+      movingCandidate = value.movingCandidate.map(FixtureCandidate.init)
+      frozenCandidate = value.frozenCandidate.map(FixtureCandidate.init)
+      candidate = value.candidate.map(FixtureCandidate.init)
+      lastGood = value.lastGood.map(FixtureCheckpoint.init)
+      gateStreak = value.gateStreak
+      perRequestIterations = value.perRequestIterations
+      promotionGeneration = value.promotionGeneration
+      traceLength = value.traceLength
+      milestones = value.milestones.map(FixtureTraceEvent.init)
+    }
+
+    func encode(to encoder: Encoder) throws {
+      var container = encoder.container(keyedBy: CodingKeys.self)
+      try container.encode(tick, forKey: .tick)
+      try container.encode(contactEpoch, forKey: .contactEpoch)
+      try container.encode(targetId, forKey: .targetId)
+      try container.encode(contactActive, forKey: .contactActive)
+      try container.encode(outsideEnvelopeLatched, forKey: .outsideEnvelopeLatched)
+      try container.encode(disposition, forKey: .disposition)
+      try container.encode(movingCandidate, forKey: .movingCandidate)
+      try container.encode(frozenCandidate, forKey: .frozenCandidate)
+      try container.encode(candidate, forKey: .candidate)
+      try container.encode(lastGood, forKey: .lastGood)
+      try container.encode(gateStreak, forKey: .gateStreak)
+      try container.encode(perRequestIterations, forKey: .perRequestIterations)
+      try container.encode(promotionGeneration, forKey: .promotionGeneration)
+      try container.encode(traceLength, forKey: .traceLength)
+      try container.encode(milestones, forKey: .milestones)
+    }
+  }
+
+  private struct FixtureOutput: Codable {
+    let metadata: FixtureMetadata
+    let scenario: String
+    let actions: [FixtureAction]
+    let trace: [FixtureTraceEvent]
+    let milestones: [FixtureTraceEvent]
+    let snapshot: FixtureSnapshot
+    let adapter: H2RHFAdapterSnapshot
+  }
+
+  func testFixtureReplayWritesOutput() throws {
+    let environment = ProcessInfo.processInfo.environment
+    guard let inputPath = environment["H2_RHF_FIXTURE_INPUT"], let outputPath = environment["H2_RHF_FIXTURE_OUTPUT"] else {
+      return
+    }
+
+    let input = try JSONDecoder().decode(FixtureInput.self, from: Data(contentsOf: URL(fileURLWithPath: inputPath)))
+    let trusted = H2RHFCassette.trusted
+    XCTAssertEqual(input.scenario, "canonical-converged")
+    XCTAssertEqual(input.actions.map(\.ordinal), Array(0 ..< input.actions.count))
+    XCTAssertEqual(input.actions.map(\.kind), ["queue-begin-contact", "queue-release", "advance"])
+    XCTAssertEqual(input.metadata.fixtureVersion, 1)
+    XCTAssertEqual(input.metadata.lane, "h2-rhf-cross-language-v1")
+    XCTAssertEqual(input.metadata.cassetteVersion, trusted.cassetteVersion)
+    XCTAssertEqual(input.metadata.model, trusted.model)
+    XCTAssertEqual(input.metadata.modelVersion, trusted.modelVersion)
+    XCTAssertEqual(input.metadata.cassettePayloadSha256, trusted.payloadSha256)
+    XCTAssertEqual(input.metadata.quantizationVersion, trusted.modelTuple.quantizationVersion)
+    XCTAssertEqual(input.metadata.traceVersion, trusted.modelTuple.traceVersion)
+    XCTAssertEqual(input.metadata.tolerances.densityMatrixMaxAbs, trusted.comparison.densityMatrixMaxAbs, accuracy: trusted.comparison.canonicalNumericTolerance)
+    XCTAssertEqual(input.metadata.tolerances.totalEnergyMaxAbs, trusted.comparison.totalEnergyMaxAbs, accuracy: trusted.comparison.canonicalNumericTolerance)
+    XCTAssertEqual(input.metadata.tolerances.electronCountMaxAbs, trusted.comparison.electronCountMaxAbs, accuracy: trusted.comparison.canonicalNumericTolerance)
+    XCTAssertEqual(input.metadata.tolerances.canonicalNumericTolerance, trusted.comparison.canonicalNumericTolerance, accuracy: trusted.comparison.canonicalNumericTolerance)
+
+    let authority = H2RHFAuthority()
+    let adapter = H2RHFAdapter(authority: authority, tickMs: 1000 / Double(trusted.solver.logicalHz))
+    for action in input.actions {
+      switch action.kind {
+      case "queue-begin-contact":
+        let separation = try XCTUnwrap(action.separationAngstrom)
+        _ = adapter.queue(.beginContact(H2RHFContactInput(
+          separationAngstrom: separation,
+          rawSeparationAngstrom: action.rawSeparationAngstrom,
+          targetId: action.targetId,
+          contactEpoch: action.contactEpoch
+        )))
+      case "queue-release":
+        _ = adapter.queue(.release(nil))
+      case "advance":
+        _ = try adapter.advance(try XCTUnwrap(action.presentationDeltaMs))
+        XCTAssertEqual(adapter.snapshot().logicalTicks, action.logicalTick)
+      default:
+        XCTFail("unknown H2 RHF fixture action \(action.kind)")
+      }
+    }
+
+    let output = FixtureOutput(
+      metadata: input.metadata,
+      scenario: input.scenario,
+      actions: input.actions,
+      trace: authority.trace().map(FixtureTraceEvent.init),
+      milestones: authority.milestones().map(FixtureTraceEvent.init),
+      snapshot: FixtureSnapshot(authority.snapshot()),
+      adapter: adapter.snapshot()
+    )
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+    let data = try encoder.encode(output)
+    let outputURL = URL(fileURLWithPath: outputPath)
+    try FileManager.default.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try data.write(to: outputURL, options: [.atomic])
   }
 }
