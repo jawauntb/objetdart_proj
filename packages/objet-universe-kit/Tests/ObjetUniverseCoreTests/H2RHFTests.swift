@@ -273,7 +273,16 @@ final class H2RHFTests: XCTestCase {
     let cassettePayloadSha256: String
     let quantizationVersion: String
     let traceVersion: Int
+    let logicalHz: Int
     let tolerances: FixtureTolerances
+  }
+
+  private struct FixtureScenarioOptions: Codable {
+    let initialSeparationAngstrom: Double?
+    let initialTargetId: String?
+    let maxTraceEntries: Int?
+    let forceMaxIterations: Bool?
+    let failNumericallyAtTick: Int?
   }
 
   private struct FixtureAction: Codable, Equatable {
@@ -285,12 +294,21 @@ final class H2RHFTests: XCTestCase {
     let targetId: String?
     let contactEpoch: H2RHFContactEpoch?
     let presentationDeltaMs: Double?
+    let frameCount: Int?
+    let requireNonZeroAccumulatorBefore: Bool?
+    let expectedAccumulatorAfterMs: Double?
+  }
+
+  private struct FixtureScenario: Codable {
+    let scenario: String
+    let frameCadenceHz: Int
+    let options: FixtureScenarioOptions?
+    let actions: [FixtureAction]
   }
 
   private struct FixtureInput: Codable {
     let metadata: FixtureMetadata
-    let scenario: String
-    let actions: [FixtureAction]
+    let scenarios: [FixtureScenario]
   }
 
   private struct FixtureCheckpoint: Codable {
@@ -481,9 +499,9 @@ final class H2RHFTests: XCTestCase {
     }
   }
 
-  private struct FixtureOutput: Codable {
-    let metadata: FixtureMetadata
+  private struct FixtureScenarioOutput: Codable {
     let scenario: String
+    let frameCadenceHz: Int
     let actions: [FixtureAction]
     let trace: [FixtureTraceEvent]
     let milestones: [FixtureTraceEvent]
@@ -491,17 +509,36 @@ final class H2RHFTests: XCTestCase {
     let adapter: H2RHFAdapterSnapshot
   }
 
-  func testFixtureReplayWritesOutput() throws {
-    let environment = ProcessInfo.processInfo.environment
-    guard let inputPath = environment["H2_RHF_FIXTURE_INPUT"], let outputPath = environment["H2_RHF_FIXTURE_OUTPUT"] else {
-      return
-    }
+  private struct FixtureOutput: Codable {
+    let metadata: FixtureMetadata
+    let scenarios: [FixtureScenarioOutput]
+  }
 
+  private static let fixturePresentationDeltaToleranceMs = 1e-12
+
+  private static func validatePresentationDelta(_ action: FixtureAction, scenario: FixtureScenario) throws -> Double {
+    guard scenario.frameCadenceHz > 0 else {
+      throw H2RHFError.invalidInput("\(scenario.scenario): frameCadenceHz must be positive")
+    }
+    let expected = 1000.0 / Double(scenario.frameCadenceHz)
+    guard expected.isFinite, expected > 0 else {
+      throw H2RHFError.invalidInput("\(scenario.scenario): frame cadence produced an invalid presentation delta")
+    }
+    guard let delta = action.presentationDeltaMs, delta.isFinite, delta > 0 else {
+      throw H2RHFError.invalidInput("\(scenario.scenario): advance action \(action.ordinal) presentationDeltaMs must be finite and positive")
+    }
+    guard abs(delta - expected) <= fixturePresentationDeltaToleranceMs else {
+      throw H2RHFError.invalidInput("\(scenario.scenario): advance action \(action.ordinal) presentationDeltaMs does not equal 1000/frameCadenceHz")
+    }
+    guard let frameCount = action.frameCount, frameCount > 0 else {
+      throw H2RHFError.invalidInput("\(scenario.scenario): advance action \(action.ordinal) frameCount must be positive")
+    }
+    return delta
+  }
+
+  fileprivate static func replayFixture(inputPath: String, outputPath: String) throws {
     let input = try JSONDecoder().decode(FixtureInput.self, from: Data(contentsOf: URL(fileURLWithPath: inputPath)))
     let trusted = H2RHFCassette.trusted
-    XCTAssertEqual(input.scenario, "canonical-converged")
-    XCTAssertEqual(input.actions.map(\.ordinal), Array(0 ..< input.actions.count))
-    XCTAssertEqual(input.actions.map(\.kind), ["queue-begin-contact", "queue-release", "advance"])
     XCTAssertEqual(input.metadata.fixtureVersion, 1)
     XCTAssertEqual(input.metadata.lane, "h2-rhf-cross-language-v1")
     XCTAssertEqual(input.metadata.cassetteVersion, trusted.cassetteVersion)
@@ -510,47 +547,98 @@ final class H2RHFTests: XCTestCase {
     XCTAssertEqual(input.metadata.cassettePayloadSha256, trusted.payloadSha256)
     XCTAssertEqual(input.metadata.quantizationVersion, trusted.modelTuple.quantizationVersion)
     XCTAssertEqual(input.metadata.traceVersion, trusted.modelTuple.traceVersion)
+    XCTAssertEqual(input.metadata.logicalHz, trusted.solver.logicalHz)
     XCTAssertEqual(input.metadata.tolerances.densityMatrixMaxAbs, trusted.comparison.densityMatrixMaxAbs, accuracy: trusted.comparison.canonicalNumericTolerance)
     XCTAssertEqual(input.metadata.tolerances.totalEnergyMaxAbs, trusted.comparison.totalEnergyMaxAbs, accuracy: trusted.comparison.canonicalNumericTolerance)
     XCTAssertEqual(input.metadata.tolerances.electronCountMaxAbs, trusted.comparison.electronCountMaxAbs, accuracy: trusted.comparison.canonicalNumericTolerance)
     XCTAssertEqual(input.metadata.tolerances.canonicalNumericTolerance, trusted.comparison.canonicalNumericTolerance, accuracy: trusted.comparison.canonicalNumericTolerance)
 
-    let authority = H2RHFAuthority()
-    let adapter = H2RHFAdapter(authority: authority, tickMs: 1000 / Double(trusted.solver.logicalHz))
-    for action in input.actions {
-      switch action.kind {
-      case "queue-begin-contact":
-        let separation = try XCTUnwrap(action.separationAngstrom)
-        _ = adapter.queue(.beginContact(H2RHFContactInput(
-          separationAngstrom: separation,
-          rawSeparationAngstrom: action.rawSeparationAngstrom,
-          targetId: action.targetId,
-          contactEpoch: action.contactEpoch
-        )))
-      case "queue-release":
-        _ = adapter.queue(.release(nil))
-      case "advance":
-        _ = try adapter.advance(try XCTUnwrap(action.presentationDeltaMs))
-        XCTAssertEqual(adapter.snapshot().logicalTicks, action.logicalTick)
-      default:
-        XCTFail("unknown H2 RHF fixture action \(action.kind)")
+    var scenarioOutputs: [FixtureScenarioOutput] = []
+    for scenario in input.scenarios {
+      let options = scenario.options ?? FixtureScenarioOptions(initialSeparationAngstrom: nil, initialTargetId: nil, maxTraceEntries: nil, forceMaxIterations: nil, failNumericallyAtTick: nil)
+      let authority = H2RHFAuthority(options: H2RHFAuthorityOptions(
+        initialSeparationAngstrom: options.initialSeparationAngstrom ?? 0.75,
+        initialTargetId: options.initialTargetId ?? "h2-1",
+        maxTraceEntries: options.maxTraceEntries ?? 128,
+        testSeam: H2RHFAuthorityTestSeam(forceMaxIterations: options.forceMaxIterations ?? false, failNumericallyAtTick: options.failNumericallyAtTick)
+      ))
+      let adapter = H2RHFAdapter(authority: authority, tickMs: 1000 / Double(trusted.solver.logicalHz))
+      for action in scenario.actions {
+        switch action.kind {
+        case "queue-begin-contact":
+          let separation = try XCTUnwrap(action.separationAngstrom)
+          _ = adapter.queue(.beginContact(H2RHFContactInput(
+            separationAngstrom: separation,
+            rawSeparationAngstrom: action.rawSeparationAngstrom,
+            targetId: action.targetId,
+            contactEpoch: action.contactEpoch
+          )))
+        case "queue-request":
+          let separation = try XCTUnwrap(action.separationAngstrom)
+          _ = adapter.queue(.request(H2RHFRequestInput(
+            separationAngstrom: separation,
+            rawSeparationAngstrom: action.rawSeparationAngstrom,
+            targetId: action.targetId
+          )))
+        case "queue-release":
+          _ = adapter.queue(.release(nil))
+        case "queue-cancel":
+          _ = adapter.queue(.cancel)
+        case "advance-frames":
+          let frames = try XCTUnwrap(action.frameCount)
+          let delta = try Self.validatePresentationDelta(action, scenario: scenario)
+          for _ in 0 ..< frames { _ = try adapter.advance(delta) }
+          XCTAssertEqual(adapter.snapshot().logicalTicks, action.logicalTick)
+        case "rebase":
+          let before = adapter.snapshot()
+          if action.requireNonZeroAccumulatorBefore == true {
+            XCTAssertGreaterThan(abs(before.accumulatorMs), Self.fixturePresentationDeltaToleranceMs, "\(scenario.scenario): rebase requires a non-zero fractional accumulator before rebase")
+          }
+          _ = adapter.rebase()
+          if let expected = action.expectedAccumulatorAfterMs {
+            XCTAssertEqual(adapter.snapshot().accumulatorMs, expected, accuracy: Self.fixturePresentationDeltaToleranceMs)
+          }
+          XCTAssertEqual(adapter.snapshot().logicalTicks, action.logicalTick)
+        default:
+          XCTFail("unknown H2 RHF fixture action \(action.kind)")
+        }
       }
+      scenarioOutputs.append(FixtureScenarioOutput(
+        scenario: scenario.scenario,
+        frameCadenceHz: scenario.frameCadenceHz,
+        actions: scenario.actions,
+        trace: authority.trace().map(FixtureTraceEvent.init),
+        milestones: authority.milestones().map(FixtureTraceEvent.init),
+        snapshot: FixtureSnapshot(authority.snapshot()),
+        adapter: adapter.snapshot()
+      ))
     }
 
-    let output = FixtureOutput(
-      metadata: input.metadata,
-      scenario: input.scenario,
-      actions: input.actions,
-      trace: authority.trace().map(FixtureTraceEvent.init),
-      milestones: authority.milestones().map(FixtureTraceEvent.init),
-      snapshot: FixtureSnapshot(authority.snapshot()),
-      adapter: adapter.snapshot()
-    )
+    if let canonical = scenarioOutputs.first(where: { $0.scenario == "canonical-converged-60" }), let rebased = scenarioOutputs.first(where: { $0.scenario == "canonical-rebase-60" }) {
+      XCTAssertEqual(rebased.snapshot.tick, canonical.snapshot.tick)
+      XCTAssertEqual(rebased.snapshot.lastGood?.digest, canonical.snapshot.lastGood?.digest)
+    }
+
+    let output = FixtureOutput(metadata: input.metadata, scenarios: scenarioOutputs)
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
     let data = try encoder.encode(output)
     let outputURL = URL(fileURLWithPath: outputPath)
     try FileManager.default.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
     try data.write(to: outputURL, options: [.atomic])
+  }
+}
+
+final class H2RHFFixtureHarnessTests: XCTestCase {
+  func testFixtureReplayWritesOutput() throws {
+    let environment = ProcessInfo.processInfo.environment
+    guard environment["H2_RHF_FIXTURE_REQUIRED"] == "1" else {
+      throw XCTSkip("H2 RHF fixture replay is an explicit cross-language harness test")
+    }
+    guard let inputPath = environment["H2_RHF_FIXTURE_INPUT"], let outputPath = environment["H2_RHF_FIXTURE_OUTPUT"] else {
+      XCTFail("H2_RHF_FIXTURE_INPUT and H2_RHF_FIXTURE_OUTPUT are required when the fixture harness is enabled")
+      return
+    }
+    try H2RHFTests.replayFixture(inputPath: inputPath, outputPath: outputPath)
   }
 }
