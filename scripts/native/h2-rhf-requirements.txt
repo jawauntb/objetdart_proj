@@ -1,0 +1,53 @@
+H2 RHF/STO-3G cassette v1
+================================
+
+scope
+-----
+- neutral singlet H2 only (charge 0, multiplicity 1)
+- nuclei lie on the z axis; supported separation is inclusive 0.600..1.200
+  Angstrom at 0.025 Angstrom node spacing (25 canonical nodes)
+- two AO basis functions, PySCF's canonical `0 H 1s` then `1 H 1s` order
+- all matrices are row-major; ERI is `(mu,nu,lambda,sigma)` row-major
+- units are Angstrom, Hartree, and AO density-matrix (dimensionless coefficient)
+
+model tuple
+-----------
+- model: RHF/STO-3G
+- modelVersion: h2-rhf-sto-3g-v1
+- quantizationVersion: decimal-12
+- traceVersion: 1
+- damping: 0.5
+- authority cadence: 20 Hz logical ticks
+- iteration budget: 64
+- reference-comparison ceilings: density max-abs <= 5e-4, total-energy max-abs
+  <= 5e-5 Hartree, and abs(Tr(P*S)-2) <= 1e-8
+- strict fixed-point replay gates: density delta <= 1e-10 and energy delta <=
+  1e-10 Hartree, with the electron-count ceiling above; two consecutive
+  authority ticks promote
+
+interpolation policy
+--------------------
+- The 25 node payloads remain the canonical immutable scientific input.
+- Smooth AO overlap, core Hamiltonian, and ERI entries use deterministic
+  three-node quadratic interpolation around each adjacent midpoint. This is the
+  smallest local interpolation that clears the hard midpoint energy ceiling and
+  never extrapolates outside the inclusive envelope.
+- Nuclear repulsion uses the exact two-centre Coulomb value
+  `1 / (R_angstrom * 1.8897261246257702)` Hartree at each requested separation;
+  canonical node `enuc` remains the PySCF invariant input.
+
+provenance
+----------
+- generated offline with PySCF 2.6.2, Python 3.11, NumPy and SciPy versions
+  recorded in the cassette, and the NumPy BLAS vendor recorded in provenance
+- runtime clients ship only the generated JSON-derived constants; no Python,
+  network request, learned model, or runtime chemistry fallback is permitted
+- the payload SHA-256 covers the canonical body and excludes only the digest
+  field itself
+
+oracle gate
+-----------
+- replay every node through the exact bounded RHF fixed-point map
+- independently run PySCF at all 24 adjacent-node midpoints
+- reject generation if max density error > 5e-4, max total-energy error > 5e-5
+  Hartree, or max abs(Tr(P*S)-2) > 1e-8
