@@ -23,8 +23,8 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
       "logicalHz": 20,
       "maxIterations": 64,
       "densityTolerance": 0.0005,
-      "energyTolerance": 5e-05,
-      "electronCountTolerance": 1e-08,
+      "energyTolerance": 0.00005,
+      "electronCountTolerance": 1e-8,
       "fixedPointDensityTolerance": 1e-10,
       "fixedPointEnergyTolerance": 1e-10,
       "consecutiveGateTicks": 2
@@ -33,7 +33,7 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
       "matrices": "quadratic-three-node",
       "nuclearRepulsion": "exact-coulomb-from-separation"
     },
-    "bohrPerAngstrom": 1.8897261246257702,
+    "bohrPerAngstrom": 1.889726124626,
     "quantizationVersion": "decimal-12",
     "traceVersion": 1
   },
@@ -56,7 +56,8 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
       "sigma"
     ],
     "occupiedOrbitals": 1,
-    "electronCount": 2
+    "electronCount": 2,
+    "eriNotation": "chemists"
   },
   "envelope": {
     "minAngstrom": 0.6,
@@ -69,8 +70,8 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
     "logicalHz": 20,
     "maxIterations": 64,
     "densityTolerance": 0.0005,
-    "energyTolerance": 5e-05,
-    "electronCountTolerance": 1e-08,
+    "energyTolerance": 0.00005,
+    "electronCountTolerance": 1e-8,
     "fixedPointDensityTolerance": 1e-10,
     "fixedPointEnergyTolerance": 1e-10,
     "consecutiveGateTicks": 2
@@ -86,29 +87,47 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
       "pyscf:2.6.2:gto-rhf",
       "basis:sto-3g:ao-order:0H1s-1H1s",
       "oracle:adjacent-midpoints:v1"
-    ]
+    ],
+    "sourceHash": "1aadcc6b7b3718637737f63a29132da7b7733387f4f76278a4ef7fc1a44e74ae",
+    "scf": {
+      "convTol": 1e-12,
+      "convTolGrad": 1e-10,
+      "maxCycle": 100,
+      "diisSpace": 8
+    },
+    "build": {
+      "basis": "sto-3g",
+      "charge": 0,
+      "spin": 0,
+      "unit": "Angstrom",
+      "cart": false,
+      "verbose": 0,
+      "overlapIntegral": "int1e_ovlp_sph",
+      "eriIntegral": "int2e_sph"
+    }
   },
   "comparison": {
     "densityMatrixMaxAbs": 0.0005,
-    "totalEnergyMaxAbs": 5e-05,
-    "electronCountMaxAbs": 1e-08
+    "totalEnergyMaxAbs": 0.00005,
+    "electronCountMaxAbs": 1e-8,
+    "canonicalNumericTolerance": 5e-11
   },
   "oracle": {
     "nodeReplayMaxDensityError": 8.4e-11,
     "nodeReplayMaxEnergyError": 9.9e-11,
     "nodeReplayMaxElectronCountError": 2.33e-10,
-    "midpointMaxDensityError": 6.92572e-07,
-    "midpointMaxEnergyError": 1.674353e-06,
+    "midpointMaxDensityError": 6.92572e-7,
+    "midpointMaxEnergyError": 0.000001674353,
     "midpointMaxElectronCountError": 1.16e-10
   },
   "nodes": [
     {
       "separationAngstrom": 0.6,
       "overlap": [
-        1.0,
+        1,
         0.75140304272,
         0.75140304272,
-        1.0
+        1
       ],
       "core": [
         -1.220843562541,
@@ -142,15 +161,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.570970802042
       ],
       "referenceEnergy": -1.101128242268,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 0.625,
       "overlap": [
-        1.0,
+        1,
         0.735175338648,
         0.735175338648,
-        1.0
+        1
       ],
       "core": [
         -1.201657643864,
@@ -184,15 +203,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.576310634278
       ],
       "referenceEnergy": -1.108149990192,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 0.65,
       "overlap": [
-        1.0,
+        1,
         0.718859170213,
         0.718859170213,
-        1.0
+        1
       ],
       "core": [
         -1.183069101415,
@@ -226,15 +245,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.581781228695
       ],
       "referenceEnergy": -1.112996545669,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 0.675,
       "overlap": [
-        1.0,
+        1,
         0.702486952638,
         0.702486952638,
-        1.0
+        1
       ],
       "core": [
         -1.165069734812,
@@ -268,15 +287,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.587376013925
       ],
       "referenceEnergy": -1.115975263825,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 0.7,
       "overlap": [
-        1.0,
+        1,
         0.686089450088,
         0.686089450088,
-        1.0
+        1
       ],
       "core": [
         -1.147650238286,
@@ -310,15 +329,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.593088344126
       ],
       "referenceEnergy": -1.11734903499,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 0.725,
       "overlap": [
-        1.0,
+        1,
         0.669695845838,
         0.669695845838,
-        1.0
+        1
       ],
       "core": [
         -1.130800422895,
@@ -352,15 +371,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.598911473903
       ],
       "referenceEnergy": -1.117343269123,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 0.75,
       "overlap": [
-        1.0,
+        1,
         0.653333796187,
         0.653333796187,
-        1.0
+        1
       ],
       "core": [
         -1.114509342984,
@@ -394,15 +413,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.604838540352
       ],
       "referenceEnergy": -1.116151448939,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 0.775,
       "overlap": [
-        1.0,
+        1,
         0.637029468413,
         0.637029468413,
-        1.0
+        1
       ],
       "core": [
         -1.098765368747,
@@ -436,15 +455,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.610862552749
       ],
       "referenceEnergy": -1.113939661743,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 0.8,
       "overlap": [
-        1.0,
+        1,
         0.620807564491,
         0.620807564491,
-        1.0
+        1
       ],
       "core": [
         -1.083556234243,
@@ -478,15 +497,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.616976389985
       ],
       "referenceEnergy": -1.110850397477,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 0.825,
       "overlap": [
-        1.0,
+        1,
         0.604691333187,
         0.604691333187,
-        1.0
+        1
       ],
       "core": [
         -1.06886907985,
@@ -520,15 +539,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.62317280546
       ],
       "referenceEnergy": -1.107005807915,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 0.85,
       "overlap": [
-        1.0,
+        1,
         0.588702573743,
         0.588702573743,
-        1.0
+        1
       ],
       "core": [
         -1.054690500076,
@@ -562,15 +581,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.629444438832
       ],
       "referenceEnergy": -1.102510553925,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 0.875,
       "overlap": [
-        1.0,
+        1,
         0.572861634544,
         0.572861634544,
-        1.0
+        1
       ],
       "core": [
         -1.041006601696,
@@ -604,15 +623,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.63578383377
       ],
       "referenceEnergy": -1.097454319701,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 0.9,
       "overlap": [
-        1.0,
+        1,
         0.557187410091,
         0.557187410091,
-        1.0
+        1
       ],
       "core": [
         -1.027803073155,
@@ -646,15 +665,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.642183460719
       ],
       "referenceEnergy": -1.09191404102,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 0.925,
       "overlap": [
-        1.0,
+        1,
         0.541697339291,
         0.541697339291,
-        1.0
+        1
       ],
       "core": [
         -1.015065263656,
@@ -688,15 +707,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.64863574355
       ],
       "referenceEnergy": -1.085955874968,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 0.95,
       "overlap": [
-        1.0,
+        1,
         0.526407407614,
         0.526407407614,
-        1.0
+        1
       ],
       "core": [
         -1.002778269044,
@@ -730,15 +749,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.655133088985
       ],
       "referenceEnergy": -1.07963692821,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 0.975,
       "overlap": [
-        1.0,
+        1,
         0.5113321551,
         0.5113321551,
-        1.0
+        1
       ],
       "core": [
         -0.990927021101,
@@ -772,15 +791,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.661667917688
       ],
       "referenceEnergy": -1.073006756686,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
-      "separationAngstrom": 1.0,
+      "separationAngstrom": 1,
       "overlap": [
-        1.0,
+        1,
         0.496484691623,
         0.496484691623,
-        1.0
+        1
       ],
       "core": [
         -0.979496376914,
@@ -814,15 +833,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.668232695996
       ],
       "referenceEnergy": -1.066108649318,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 1.025,
       "overlap": [
-        1.0,
+        1,
         0.481876720232,
         0.481876720232,
-        1.0
+        1
       ],
       "core": [
         -0.968471205422,
@@ -856,15 +875,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.674819967375
       ],
       "referenceEnergy": -1.058980710133,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 1.05,
       "overlap": [
-        1.0,
+        1,
         0.467518568856,
         0.467518568856,
-        1.0
+        1
       ],
       "core": [
         -0.957836468774,
@@ -898,15 +917,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.681422382805
       ],
       "referenceEnergy": -1.051656755647,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 1.075,
       "overlap": [
-        1.0,
+        1,
         0.453419230217,
         0.453419230217,
-        1.0
+        1
       ],
       "core": [
         -0.94757729675,
@@ -940,15 +959,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.688032729449
       ],
       "referenceEnergy": -1.044167046644,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 1.1,
       "overlap": [
-        1.0,
+        1,
         0.43958640939,
         0.43958640939,
-        1.0
+        1
       ],
       "core": [
         -0.9376790531,
@@ -982,15 +1001,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.694643957096
       ],
       "referenceEnergy": -1.036538875029,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 1.125,
       "overlap": [
-        1.0,
+        1,
         0.42602657821,
         0.42602657821,
-        1.0
+        1
       ],
       "core": [
         -0.928127393177,
@@ -1024,15 +1043,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.701249202
       ],
       "referenceEnergy": -1.028797027021,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 1.15,
       "overlap": [
-        1.0,
+        1,
         0.412745035471,
         0.412745035471,
-        1.0
+        1
       ],
       "core": [
         -0.918908312641,
@@ -1066,15 +1085,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.707841807893
       ],
       "referenceEnergy": -1.02096414358,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 1.175,
       "overlap": [
-        1.0,
+        1,
         0.39974597182,
         0.39974597182,
-        1.0
+        1
       ],
       "core": [
         -0.910008187417,
@@ -1108,15 +1127,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.714415344021
       ],
       "referenceEnergy": -1.013060997726,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     },
     {
       "separationAngstrom": 1.2,
       "overlap": [
-        1.0,
+        1,
         0.387032538122,
         0.387032538122,
-        1.0
+        1
       ],
       "core": [
         -0.901413805296,
@@ -1150,17 +1169,17 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.720963620186
       ],
       "referenceEnergy": -1.005106706568,
-      "referenceElectronCount": 2.0
+      "referenceElectronCount": 2
     }
   ],
   "midpoints": [
     {
       "separationAngstrom": 0.6125,
       "overlap": [
-        1.0,
+        1,
         0.743300248729,
         0.743300248729,
-        1.0
+        1
       ],
       "core": [
         -1.211175931174,
@@ -1194,20 +1213,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.573623964269
       ],
       "referenceEnergy": -1.104932190819,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 0,
       "rightNode": 1,
-      "densityError": 6.88553e-07,
-      "energyError": 3.30265e-07,
+      "densityError": 6.88553e-7,
+      "energyError": 3.30265e-7,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 0.6375,
       "overlap": [
-        1.0,
+        1,
         0.727028312476,
         0.727028312476,
-        1.0
+        1
       ],
       "core": [
         -1.192288700611,
@@ -1241,20 +1260,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.579029995518
       ],
       "referenceEnergy": -1.110824821267,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 1,
       "rightNode": 2,
-      "densityError": 6.92572e-07,
-      "energyError": 3.55736e-07,
+      "densityError": 6.92572e-7,
+      "energyError": 3.55736e-7,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 0.6625,
       "overlap": [
-        1.0,
+        1,
         0.710680067568,
         0.710680067568,
-        1.0
+        1
       ],
       "core": [
         -1.173995771133,
@@ -1288,20 +1307,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.584563510751
       ],
       "referenceEnergy": -1.114702001658,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 2,
       "rightNode": 3,
-      "densityError": 6.69984e-07,
-      "energyError": 4.76836e-07,
+      "densityError": 6.69984e-7,
+      "energyError": 4.76836e-7,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 0.6875,
       "overlap": [
-        1.0,
+        1,
         0.694291361985,
         0.694291361985,
-        1.0
+        1
       ],
       "core": [
         -1.156287502789,
@@ -1335,20 +1354,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.590217904911
       ],
       "referenceEnergy": -1.116847872128,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 3,
       "rightNode": 4,
-      "densityError": 6.48081e-07,
-      "energyError": 6.17196e-07,
+      "densityError": 6.48081e-7,
+      "energyError": 6.17196e-7,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 0.7125,
       "overlap": [
-        1.0,
+        1,
         0.677892160675,
         0.677892160675,
-        1.0
+        1
       ],
       "core": [
         -1.139154120449,
@@ -1382,20 +1401,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.595986485086
       ],
       "referenceEnergy": -1.1175058105,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 4,
       "rightNode": 5,
-      "densityError": 6.26531e-07,
-      "energyError": 7.75271e-07,
+      "densityError": 6.26531e-7,
+      "energyError": 7.75271e-7,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 0.7375,
       "overlap": [
-        1.0,
+        1,
         0.661510876688,
         0.661510876688,
-        1.0
+        1
       ],
       "core": [
         -1.122585041004,
@@ -1429,20 +1448,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.6018624489
       ],
       "referenceEnergy": -1.116884640814,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 5,
       "rightNode": 6,
-      "densityError": 6.04977e-07,
-      "energyError": 9.4395e-07,
+      "densityError": 6.04977e-7,
+      "energyError": 9.4395e-7,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 0.7625,
       "overlap": [
-        1.0,
+        1,
         0.645174417065,
         0.645174417065,
-        1.0
+        1
       ],
       "core": [
         -1.106568967656,
@@ -1476,20 +1495,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.607838870342
       ],
       "referenceEnergy": -1.115163632987,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 6,
       "rightNode": 7,
-      "densityError": 5.83064e-07,
-      "energyError": 1.113277e-06,
+      "densityError": 5.83064e-7,
+      "energyError": 0.000001113277,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 0.7875,
       "overlap": [
-        1.0,
+        1,
         0.628908213471,
         0.628908213471,
-        1.0
+        1
       ],
       "core": [
         -1.091093946528,
@@ -1523,20 +1542,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.613908693339
       ],
       "referenceEnergy": -1.112496638225,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 7,
       "rightNode": 8,
-      "densityError": 5.60473e-07,
-      "energyError": 1.272702e-06,
+      "densityError": 5.60473e-7,
+      "energyError": 0.000001272702,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 0.8125,
       "overlap": [
-        1.0,
+        1,
         0.612736239762,
         0.612736239762,
-        1.0
+        1
       ],
       "core": [
         -1.076147409533,
@@ -1570,20 +1589,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.62006473298
       ],
       "referenceEnergy": -1.109015598059,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 8,
       "rightNode": 9,
-      "densityError": 5.36934e-07,
-      "energyError": 1.412767e-06,
+      "densityError": 5.36934e-7,
+      "energyError": 0.000001412767,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 0.8375,
       "overlap": [
-        1.0,
+        1,
         0.596681019482,
         0.596681019482,
-        1.0
+        1
       ],
       "core": [
         -1.061716218136,
@@ -1617,20 +1636,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.626299683925
       ],
       "referenceEnergy": -1.104833585122,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 9,
       "rightNode": 10,
-      "densityError": 5.12243e-07,
-      "energyError": 1.526188e-06,
+      "densityError": 5.12243e-7,
+      "energyError": 0.000001526188,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 0.8625,
       "overlap": [
-        1.0,
+        1,
         0.580763626613,
         0.580763626613,
-        1.0
+        1
       ],
       "core": [
         -1.047786715712,
@@ -1664,20 +1683,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.632606135282
       ],
       "referenceEnergy": -1.100047476361,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 10,
       "rightNode": 11,
-      "densityError": 4.86274e-07,
-      "energyError": 1.608379e-06,
+      "densityError": 4.86274e-7,
+      "energyError": 0.000001608379,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 0.8875,
       "overlap": [
-        1.0,
+        1,
         0.565003682974,
         0.565003682974,
-        1.0
+        1
       ],
       "core": [
         -1.034344791196,
@@ -1711,20 +1730,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.638976590994
       ],
       "referenceEnergy": -1.094740319873,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 11,
       "rightNode": 12,
-      "densityError": 4.58975e-07,
-      "energyError": 1.65753e-06,
+      "densityError": 4.58975e-7,
+      "energyError": 0.00000165753,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 0.9125,
       "overlap": [
-        1.0,
+        1,
         0.549419355484,
         0.549419355484,
-        1.0
+        1
       ],
       "core": [
         -1.021375953525,
@@ -1758,20 +1777,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.645403494686
       ],
       "referenceEnergy": -1.08898343129,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 12,
       "rightNode": 13,
-      "densityError": 4.30369e-07,
-      "energyError": 1.674353e-06,
+      "densityError": 4.30369e-7,
+      "energyError": 0.000001674353,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 0.9375,
       "overlap": [
-        1.0,
+        1,
         0.534027356062,
         0.534027356062,
-        1.0
+        1
       ],
       "core": [
         -1.008865414489,
@@ -1805,20 +1824,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.651879257848
       ],
       "referenceEnergy": -1.082838241026,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 13,
       "rightNode": 14,
-      "densityError": 4.00545e-07,
-      "energyError": 1.661594e-06,
+      "densityError": 4.00545e-7,
+      "energyError": 0.000001661594,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 0.9625,
       "overlap": [
-        1.0,
+        1,
         0.518842946462,
         0.518842946462,
-        1.0
+        1
       ],
       "core": [
         -0.996798176739,
@@ -1852,20 +1871,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.658396290224
       ],
       "referenceEnergy": -1.07635790673,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 14,
       "rightNode": 15,
-      "densityError": 3.69651e-07,
-      "energyError": 1.623473e-06,
+      "densityError": 3.69651e-7,
+      "energyError": 0.000001623473,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 0.9875,
       "overlap": [
-        1.0,
+        1,
         0.503879949732,
         0.503879949732,
-        1.0
+        1
       ],
       "core": [
         -0.985159123538,
@@ -1899,20 +1918,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.664947031345
       ],
       "referenceEnergy": -1.069588703334,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 15,
       "rightNode": 16,
-      "densityError": 3.37881e-07,
-      "energyError": 1.565072e-06,
+      "densityError": 3.37881e-7,
+      "energyError": 0.000001565072,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 1.0125,
       "overlap": [
-        1.0,
+        1,
         0.489150769417,
         0.489150769417,
-        1.0
+        1
       ],
       "core": [
         -0.973933107081,
@@ -1946,20 +1965,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.671523982231
       ],
       "referenceEnergy": -1.062571204016,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 16,
       "rightNode": 17,
-      "densityError": 3.05462e-07,
-      "energyError": 1.491791e-06,
+      "densityError": 3.05462e-7,
+      "energyError": 0.000001491791,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 1.0375,
       "overlap": [
-        1.0,
+        1,
         0.474666417042,
         0.474666417042,
-        1.0
+        1
       ],
       "core": [
         -0.963105032743,
@@ -1993,20 +2012,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.678119736399
       ],
       "referenceEnergy": -1.055341267699,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 17,
       "rightNode": 18,
-      "densityError": 2.72644e-07,
-      "energyError": 1.408908e-06,
+      "densityError": 2.72644e-7,
+      "energyError": 0.000001408908,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 1.0625,
       "overlap": [
-        1.0,
+        1,
         0.460436547944,
         0.460436547944,
-        1.0
+        1
       ],
       "core": [
         -0.952659937184,
@@ -2040,20 +2059,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.684727009468
       ],
       "referenceEnergy": -1.047930851113,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 18,
       "rightNode": 19,
-      "densityError": 2.39688e-07,
-      "energyError": 1.321228e-06,
+      "densityError": 2.39688e-7,
+      "energyError": 0.000001321228,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 1.0875,
       "overlap": [
-        1.0,
+        1,
         0.446469505077,
         0.446469505077,
-        1.0
+        1
       ],
       "core": [
         -0.942583058878,
@@ -2087,20 +2106,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.691338666762
       ],
       "referenceEnergy": -1.040368665473,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 19,
       "rightNode": 20,
-      "densityError": 2.06855e-07,
-      "energyError": 1.232863e-06,
+      "densityError": 2.06855e-7,
+      "energyError": 0.000001232863,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 1.1125,
       "overlap": [
-        1.0,
+        1,
         0.432772370094,
         0.432772370094,
-        1.0
+        1
       ],
       "core": [
         -0.932859900173,
@@ -2134,20 +2153,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.697947748496
       ],
       "referenceEnergy": -1.032680698845,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 20,
       "rightNode": 21,
-      "densityError": 1.74398e-07,
-      "energyError": 1.147112e-06,
+      "densityError": 1.74398e-7,
+      "energyError": 0.000001147112,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 1.1375,
       "overlap": [
-        1.0,
+        1,
         0.419351020785,
         0.419351020785,
-        1.0
+        1
       ],
       "core": [
         -0.923476280486,
@@ -2181,20 +2200,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.704547492221
       ],
       "referenceEnergy": -1.024890625399,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 21,
       "rightNode": 22,
-      "densityError": 1.42554e-07,
-      "energyError": 1.066436e-06,
+      "densityError": 1.42554e-7,
+      "energyError": 0.000001066436,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 1.1625,
       "overlap": [
-        1.0,
+        1,
         0.406210193759,
         0.406210193759,
-        1.0
+        1
       ],
       "core": [
         -0.914418380615,
@@ -2228,20 +2247,20 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.711131352359
       ],
       "referenceEnergy": -1.017020121935,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 22,
       "rightNode": 23,
-      "densityError": 1.11539e-07,
-      "energyError": 9.92501e-07,
+      "densityError": 1.11539e-7,
+      "energyError": 9.92501e-7,
       "electronCountError": 1.16e-10
     },
     {
       "separationAngstrom": 1.1875,
       "overlap": [
-        1.0,
+        1,
         0.393353551227,
         0.393353551227,
-        1.0
+        1
       ],
       "core": [
         -0.905672778469,
@@ -2275,15 +2294,15 @@ export const H2_RHF_CASSETTE: H2RHFCassette = {
         0.717693016739
       ],
       "referenceEnergy": -1.009089110459,
-      "referenceElectronCount": 2.0,
+      "referenceElectronCount": 2,
       "leftNode": 23,
       "rightNode": 24,
-      "densityError": 8.1546e-08,
-      "energyError": 9.26258e-07,
+      "densityError": 8.1546e-8,
+      "energyError": 9.26258e-7,
       "electronCountError": 1.16e-10
     }
   ],
-  "payloadSha256": "1391f8b2de885647e8b453436321367448bf96e19520f653d7a41c951cee65e9"
+  "payloadSha256": "034a06f55bf15f2ae85dcbf6a3f135c7a83e631a995e4aec5095c35a1417db00"
 };
 
 export default H2_RHF_CASSETTE;

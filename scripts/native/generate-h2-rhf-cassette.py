@@ -25,7 +25,12 @@ NUMPY_VERSION = "1.26.4"
 SCIPY_VERSION = "1.11.4"
 # 1 Angstrom = 1.8897261246257702 bohr.  PySCF's nuclear repulsion is
 # 1 / R_bohr, so this is the conversion used by the explicit midpoint seam.
+# The scientific source uses the published high-precision conversion.  The
+# model payload stores its decimal-12 representation; the verifier declares a
+# propagated seam tolerance for that representation boundary.
 BOHR_PER_ANGSTROM = 1.8897261246257702
+CANONICAL_BOHR_PER_ANGSTROM = 1.889726124626
+CANONICALIZATION_VECTORS = json.loads((Path(__file__).with_name("h2-rhf-canonicalization-vectors.json")).read_text(encoding="utf-8"))
 MIN_ANGSTROM = 0.6
 MAX_ANGSTROM = 1.2
 SPACING_ANGSTROM = 0.025
@@ -64,7 +69,7 @@ MODEL_TUPLE: dict[str, Any] = {
         "matrices": "quadratic-three-node",
         "nuclearRepulsion": "exact-coulomb-from-separation",
     },
-    "bohrPerAngstrom": BOHR_PER_ANGSTROM,
+    "bohrPerAngstrom": CANONICAL_BOHR_PER_ANGSTROM,
     "quantizationVersion": "decimal-12",
     "traceVersion": 1,
 }
@@ -79,6 +84,7 @@ AO_CONVENTION = {
     "labels": ["0 H 1s", "1 H 1s"],
     "axis": "z",
     "matrixOrder": "row-major",
+    "eriNotation": "chemists",
     "eriOrder": ["mu", "nu", "lambda", "sigma"],
     "occupiedOrbitals": 1,
     "electronCount": 2,
@@ -88,6 +94,26 @@ COMPARISON = {
     "densityMatrixMaxAbs": DENSITY_TOLERANCE,
     "totalEnergyMaxAbs": ENERGY_TOLERANCE,
     "electronCountMaxAbs": ELECTRON_COUNT_TOLERANCE,
+    "canonicalNumericTolerance": 5e-11,
+}
+
+SCF_BUILD_OPTIONS = {
+    "scf": {
+        "convTol": 1e-12,
+        "convTolGrad": 1e-10,
+        "maxCycle": 100,
+        "diisSpace": 8,
+    },
+    "build": {
+        "basis": "sto-3g",
+        "charge": 0,
+        "spin": 0,
+        "unit": "Angstrom",
+        "cart": False,
+        "verbose": 0,
+        "overlapIntegral": "int1e_ovlp_sph",
+        "eriIntegral": "int2e_sph",
+    },
 }
 
 
@@ -136,6 +162,33 @@ def canonical_json(value: Any) -> str:
 def payload_digest(payload: dict[str, Any]) -> str:
     body = {key: value for key, value in payload.items() if key != "payloadSha256"}
     return hashlib.sha256(canonical_json(body).encode("utf-8")).hexdigest()
+
+
+def assert_canonical_numbers(value: Any, path: str = "cassette") -> None:
+    """Reject numeric leaves that would alias under canonical decimal-12 hashing."""
+
+    if isinstance(value, bool):
+        return
+    if isinstance(value, (int, float)):
+        number = float(value)
+        if not math.isfinite(number) or (number == 0 and math.copysign(1.0, number) < 0):
+            raise ValueError(f"{path} contains a non-canonical numeric value")
+        if number != float(canonical_number(number)):
+            raise ValueError(f"{path} is not rounded to decimal-12")
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            assert_canonical_numbers(item, f"{path}[{index}]")
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            assert_canonical_numbers(item, f"{path}.{key}")
+
+
+def assert_canonicalization_vectors() -> None:
+    for vector in CANONICALIZATION_VECTORS:
+        actual = canonical_number(float(vector["input"]))
+        if actual != vector["canonical"]:
+            raise ValueError(f"canonicalization vector drifted for {vector['input']!r}: {actual!r}")
 
 
 def matrix_values(matrix: np.ndarray) -> list[float]:
@@ -187,7 +240,7 @@ def replay_rhf(
     core: np.ndarray,
     eri: np.ndarray,
     enuc: float,
-) -> tuple[np.ndarray, float, float, int]:
+) -> tuple[np.ndarray, float, float, int, int, bool]:
     """Replay the damped fixed-point map from a zero-density warm start."""
 
     overlap = np.asarray(overlap, dtype=np.float64).reshape(2, 2)
@@ -195,6 +248,8 @@ def replay_rhf(
     eri = np.asarray(eri, dtype=np.float64).reshape(16)
     density = np.zeros((2, 2), dtype=np.float64)
     previous_energy: float | None = None
+    gate_streak = 0
+    iteration = 0
     for iteration in range(1, MAX_ITERATIONS + 1):
         target = density_from_fock(build_fock(density, core, eri), overlap)
         mixed = (1.0 - DAMPING) * density + DAMPING * target
@@ -204,31 +259,33 @@ def replay_rhf(
         count_error = abs(electron_count(mixed, overlap) - 2.0)
         density = mixed
         previous_energy = energy
-        if (
+        gate_pass = (
             density_delta <= MODEL_TUPLE["solver"]["fixedPointDensityTolerance"]
             and energy_delta <= MODEL_TUPLE["solver"]["fixedPointEnergyTolerance"]
             and count_error <= ELECTRON_COUNT_TOLERANCE
-        ):
-            return density, energy, count_error, iteration
-    return density, previous_energy if previous_energy is not None else math.nan, abs(electron_count(density, overlap) - 2.0), MAX_ITERATIONS
+        )
+        gate_streak = gate_streak + 1 if gate_pass else 0
+        if gate_streak >= MODEL_TUPLE["solver"]["consecutiveGateTicks"]:
+            return density, energy, count_error, iteration, gate_streak, True
+    return density, previous_energy if previous_energy is not None else math.nan, abs(electron_count(density, overlap) - 2.0), MAX_ITERATIONS, gate_streak, False
 
 
 def make_pyscf_node(separation: float) -> dict[str, Any]:
     atom = f"H 0 0 0; H 0 0 {separation:.12f}"
     molecule = gto.M(
         atom=atom,
-        basis="sto-3g",
-        charge=0,
-        spin=0,
-        unit="Angstrom",
-        cart=False,
-        verbose=0,
+        basis=SCF_BUILD_OPTIONS["build"]["basis"],
+        charge=SCF_BUILD_OPTIONS["build"]["charge"],
+        spin=SCF_BUILD_OPTIONS["build"]["spin"],
+        unit=SCF_BUILD_OPTIONS["build"]["unit"],
+        cart=SCF_BUILD_OPTIONS["build"]["cart"],
+        verbose=SCF_BUILD_OPTIONS["build"]["verbose"],
     )
     method = scf.RHF(molecule)
-    method.conv_tol = 1e-12
-    method.conv_tol_grad = 1e-10
-    method.max_cycle = 100
-    method.diis_space = 8
+    method.conv_tol = SCF_BUILD_OPTIONS["scf"]["convTol"]
+    method.conv_tol_grad = SCF_BUILD_OPTIONS["scf"]["convTolGrad"]
+    method.max_cycle = SCF_BUILD_OPTIONS["scf"]["maxCycle"]
+    method.diis_space = SCF_BUILD_OPTIONS["scf"]["diisSpace"]
     method.kernel()
     if not method.converged:
         raise RuntimeError(f"PySCF RHF did not converge at {separation:.12f} Angstrom")
@@ -277,7 +334,9 @@ def midpoint_node(nodes: list[dict[str, Any]], midpoint_reference: dict[str, Any
     overlap = np.asarray(quadratic("overlap"), dtype=np.float64).reshape(2, 2)
     core = np.asarray(quadratic("core"), dtype=np.float64).reshape(2, 2)
     eri = np.asarray(quadratic("eri"), dtype=np.float64).reshape(16)
-    replay_density, replay_energy, count_error, _ = replay_rhf(overlap, core, eri, enuc)
+    replay_density, replay_energy, count_error, _, _, converged = replay_rhf(overlap, core, eri, enuc)
+    if not converged:
+        raise RuntimeError(f"bounded RHF replay did not converge at midpoint {separation:.12f} Angstrom")
     reference_density = np.asarray(midpoint_reference["referenceDensity"], dtype=np.float64).reshape(2, 2)
     density_error = float(np.max(np.abs(replay_density - reference_density)))
     energy_error = abs(replay_energy - float(midpoint_reference["referenceEnergy"]))
@@ -318,7 +377,9 @@ def make_cassette() -> dict[str, Any]:
         overlap = matrix_from_node(node, "overlap", (2, 2))
         core = matrix_from_node(node, "core", (2, 2))
         eri = matrix_from_node(node, "eri", (16,))
-        density, energy, count_error, _ = replay_rhf(overlap, core, eri, node["enuc"])
+        density, energy, count_error, _, _, converged = replay_rhf(overlap, core, eri, node["enuc"])
+        if not converged:
+            raise RuntimeError(f"bounded RHF replay did not converge at node {node['separationAngstrom']:.12f} Angstrom")
         reference_density = matrix_from_node(node, "referenceDensity", (2, 2))
         replay_density_errors.append(float(np.max(np.abs(density - reference_density))))
         replay_energy_errors.append(abs(energy - node["referenceEnergy"]))
@@ -373,6 +434,9 @@ def make_cassette() -> dict[str, Any]:
             "numpy": NUMPY_VERSION,
             "scipy": SCIPY_VERSION,
             "blas": blas_provenance(),
+            "sourceHash": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "scf": SCF_BUILD_OPTIONS["scf"],
+            "build": SCF_BUILD_OPTIONS["build"],
             "sourceIds": [
                 "pyscf:2.6.2:gto-rhf",
                 "basis:sto-3g:ao-order:0H1s-1H1s",
@@ -384,6 +448,7 @@ def make_cassette() -> dict[str, Any]:
         "nodes": nodes,
         "midpoints": midpoints,
     }
+    assert_canonical_numbers(cassette)
     cassette["payloadSha256"] = payload_digest(cassette)
     return cassette
 
@@ -446,9 +511,11 @@ def render_swift(cassette: dict[str, Any]) -> str:
         "    public let traceVersion: Int",
         "  }",
         "  public struct Units: Sendable { public let distance: String; public let energy: String; public let density: String }",
-        "  public struct AOConvention: Sendable { public let labels: [String]; public let axis: String; public let matrixOrder: String; public let eriOrder: [String]; public let occupiedOrbitals: Int; public let electronCount: Int }",
-        "  public struct Provenance: Sendable { public let generator: String; public let python: String; public let pyscf: String; public let numpy: String; public let scipy: String; public let blas: String; public let sourceIds: [String] }",
-        "  public struct Comparison: Sendable { public let densityMatrixMaxAbs: Double; public let totalEnergyMaxAbs: Double; public let electronCountMaxAbs: Double }",
+        "  public struct AOConvention: Sendable { public let labels: [String]; public let axis: String; public let matrixOrder: String; public let eriNotation: String; public let eriOrder: [String]; public let occupiedOrbitals: Int; public let electronCount: Int }",
+        "  public struct SCFOptions: Sendable { public let convTol: Double; public let convTolGrad: Double; public let maxCycle: Int; public let diisSpace: Int }",
+        "  public struct BuildOptions: Sendable { public let basis: String; public let charge: Int; public let spin: Int; public let unit: String; public let cart: Bool; public let verbose: Int; public let overlapIntegral: String; public let eriIntegral: String }",
+        "  public struct Provenance: Sendable { public let generator: String; public let python: String; public let pyscf: String; public let numpy: String; public let scipy: String; public let blas: String; public let sourceHash: String; public let scf: SCFOptions; public let build: BuildOptions; public let sourceIds: [String] }",
+        "  public struct Comparison: Sendable { public let densityMatrixMaxAbs: Double; public let totalEnergyMaxAbs: Double; public let electronCountMaxAbs: Double; public let canonicalNumericTolerance: Double }",
         "  public struct Oracle: Sendable { public let nodeReplayMaxDensityError: Double; public let nodeReplayMaxEnergyError: Double; public let nodeReplayMaxElectronCountError: Double; public let midpointMaxDensityError: Double; public let midpointMaxEnergyError: Double; public let midpointMaxElectronCountError: Double }",
         "  public struct Node: Sendable {",
         "    public let separationAngstrom: Double",
@@ -461,7 +528,14 @@ def render_swift(cassette: dict[str, Any]) -> str:
         "    public let referenceElectronCount: Double",
         "  }",
         "  public struct Midpoint: Sendable {",
-        "    public let node: Node",
+        "    public let separationAngstrom: Double",
+        "    public let overlap: [Double]",
+        "    public let core: [Double]",
+        "    public let eri: [Double]",
+        "    public let enuc: Double",
+        "    public let referenceDensity: [Double]",
+        "    public let referenceEnergy: Double",
+        "    public let referenceElectronCount: Double",
         "    public let leftNode: Int",
         "    public let rightNode: Int",
         "    public let densityError: Double",
@@ -473,13 +547,18 @@ def render_swift(cassette: dict[str, Any]) -> str:
         f"  public static let modelVersion = {swift_string(cassette['modelVersion'])}",
         f"  public static let modelTuple = ModelTuple(model: {swift_string(model['model'])}, modelVersion: {swift_string(model['modelVersion'])}, species: {swift_string(model['species'])}, charge: {model['charge']}, multiplicity: {model['multiplicity']}, basis: {swift_string(model['basis'])}, envelope: Envelope(minAngstrom: {swift_number(envelope['minAngstrom'])}, maxAngstrom: {swift_number(envelope['maxAngstrom'])}, spacingAngstrom: {swift_number(envelope['spacingAngstrom'])}, nodeCount: {envelope['nodeCount']}), solver: Solver(damping: {swift_number(solver['damping'])}, logicalHz: {solver['logicalHz']}, maxIterations: {solver['maxIterations']}, densityTolerance: {swift_number(solver['densityTolerance'])}, energyTolerance: {swift_number(solver['energyTolerance'])}, electronCountTolerance: {swift_number(solver['electronCountTolerance'])}, fixedPointDensityTolerance: {swift_number(solver['fixedPointDensityTolerance'])}, fixedPointEnergyTolerance: {swift_number(solver['fixedPointEnergyTolerance'])}, consecutiveGateTicks: {solver['consecutiveGateTicks']}), interpolation: Interpolation(matrices: {swift_string(interpolation['matrices'])}, nuclearRepulsion: {swift_string(interpolation['nuclearRepulsion'])}), bohrPerAngstrom: {swift_number(model['bohrPerAngstrom'])}, quantizationVersion: {swift_string(model['quantizationVersion'])}, traceVersion: {model['traceVersion']})",
         f"  public static let units = Units(distance: {swift_string(cassette['units']['distance'])}, energy: {swift_string(cassette['units']['energy'])}, density: {swift_string(cassette['units']['density'])})",
-        f"  public static let aoConvention = AOConvention(labels: {swift_array(cassette['aoConvention']['labels'])}, axis: {swift_string(cassette['aoConvention']['axis'])}, matrixOrder: {swift_string(cassette['aoConvention']['matrixOrder'])}, eriOrder: {swift_array(cassette['aoConvention']['eriOrder'])}, occupiedOrbitals: {cassette['aoConvention']['occupiedOrbitals']}, electronCount: {cassette['aoConvention']['electronCount']})",
-        f"  public static let provenance = Provenance(generator: {swift_string(cassette['provenance']['generator'])}, python: {swift_string(cassette['provenance']['python'])}, pyscf: {swift_string(cassette['provenance']['pyscf'])}, numpy: {swift_string(cassette['provenance']['numpy'])}, scipy: {swift_string(cassette['provenance']['scipy'])}, blas: {swift_string(cassette['provenance']['blas'])}, sourceIds: {swift_array(cassette['provenance']['sourceIds'])})",
-        f"  public static let comparison = Comparison(densityMatrixMaxAbs: {swift_number(cassette['comparison']['densityMatrixMaxAbs'])}, totalEnergyMaxAbs: {swift_number(cassette['comparison']['totalEnergyMaxAbs'])}, electronCountMaxAbs: {swift_number(cassette['comparison']['electronCountMaxAbs'])})",
+        f"  public static let aoConvention = AOConvention(labels: {swift_array(cassette['aoConvention']['labels'])}, axis: {swift_string(cassette['aoConvention']['axis'])}, matrixOrder: {swift_string(cassette['aoConvention']['matrixOrder'])}, eriNotation: {swift_string(cassette['aoConvention']['eriNotation'])}, eriOrder: {swift_array(cassette['aoConvention']['eriOrder'])}, occupiedOrbitals: {cassette['aoConvention']['occupiedOrbitals']}, electronCount: {cassette['aoConvention']['electronCount']})",
+        f"  public static let provenance = Provenance(generator: {swift_string(cassette['provenance']['generator'])}, python: {swift_string(cassette['provenance']['python'])}, pyscf: {swift_string(cassette['provenance']['pyscf'])}, numpy: {swift_string(cassette['provenance']['numpy'])}, scipy: {swift_string(cassette['provenance']['scipy'])}, blas: {swift_string(cassette['provenance']['blas'])}, sourceHash: {swift_string(cassette['provenance']['sourceHash'])}, scf: SCFOptions(convTol: {swift_number(cassette['provenance']['scf']['convTol'])}, convTolGrad: {swift_number(cassette['provenance']['scf']['convTolGrad'])}, maxCycle: {cassette['provenance']['scf']['maxCycle']}, diisSpace: {cassette['provenance']['scf']['diisSpace']}), build: BuildOptions(basis: {swift_string(cassette['provenance']['build']['basis'])}, charge: {cassette['provenance']['build']['charge']}, spin: {cassette['provenance']['build']['spin']}, unit: {swift_string(cassette['provenance']['build']['unit'])}, cart: {str(cassette['provenance']['build']['cart']).lower()}, verbose: {cassette['provenance']['build']['verbose']}, overlapIntegral: {swift_string(cassette['provenance']['build']['overlapIntegral'])}, eriIntegral: {swift_string(cassette['provenance']['build']['eriIntegral'])}), sourceIds: {swift_array(cassette['provenance']['sourceIds'])})",
+        f"  public static let comparison = Comparison(densityMatrixMaxAbs: {swift_number(cassette['comparison']['densityMatrixMaxAbs'])}, totalEnergyMaxAbs: {swift_number(cassette['comparison']['totalEnergyMaxAbs'])}, electronCountMaxAbs: {swift_number(cassette['comparison']['electronCountMaxAbs'])}, canonicalNumericTolerance: {swift_number(cassette['comparison']['canonicalNumericTolerance'])})",
         f"  public static let oracle = Oracle(nodeReplayMaxDensityError: {swift_number(cassette['oracle']['nodeReplayMaxDensityError'])}, nodeReplayMaxEnergyError: {swift_number(cassette['oracle']['nodeReplayMaxEnergyError'])}, nodeReplayMaxElectronCountError: {swift_number(cassette['oracle']['nodeReplayMaxElectronCountError'])}, midpointMaxDensityError: {swift_number(cassette['oracle']['midpointMaxDensityError'])}, midpointMaxEnergyError: {swift_number(cassette['oracle']['midpointMaxEnergyError'])}, midpointMaxElectronCountError: {swift_number(cassette['oracle']['midpointMaxElectronCountError'])})",
         f"  public static let payloadSha256 = {swift_string(cassette['payloadSha256'])}",
-        "  public static let nodes: [Node] = [",
+        "  public static let canonicalizationVectors: [(String, String)] = [",
     ]
+    for vector in CANONICALIZATION_VECTORS:
+        lines.append(f"    ({swift_string(vector['input'])}, {swift_string(vector['canonical'])}),")
+    lines.extend([
+        "  public static let nodes: [Node] = [",
+    ])
     for node in cassette["nodes"]:
         lines.append(
             "    Node(separationAngstrom: %s, overlap: %s, core: %s, eri: %s, enuc: %s, referenceDensity: %s, referenceEnergy: %s, referenceElectronCount: %s),"
@@ -497,7 +576,7 @@ def render_swift(cassette: dict[str, Any]) -> str:
     lines.extend(["  ]", "  public static let midpoints: [Midpoint] = ["])
     for midpoint in cassette["midpoints"]:
         lines.append(
-            "    Midpoint(node: Node(separationAngstrom: %s, overlap: %s, core: %s, eri: %s, enuc: %s, referenceDensity: %s, referenceEnergy: %s, referenceElectronCount: %s), leftNode: %s, rightNode: %s, densityError: %s, energyError: %s, electronCountError: %s),"
+            "    Midpoint(separationAngstrom: %s, overlap: %s, core: %s, eri: %s, enuc: %s, referenceDensity: %s, referenceEnergy: %s, referenceElectronCount: %s, leftNode: %s, rightNode: %s, densityError: %s, energyError: %s, electronCountError: %s),"
             % (
                 swift_number(midpoint["separationAngstrom"]),
                 swift_array(midpoint["overlap"]),
@@ -547,6 +626,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    assert_canonicalization_vectors()
     expected = {"pyscf": PYSCF_VERSION, "numpy": NUMPY_VERSION, "scipy": SCIPY_VERSION}
     actual = {"pyscf": getattr(__import__("pyscf"), "__version__", "unknown"), "numpy": np.__version__}
     import scipy
