@@ -148,6 +148,15 @@ final class H2RHFTests: XCTestCase {
     XCTAssertEqual(authority.snapshot().movingCandidate?.targetId, "latch")
   }
 
+  func testHoldDurationContinuesPastTheEnvelopeDetent() throws {
+    let edge = try holdDurationToSeparation(2_400, intensity: 1)
+    let deeper = try holdDurationToSeparation(3_200, intensity: 1)
+    XCTAssertEqual(edge.rawSeparationAngstrom, cassette.envelope.maxAngstrom, accuracy: 1e-12)
+    XCTAssertTrue(edge.supported)
+    XCTAssertGreaterThan(deeper.rawSeparationAngstrom, edge.rawSeparationAngstrom)
+    XCTAssertFalse(deeper.supported)
+  }
+
   func testInvalidInitialStateFailsClosedPermanently() {
     let authority = H2RHFAuthority(options: H2RHFAuthorityOptions(initialSeparationAngstrom: 0.4))
     XCTAssertFalse(authority.validation.ok)

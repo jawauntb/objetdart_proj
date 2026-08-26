@@ -35,7 +35,7 @@
  * hidden until it does.
  */
 
-import type { SemanticVerb } from "@objet/universe-contracts";
+import type { NativeSceneId, SemanticVerb } from "@objet/universe-contracts";
 
 export const GUIDE_DATA_VERSION = 1 as const;
 
@@ -92,6 +92,23 @@ export type GuideEntry = Readonly<{
   deferredReason?: string;
 }>;
 
+export type SceneScienceNote = Readonly<{
+  plain: string;
+  notation: string;
+}>;
+
+/**
+ * Scene-level model boundaries shown only after the visitor seeks the guide.
+ * A room never imports this prose, and an absent entry means the established
+ * gesture notes remain the complete explanation for that scene.
+ */
+export const SCIENCE_NOTES_BY_SCENE: Readonly<Partial<Record<NativeSceneId, SceneScienceNote>>> = Object.freeze({
+  molecules: Object.freeze({
+    plain: "one hydrogen pair carries a small electron-density calculation. it corrects itself, keeps only a settled answer, and refuses an H–H distance outside 0.60–1.20 å instead of pretending; this is neutral singlet H₂ only, not electron motion or a general chemistry solver.",
+    notation: "bounded instrument: rhf / sto-3g · 20 hz fixed-point density correction · 25 pyscf 2.6.2 nodes + 24 midpoint oracles · residual = successive density-matrix change · no dft, ks-fno, runtime model, or extrapolation.",
+  }),
+});
+
 /**
  * The entries. Each `plain` sentence and each `notation` string is unique
  * across the table — the test asserts no duplication.
@@ -147,6 +164,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
       wave: "a source point charges, radiating with increasing amplitude.",
       cell: "a seed plants and begins to divide along its lineage.",
       solar: "press open sky to preview matter, then release to place it.",
+      molecules: "open solvent condenses the next deterministic compound; an isolated H₂ begins correcting its bounded density field under the same sustained press.",
     },
   },
   {
@@ -160,6 +178,7 @@ const RAW_ENTRIES: readonly GuideEntry[] = [
       wave: "the whole tank rings in phase with the point you held.",
       cell: "the colony's current lineage is committed as a named strain.",
       solar: "a deep press aligns the live bodies into one conjunction.",
+      molecules: "a compatible partner keeps the reaction ceremony; an isolated H₂ release freezes its request, then settles or refuses while its last trusted field remains.",
     },
   },
   {

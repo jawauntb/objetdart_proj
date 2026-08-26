@@ -167,6 +167,15 @@ export type H2RHFAuthorityOptions = {
   readonly cassette?: unknown;
   readonly initialSeparationAngstrom?: number;
   readonly initialTargetId?: string;
+  /**
+   * A promoted checkpoint restored from the molecule boundary.  This is
+   * deliberately unknown at the public edge: storage is untrusted and the
+   * authority must validate the exact shape, digest, target, and envelope
+   * before it can become scientific state.
+   */
+  readonly initialLastGood?: unknown;
+  /** Readable alias for callers that name the restored value a checkpoint. */
+  readonly initialCheckpoint?: unknown;
   readonly maxTraceEntries?: number;
   readonly testSeam?: H2RHFAuthorityTestSeam;
 };
@@ -204,6 +213,8 @@ export interface H2RHFAuthority {
 export interface H2RHFAdapter {
   queue(command: H2RHFCommand): H2RHFAdapterSnapshot;
   enqueue(command: H2RHFCommand): H2RHFAdapterSnapshot;
+  /** Advance the fixed logical clock without allocating an adapter snapshot. */
+  advanceTicks(presentationDeltaMs: number): number;
   advance(presentationDeltaMs: number): H2RHFAdapterSnapshot;
   advancePresentation(presentationDeltaMs: number): H2RHFAdapterSnapshot;
   tick(): H2RHFAdapterSnapshot;
@@ -471,8 +482,14 @@ export function holdDurationToSeparation(durationMs: number, intensity = 1, star
 } {
   if (![durationMs, intensity, startSeparationAngstrom].every(finite)) throw new TypeError("H2 hold mapping requires finite values");
   const duration = Math.max(0, durationMs);
-  const progress = Math.min(1, duration / HOLD_MAX_DURATION_MS);
-  const eased = progress * progress * (3 - 2 * progress);
+  const progress = duration / HOLD_MAX_DURATION_MS;
+  // 2400ms is the inclusive edge of the trusted cassette.  A deeper hold is
+  // still a continuous request, rather than a clamped semantic tier, so the
+  // raw geometry can cross the evidence boundary and receive the authority's
+  // latched outside-envelope refusal.
+  const eased = progress <= 1
+    ? progress * progress * (3 - 2 * progress)
+    : 1 + (progress - 1) * 0.5;
   const signedIntensity = Math.max(-1, Math.min(1, intensity));
   const travel = (H2_RHF_CASSETTE.envelope.maxAngstrom - H2_RHF_CASSETTE.envelope.minAngstrom) * 0.5;
   const rawSeparationAngstrom = startSeparationAngstrom + signedIntensity * travel * eased;
@@ -539,6 +556,53 @@ function initialDensityFor(cassette: H2RHFCassette, separation: number): { reado
   return { density, energy, electronCount };
 }
 
+export function validateH2RHFCheckpoint(value: unknown, cassette: H2RHFCassette = H2_RHF_CASSETTE, expectedTargetId?: string): H2RHFCheckpoint {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("H2 RHF checkpoint must be an object");
+  const record = value as Record<string, unknown>;
+  const expectedKeys = [
+    "density",
+    "digest",
+    "electronCount",
+    "energy",
+    "promotionGeneration",
+    "separationAngstrom",
+    "targetId",
+  ].sort();
+  const actualKeys = Object.keys(record).sort();
+  if (actualKeys.length !== expectedKeys.length || actualKeys.some((key, index) => key !== expectedKeys[index])) {
+    throw new Error("H2 RHF checkpoint keys are not exact");
+  }
+  if (typeof record.targetId !== "string" || record.targetId.length === 0) throw new Error("H2 RHF checkpoint target is invalid");
+  if (expectedTargetId !== undefined && record.targetId !== expectedTargetId) {
+    throw new Error("H2 RHF checkpoint target does not match the requested body");
+  }
+  if (!finite(record.separationAngstrom as number) || !finite(record.energy as number) || !finite(record.electronCount as number)) {
+    throw new Error("H2 RHF checkpoint contains a non-finite scalar");
+  }
+  if (!Number.isSafeInteger(record.promotionGeneration) || (record.promotionGeneration as number) < 0) {
+    throw new Error("H2 RHF checkpoint promotion generation is invalid");
+  }
+  const separation = record.separationAngstrom as number;
+  if (separation < cassette.envelope.minAngstrom || separation > cassette.envelope.maxAngstrom) {
+    throw new Error("H2 RHF checkpoint separation is outside the trusted envelope");
+  }
+  if (!Array.isArray(record.density) || record.density.length !== 4 || !record.density.every((entry) => finite(entry as number))) {
+    throw new Error("H2 RHF checkpoint density must contain four finite values");
+  }
+  if (typeof record.digest !== "string" || record.digest.length === 0) throw new Error("H2 RHF checkpoint digest is missing");
+  const clone = {
+    targetId: record.targetId,
+    separationAngstrom: quantize(separation),
+    density: immutableArray(record.density as number[]),
+    energy: quantize(record.energy as number),
+    electronCount: quantize(record.electronCount as number),
+    promotionGeneration: record.promotionGeneration as number,
+  };
+  const digest = digestH2RHFCheckpoint(clone);
+  if (record.digest !== digest) throw new Error("H2 RHF checkpoint digest does not match");
+  return immutableObject({ ...clone, digest });
+}
+
 class H2RHFAuthorityImpl implements H2RHFAuthority {
   readonly validation: H2RHFValidation;
 
@@ -557,6 +621,7 @@ class H2RHFAuthorityImpl implements H2RHFAuthority {
   private movingCandidate: InternalCandidate | null = null;
   private frozenCandidate: InternalCandidate | null = null;
   private lastGood: H2RHFCheckpoint | null = null;
+  private hydratedTargetId: string | null;
   private gateStreak = 0;
   private promotionGeneration = 0;
 
@@ -564,6 +629,7 @@ class H2RHFAuthorityImpl implements H2RHFAuthority {
     this.validation = validateH2RHFInput(cassette);
     this.traceLimit = Math.max(8, Math.min(256, Math.floor(options.maxTraceEntries ?? DEFAULT_TRACE_ENTRIES)));
     this.seam = options.testSeam ?? {};
+    this.hydratedTargetId = null;
     if (!this.validation.ok) {
       this.cassette = null;
       this.disposition = "reference-unverified";
@@ -571,6 +637,23 @@ class H2RHFAuthorityImpl implements H2RHFAuthority {
       return;
     }
     this.cassette = cassette as H2RHFCassette;
+    const hasInitialLastGood = Object.prototype.hasOwnProperty.call(options, "initialLastGood");
+    const hasInitialCheckpoint = Object.prototype.hasOwnProperty.call(options, "initialCheckpoint");
+    const suppliedCheckpoint = hasInitialLastGood ? options.initialLastGood : options.initialCheckpoint;
+    if (hasInitialLastGood || hasInitialCheckpoint) {
+      try {
+        const checkpoint = validateH2RHFCheckpoint(suppliedCheckpoint, this.cassette, options.initialTargetId);
+        this.lastGood = checkpoint;
+        this.promotionGeneration = checkpoint.promotionGeneration;
+        this.targetId = checkpoint.targetId;
+        this.hydratedTargetId = checkpoint.targetId;
+      } catch {
+        this.cassette = null;
+        this.disposition = "reference-unverified";
+        this.record("reference-unverified", null, null, null);
+      }
+      return;
+    }
     const initialSeparation = options.initialSeparationAngstrom ?? DEFAULT_INITIAL_SEPARATION;
     const initialTargetId = options.initialTargetId ?? DEFAULT_TARGET_ID;
     const initial = initialDensityFor(this.cassette, initialSeparation);
@@ -584,6 +667,10 @@ class H2RHFAuthorityImpl implements H2RHFAuthority {
       ? { separationAngstrom: input, rawSeparationAngstrom: input, targetId, contactEpoch }
       : input;
     const raw = normalized.rawSeparationAngstrom ?? normalized.separationAngstrom;
+    if (this.hydratedTargetId !== null && (normalized.targetId ?? targetId) !== this.hydratedTargetId) {
+      this.record("request-ignored", null, raw, null);
+      return this.snapshot();
+    }
     this.contactSequence += 1;
     this.contactEpoch = normalized.contactEpoch ?? this.contactSequence;
     this.targetId = normalized.targetId ?? targetId;
@@ -935,17 +1022,24 @@ class H2RHFAdapterImpl implements H2RHFAdapter {
     return this.queue(command);
   }
 
-  advance(presentationDeltaMs: number): H2RHFAdapterSnapshot {
+  advanceTicks(presentationDeltaMs: number): number {
     if (!finite(presentationDeltaMs) || presentationDeltaMs < 0) throw new TypeError("H2 RHF presentation delta must be a non-negative finite number");
     this.accumulatorMs += presentationDeltaMs;
     const epsilon = this.tickMs * 1e-9;
+    let advanced = 0;
     while (this.accumulatorMs + epsilon >= this.tickMs) {
       this.accumulatorMs -= this.tickMs;
       if (Math.abs(this.accumulatorMs) < epsilon) this.accumulatorMs = 0;
       this.logicalTicks += 1;
       this.applyCommands();
       this.authority.tick();
+      advanced += 1;
     }
+    return advanced;
+  }
+
+  advance(presentationDeltaMs: number): H2RHFAdapterSnapshot {
+    this.advanceTicks(presentationDeltaMs);
     return this.snapshot();
   }
 

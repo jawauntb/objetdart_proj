@@ -940,7 +940,7 @@ export const ROOM_REGISTRY: RoomEntry[] = [
     address: { band: "molecules" },
     frame: "yield",
     chrome: "travel",
-    keeps: "objetdart:molecules:v1",
+    keeps: "objetdart:molecules:v2",
     interacts:
       "polarity and heat, in one solution: like dissolves like, so polar and ionic molecules " +
       "lean toward each other and away from the oily ones (and a solvent shift re-sorts the " +

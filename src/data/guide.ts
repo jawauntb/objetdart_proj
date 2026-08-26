@@ -1109,7 +1109,7 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
     title: "what the bond holds, the solvent carries",
     scale: "the molecules band — between atoms and cells",
     href: "/molecules",
-    essence: "a solvent of drifting, tumbling molecules with honest bond orders and real curated reaction chemistry.",
+    essence: "a solvent of drifting molecules, curated reaction chemistry, and one bounded H₂ field whose self-consistent correction may settle or refuse.",
     moves: [
       "tap → a thermal kick, lighter molecules flying further than heavy ones",
       "triple-tap → condenses a molecule under the hand, or warms one already there",
@@ -1117,6 +1117,7 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
       "rapid train past seven → fires a reaction with a docked partner, or a heat storm through the solvent",
       "hold on open field (dwell) → condenses a molecule, bond by bond",
       "hold a molecule near a compatible partner → charges a real reaction; at the ceremony tier it fires",
+      "hold an isolated H₂ → changes its H–H separation; a 20 hz rhf density correction tightens toward rest, or refuses beyond 0.60–1.20 å while the last trusted field remains",
       "flick → throws a molecule tumbling with a doppler pair of notes",
       "drum two spots alternately → a convection cell wakes between the hands and the molecules shuttle across it, light ones first",
       "a steady tap tempo → the vibration modes lock to your pulse, a metronomic hand carrying it more than twice as far",
@@ -1126,15 +1127,19 @@ const CORE_GUIDE_ROOMS: GuideRoom[] = [
     finds: [
       "every compound has one behavioral tell — CO₂ warms the whole field, water finds water and leans together",
       "a dashed arc breathes between two molecules that could react, proposed without a word of text",
+      "the H₂ tension is successive density-matrix change, not electron motion, reaction progress, or physical relaxation time",
+      "the electronic instrument is neutral singlet H₂ in restricted hartree–fock / sto-3g only: 25 pyscf reference nodes and 24 midpoint checks guard a quadratic integral interpolation; it is not dft, ks-fno, dissociation physics, or a general solver",
     ],
-    keeps: "the molecules you've condensed",
+    keeps: "the molecules you've condensed, and only the last verified H₂ field — never an unsettled candidate",
     plain: {
       what:
-        "this room is a tank of drifting, tumbling molecules with honest chemistry: bonds have real strengths, and only compatible partners can react. watch for the dashed arc — it appears between two molecules that could react, like a suggestion.",
+        "this room is a tank of drifting molecules with honest, carefully limited chemistry. one hydrogen pair also carries a tiny electron-density calculation: it repeatedly corrects its answer, keeps a settled result, and refuses any H–H distance outside 0.60–1.20 å instead of pretending. it uses restricted hartree–fock with the small sto-3g basis for neutral singlet H₂ only, not dft, machine learning, electron motion, or a general chemistry solver.",
       how: [
         "tap → a kick of heat; light molecules fly farther than heavy ones",
         "press and hold on open space → builds a molecule, bond by bond",
         "hold a molecule near a compatible partner → charges a real reaction; a slow count of three fires it",
+        "hold the isolated H₂ → changes the distance between its two nuclei; the field tightens as the density calculation corrects itself",
+        "push that H₂ beyond its supported distance → the attempt refuses and the last settled field stays visible until you release and try again",
         "flick → throws a molecule tumbling across the tank",
         "tap three times → condenses a molecule under your hand; five times → the nearest one dissolves",
         "put two fingers down and twist → shows the chemical diagram version, with the bonds drawn honestly",

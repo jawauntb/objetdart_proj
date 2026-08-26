@@ -21,6 +21,7 @@ public final class RendererProbe: FieldSurfaceRenderer, AtomSystemRenderer, Mole
   public private(set) var submittedMoleculeCount = 0
   public private(set) var lastMoleculeBodyCount: Int?
   public private(set) var lastMoleculeTick: Int?
+  public private(set) var lastMoleculeH2BodyID: UInt64?
   public private(set) var submittedSolarCount = 0
   public private(set) var lastSolarBodyCount: Int?
   public private(set) var lastSolarTick: Int?
@@ -51,6 +52,7 @@ public final class RendererProbe: FieldSurfaceRenderer, AtomSystemRenderer, Mole
     submittedMoleculeCount += 1
     lastMoleculeBodyCount = snapshot.bodies.count
     lastMoleculeTick = snapshot.tick
+    lastMoleculeH2BodyID = snapshot.h2?.bodyID
   }
   public func submitSolar(_ snapshot: SolarRenderSnapshot) {
     submittedSolarCount += 1

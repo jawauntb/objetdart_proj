@@ -29,7 +29,8 @@
  * (hairline bonds, real skeletal letters — notation, the one lettered
  * surface). Rhythm entrains the vibration modes; a flick sends a molecule
  * tumbling with a doppler note, the light ones flying farther than the
- * heavy. The field persists in `objetdart:molecules:v1`; a quiet control
+ * heavy. The field persists in `objetdart:molecules:v2` and reads v1 as
+ * rollback input; a quiet control
  * at the bottom lets the solution clear. Pinch is deliberately unbound —
  * ScaleTravel owns it, so pinching travels the manifold (cells above,
  * atoms below).
@@ -51,7 +52,7 @@ import {
   onVisibility,
   resolveDpr,
 } from "@/lib/room-runtime";
-import { clocksFrom } from "@/lib/webgl/sizing";
+import { BREATH_HZ } from "@/lib/webgl/sizing";
 import {
   MAX_MOLECULES,
   MOLECULE_FAMILIES,
@@ -69,8 +70,43 @@ import {
   type MoleculeMorph,
 } from "@/lib/chemistry";
 import { cascade, reactionForPair, resolveReaction } from "@/lib/stoichiometry";
+import {
+  CANONICAL_H2_SEED,
+  createMoleculeOnOpenField,
+  createMoleculeTargetBody,
+  initializeMoleculeCreationState,
+  resolveBoundMoleculeContact,
+  resolveMoleculeContact,
+  type MoleculeContactBinding,
+  type MoleculeCreationState,
+} from "@/lib/molecule-h2-targeting";
+import {
+  H2_RHF_PERSISTENCE_MODEL,
+  MOLECULE_STORAGE_V1_KEY,
+  MOLECULE_STORAGE_V2_KEY,
+  commitMoleculePersistence,
+  migrateMoleculePersistence,
+  readMoleculePersistence,
+  type MoleculeH2StateInput,
+  type MoleculePersistenceEnvelope,
+} from "@/lib/molecule-persistence";
+import {
+  createH2RHFAuthority,
+  createH2RHFAdapter,
+  holdDurationToSeparation,
+  type H2RHFAdapter,
+  type H2RHFAuthority,
+  type H2RHFSnapshot,
+} from "@/lib/h2-rhf";
+import { createH2RHFTransitionCueDeduper, type H2RHFTransitionCue } from "@/lib/h2-rhf-presentation";
+import { writeH2RHFProjection } from "@/lib/h2-rhf-presentation";
+import {
+  createH2RHFWebGLField,
+  updateH2RHFFieldClock,
+  writeH2RHFFieldStateValues,
+} from "@/lib/h2-rhf-webgl";
+import { createGLStage, FULLSCREEN_VERT_UNIT } from "@/lib/webgl/stage";
 
-const STORE_KEY = "objetdart:molecules:v1";
 const MOTE_COUNT = 80;
 const RETIRE_MS = 1200;
 
@@ -119,8 +155,6 @@ type Vortex = { x: number; y: number; omega: number; born: number };
 type Speck = { x: number; y: number; vx: number; vy: number; born: number; life: number; r: number; color: string };
 type PendingNote = { at: number; midi: number; ms: number };
 
-type Stored = { molecules: Array<{ id: string; seed: number; nx: number; ny: number }> };
-
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const clamp01 = (v: number) => clamp(v, 0, 1);
 
@@ -162,14 +196,14 @@ const LENS_OFFSETS_1: readonly number[] = [0];
 const LENS_OFFSETS_2: readonly number[] = [-1, 1];
 const LENS_OFFSETS_3: readonly number[] = [-1.5, 0, 1.5];
 
-function makeMol(seed: number, nx: number, ny: number, built: number): Mol {
+function makeMol(id: string, seed: number, nx: number, ny: number, built: number): Mol {
   const morph = moleculeFromSeed(seed);
   const compound = compoundByKey(morph.compound);
   const massK = compound
     ? clamp(4.5 / Math.sqrt(Math.max(1, molecularWeight(compound))), 0.45, 1.5)
     : 1;
   return {
-    id: `mo-${seed.toString(36)}`,
+    id,
     seed,
     nx,
     ny,
@@ -192,29 +226,14 @@ function makeMol(seed: number, nx: number, ny: number, built: number): Mol {
   };
 }
 
-// the first look is never an empty beaker — four deterministic residents
-const STARTERS: Array<[number, number]> = [
-  [0.3, 0.36],
-  [0.68, 0.3],
-  [0.42, 0.66],
-  [0.72, 0.68],
+// The first look is never an empty beaker: four deterministic residents,
+// exactly one of them the evidence-backed canonical H₂ body.
+const STARTERS: ReadonlyArray<readonly [number, number, number | null]> = [
+  [0.3, 0.36, CANONICAL_H2_SEED],
+  [0.68, 0.3, null],
+  [0.42, 0.66, null],
+  [0.72, 0.68, null],
 ];
-
-function loadStored(): Stored | null {
-  try {
-    const raw = window.localStorage.getItem(STORE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Stored;
-    if (!parsed || !Array.isArray(parsed.molecules)) return null;
-    return {
-      molecules: parsed.molecules.filter(
-        (m) => m && typeof m.seed === "number" && typeof m.nx === "number" && typeof m.ny === "number",
-      ),
-    };
-  } catch {
-    return null;
-  }
-}
 
 /** midi voice of a molecule — a middle register, brighter than the plasm below the drop */
 function midiOf(morph: MoleculeMorph): number {
@@ -224,20 +243,39 @@ function midiOf(morph: MoleculeMorph): number {
 export default function MoleculesField() {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
   // §8c — the quiet clear: visible only when molecules stand; wired by the effect
   const [hasMols, setHasMols] = useState(false);
+  const [h2Announcement, setH2Announcement] = useState("");
   const clearRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     const wrap = wrapRef.current;
     const canvas = canvasRef.current;
-    if (!wrap || !canvas) return;
+    const webglCanvas = webglCanvasRef.current;
+    if (!wrap || !canvas || !webglCanvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
     // ————— state (all refs of the effect closure) —————
     let mols: Mol[] = [];
-    let seedCount = 0;
+    let nextOrdinal = 0;
+    let creationState: MoleculeCreationState<{ id: string; seed: number; compound: string; retiring?: boolean }> = initializeMoleculeCreationState({
+      status: "missing",
+      molecules: [],
+    });
+    let storageWritable = true;
+    let persistedH2: MoleculeH2StateInput | null = null;
+    let h2Authority: H2RHFAuthority | null = null;
+    let h2Adapter: H2RHFAdapter | null = null;
+    let h2Snapshot: H2RHFSnapshot | null = null;
+    let h2BodyId: string | null = null;
+    let h2ContactEpoch = 0;
+    let h2PersistedGeneration = 0;
+    const h2CueDeduper = createH2RHFTransitionCueDeduper();
+    const h2ProjectionScratch = new Float32Array(8);
+    let h2WebGLField: ReturnType<typeof createH2RHFWebGLField> = null;
+    let h2Sleeping = false;
     /** Which change of conditions the tier-3 train brings next. */
     let conditionCycle = 0;
     /** The highest rung this tap train has already fired; 0 between trains. */
@@ -308,17 +346,29 @@ export default function MoleculesField() {
     let cursorVisible = false;
     let kbCharge = 0;
     let kbMolId: string | null = null;
+    let kbBinding: MoleculeContactBinding | null = null;
+    let kbStartEventTime = 0;
     let lastStirSoundAt = 0;
     let lastStreamSoundAt = 0;
     let lastScrubAt = 0;
     let lastChargeNoteAt = 0;
     let lastSeasonSoundAt = 0;
-    const hold: { molId: string | null; partnerId: string | null; onExisting: boolean; seeded: boolean; reacted: boolean } = {
+    const hold: {
+      molId: string | null;
+      partnerId: string | null;
+      binding: MoleculeContactBinding | null;
+      onExisting: boolean;
+      seeded: boolean;
+      reacted: boolean;
+      h2ElapsedMs: number;
+    } = {
       molId: null,
       partnerId: null,
+      binding: null,
       onExisting: false,
       seeded: false,
       reacted: false,
+      h2ElapsedMs: 0,
     };
 
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -330,8 +380,31 @@ export default function MoleculesField() {
     const gov = createFrameGovernor();
     let sleeping = false;
     let galleryPaused = false;
-    const offVis = onVisibility((hidden) => { sleeping = hidden; });
-    const offGalleryPause = onGalleryPause((p) => { galleryPaused = p; });
+    const offVis = onVisibility((hidden) => {
+      sleeping = hidden;
+      h2Sleeping = hidden;
+      h2Adapter?.onVisibility(hidden);
+      last = performance.now();
+      if (!hidden) h2WebGLField?.resize();
+    });
+    const offGalleryPause = onGalleryPause((p) => {
+      galleryPaused = p;
+      h2Sleeping = p;
+      h2Adapter?.onVisibility(p);
+      last = performance.now();
+      if (!p) h2WebGLField?.resize();
+    });
+
+    h2WebGLField = createH2RHFWebGLField(webglCanvas, {
+      createGLStage,
+      FULLSCREEN_VERT_UNIT,
+    }, {
+      wrap,
+      label: "molecules-h2-rhf",
+      reducedMotion: reduce,
+      embedded: isEmbeddedFrame(),
+      maxDpr: 1.5,
+    });
 
     // the world-law's slow cycle (three-finger twist): the solvent's own
     // season, 0..1 cyclic — a warm/cool drift in the candlelight, nothing else
@@ -378,40 +451,153 @@ export default function MoleculesField() {
       ctx.globalAlpha = 1;
     };
 
-    // ————— persistence —————
+    // ————— stable identity + v2 persistence —————
+    const nextMoleculeId = (preferred: string | null = null): string => {
+      const occupied = preferred !== null && mols.some((m) => m.id === preferred);
+      const id = preferred && !occupied ? preferred : `mo-${nextOrdinal}`;
+      nextOrdinal += 1;
+      return id;
+    };
+
+    const dropH2Binding = (bodyId: string | null = null) => {
+      if (bodyId !== null && h2BodyId !== bodyId) return;
+      h2Snapshot = h2Authority ? h2Authority.cancel() : null;
+      h2Authority = null;
+      h2Adapter = null;
+      h2BodyId = null;
+      persistedH2 = null;
+      h2PersistedGeneration = 0;
+      dirty = true;
+    };
+
+    const currentH2State = (): MoleculeH2StateInput | null => {
+      if (!h2BodyId || !h2Authority) return persistedH2;
+      const body = mols.find((m) => m.id === h2BodyId && !m.retiringAt);
+      const lastGood = (h2Snapshot ?? h2Authority.snapshot()).lastGood;
+      if (!body || !lastGood) return null;
+      return {
+        bodyId: body.id,
+        model: { ...H2_RHF_PERSISTENCE_MODEL },
+        lastGood,
+      };
+    };
+
     const save = (force = false) => {
       const now = performance.now();
       setHasMols(mols.some((m) => !m.retiringAt));
       if (!force && now - lastSaveAt < 800) { dirty = true; return; }
       lastSaveAt = now;
       dirty = false;
+      if (!storageWritable) return;
+      const h2 = currentH2State();
+      if (h2 === null && h2BodyId !== null) dropH2Binding();
+      const input = {
+        molecules: mols
+          .filter((m) => !m.retiringAt)
+          .map((m) => ({ id: m.id, seed: m.seed, nx: m.nx, ny: m.ny })),
+        nextOrdinal,
+        h2: h2 ?? persistedH2,
+      };
       try {
-        const stored: Stored = {
-          molecules: mols
-            .filter((m) => !m.retiringAt)
-            .map((m) => ({ id: m.id, seed: m.seed, nx: m.nx, ny: m.ny })),
-        };
-        window.localStorage.setItem(STORE_KEY, JSON.stringify(stored));
-      } catch { /* quota; the solution lives on in memory */ }
+        const committed = commitMoleculePersistence(window.localStorage, input, {
+          oldKey: MOLECULE_STORAGE_V1_KEY,
+          newKey: MOLECULE_STORAGE_V2_KEY,
+        });
+        if (!committed.ok) {
+          // A corrupt/read-failed v2 destination is not ours to overwrite.
+          // Keep the living scene usable, but retain the rollback bytes and
+          // retry only when the caller gives storage a fresh opportunity.
+          storageWritable = committed.failure !== "malformed" && committed.failure !== "read-failed";
+          dirty = true;
+        } else {
+          persistedH2 = input.h2 ?? null;
+          if (persistedH2?.lastGood) h2PersistedGeneration = persistedH2.lastGood.promotionGeneration;
+        }
+      } catch {
+        dirty = true;
+      }
     };
 
-    const stored = loadStored();
-    if (stored && stored.molecules.length > 0) {
-      mols = stored.molecules
+    const restorePersistence = (): MoleculePersistenceEnvelope | null => {
+      let v2;
+      try {
+        v2 = readMoleculePersistence(window.localStorage, MOLECULE_STORAGE_V2_KEY);
+      } catch {
+        v2 = { status: "read-failed" as const, error: new Error("v2 read failed") };
+      }
+      if (v2.status === "valid-empty" || v2.status === "valid-populated") {
+        if (v2.sourceVersion === 1) {
+          const upgraded = migrateMoleculePersistence(window.localStorage, {
+            oldKey: MOLECULE_STORAGE_V1_KEY,
+            newKey: MOLECULE_STORAGE_V2_KEY,
+          });
+          if (upgraded.ok) return upgraded.state;
+          storageWritable = upgraded.failure !== "malformed" && upgraded.failure !== "read-failed";
+        }
+        return v2.state;
+      }
+      let v1;
+      try {
+        v1 = readMoleculePersistence(window.localStorage, MOLECULE_STORAGE_V1_KEY);
+      } catch {
+        v1 = { status: "read-failed" as const, error: new Error("v1 read failed") };
+      }
+      if (v2.status !== "missing" && (v1.status !== "valid-empty" && v1.status !== "valid-populated")) {
+        // A broken v2 may use a valid v1 rollback in memory, but never turns
+        // into fresh starters when both records are unsafe.
+        storageWritable = false;
+      }
+      if (v1.status === "valid-empty" || v1.status === "valid-populated") {
+        // v1 migration is attempted only when v2 is genuinely missing.  A
+        // corrupt v2 remains untouched and the parsed v1 state is rollback-only.
+        if (v2.status === "missing") {
+          const migrated = commitMoleculePersistence(window.localStorage, v1.state);
+          if (!migrated.ok) storageWritable = migrated.failure !== "malformed" && migrated.failure !== "read-failed";
+        }
+        return v1.state;
+      }
+      if (v2.status === "missing" && v1.status === "missing") return null;
+      storageWritable = false;
+      return null;
+    };
+
+    const storedState = restorePersistence();
+    if (storedState) {
+      nextOrdinal = storedState.nextOrdinal;
+      persistedH2 = storedState.h2;
+      h2PersistedGeneration = persistedH2?.lastGood?.promotionGeneration ?? 0;
+      mols = storedState.molecules
         .slice(-MAX_MOLECULES)
-        .map((m) => {
-          const mol = makeMol(m.seed, clamp01(m.nx), clamp01(m.ny), Infinity);
-          return mol;
-        });
-      seedCount = mols.length;
+        .map((m) => makeMol(m.id, m.seed, clamp01(m.nx), clamp01(m.ny), Infinity));
+      creationState = initializeMoleculeCreationState({
+        status: storedState.molecules.length === 0 ? "valid-empty" : "valid-populated",
+        molecules: mols.map((m) => ({ id: m.id, seed: m.seed, compound: m.morph.compound })),
+      });
+    } else if (storageWritable) {
+      mols = STARTERS.map(([nx, ny, canonicalSeed], i) => {
+        const seed = canonicalSeed ?? hashSeed(Math.round(nx * 883), Math.round(ny * 877), i);
+        return makeMol(canonicalSeed === CANONICAL_H2_SEED ? "h2-1" : nextMoleculeId(null), seed, nx, ny, Infinity);
+      });
+      // The first view is the only load path which seeds H₂ immediately.
+      nextOrdinal = Math.max(nextOrdinal, mols.length);
+      creationState = initializeMoleculeCreationState({
+        status: "missing",
+        molecules: mols.map((m) => ({ id: m.id, seed: m.seed, compound: m.morph.compound })),
+        canonicalH2Starter: {
+          id: mols[0].id,
+          seed: mols[0].seed,
+          compound: mols[0].morph.compound,
+        },
+      });
     } else {
-      mols = STARTERS.map(([nx, ny], i) =>
-        makeMol(hashSeed(Math.round(nx * 883), Math.round(ny * 877), i), nx, ny, Infinity),
-      );
-      seedCount = mols.length;
-      save(true);
+      // Both records are unsafe: fail closed in memory, never fabricate a new
+      // population over evidence the storage boundary could not read.
+      mols = [];
+      creationState = initializeMoleculeCreationState({ status: "valid-empty", molecules: [] });
     }
+    if (persistedH2 && !mols.some((m) => m.id === persistedH2?.bodyId && !m.retiringAt)) persistedH2 = null;
     setHasMols(mols.length > 0);
+    if (!storedState && storageWritable && mols.length > 0) save(true);
 
     // ————— helpers —————
     const audio = () => getFieldAudio();
@@ -447,6 +633,7 @@ export default function MoleculesField() {
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      h2WebGLField?.resize();
       if (motes.length === 0) {
         for (let i = 0; i < MOTE_COUNT; i++) {
           motes.push({ x: twinkleHash(i + 29) * width, y: twinkleHash(i + 631) * height, vx: 0, vy: 0 });
@@ -485,6 +672,158 @@ export default function MoleculesField() {
       return best;
     };
 
+    const targetBodies = () => mols
+      .filter((m) => !m.retiringAt)
+      .map((m) => createMoleculeTargetBody({
+        id: m.id,
+        seed: m.seed,
+        compound: m.morph.compound,
+        x: m.sx >= 0 ? m.sx : m.nx * width,
+        y: m.sy >= 0 ? m.sy : m.ny * height,
+        radius: m.sr > 0 ? m.sr : Math.min(width, height) * m.morph.radius,
+        closed: m.closed,
+        retiring: !!m.retiringAt,
+      }));
+
+    const ensureH2Authority = (body: Mol): H2RHFAuthority | null => {
+      if (body.morph.compound !== "H2" || body.retiringAt) return null;
+      if (h2Authority && h2BodyId === body.id && h2Adapter) return h2Authority;
+      if (h2Authority && h2BodyId !== body.id) {
+        const previous = currentH2State();
+        if (previous) persistedH2 = previous;
+        h2Snapshot = h2Authority.cancel();
+        h2Authority = null;
+        h2Adapter = null;
+        h2BodyId = null;
+      }
+      const restored = persistedH2?.bodyId === body.id ? persistedH2.lastGood : undefined;
+      h2Authority = restored
+        ? createH2RHFAuthority({ initialTargetId: body.id, initialLastGood: restored })
+        : createH2RHFAuthority({ initialTargetId: body.id });
+      h2Adapter = createH2RHFAdapter(h2Authority, 50);
+      h2BodyId = body.id;
+      h2Snapshot = h2Authority.snapshot();
+      h2CueDeduper.reset();
+      return h2Authority;
+    };
+
+    const emitH2Cues = (cues: readonly H2RHFTransitionCue[], snapshot: H2RHFSnapshot | null) => {
+      for (const cue of cues) {
+        setH2Announcement(cue.accessibility.announcement);
+        if (cue.cueKind === "correction") {
+          try { audio().spark(); } catch { /* noop */ }
+          try { haptics.ripple(cue.sensory.intensity); } catch { /* noop */ }
+        } else if (cue.cueKind === "settled") {
+          try { audio().chime(); } catch { /* noop */ }
+          try { haptics.bloom(); } catch { /* noop */ }
+        } else {
+          try { audio().refuse(); } catch { /* noop */ }
+          try { haptics.chop(); } catch { /* noop */ }
+        }
+        if (cue.outcome === "promoted" && cue.promotionGeneration > h2PersistedGeneration) {
+          h2PersistedGeneration = cue.promotionGeneration;
+          persistedH2 = snapshot?.lastGood && h2BodyId
+            ? {
+              bodyId: h2BodyId,
+              model: { ...H2_RHF_PERSISTENCE_MODEL },
+              lastGood: snapshot.lastGood,
+            }
+            : currentH2State();
+          dirty = true;
+          save(true);
+        }
+      }
+    };
+
+    const h2RequestFor = (elapsedMs: number, intensity: number) => {
+      if (!h2Authority || !h2Adapter || !h2BodyId) return;
+      const start = h2Snapshot?.lastGood?.separationAngstrom ?? 0.9;
+      const mapped = holdDurationToSeparation(elapsedMs, intensity, start);
+      h2Adapter.queue({
+        kind: "request",
+        targetId: h2BodyId,
+        separationAngstrom: mapped.separationAngstrom,
+        rawSeparationAngstrom: mapped.rawSeparationAngstrom,
+      });
+    };
+
+    const beginH2Contact = (binding: MoleculeContactBinding, body: Mol) => {
+      const authority = ensureH2Authority(body);
+      if (!authority || !h2Adapter) return;
+      const start = h2Snapshot?.lastGood?.separationAngstrom ?? 0.9;
+      h2Adapter.queue({
+        kind: "begin-contact",
+        contactEpoch: binding.contactEpoch ?? ++h2ContactEpoch,
+        targetId: body.id,
+        separationAngstrom: start,
+        rawSeparationAngstrom: start,
+      });
+    };
+
+    const releaseH2Contact = (elapsedMs: number, intensity: number) => {
+      if (!h2Authority || !h2Adapter || !h2BodyId) return;
+      const start = h2Snapshot?.lastGood?.separationAngstrom ?? 0.9;
+      const mapped = holdDurationToSeparation(elapsedMs, intensity, start);
+      h2Adapter.queue({
+        kind: "release",
+        separationAngstrom: mapped.separationAngstrom,
+        rawSeparationAngstrom: mapped.rawSeparationAngstrom,
+      });
+    };
+
+    const updateH2WebGL = (breath: number, time: number, snapshot: H2RHFSnapshot | null) => {
+      if (!h2WebGLField) return;
+      const body = h2BodyId ? mols.find((m) => m.id === h2BodyId && !m.retiringAt) ?? null : null;
+      let projectionOk = false;
+      let residual: number | null = null;
+      let disposition = snapshot?.disposition ?? "idle";
+      let separationPx = body ? Math.max(1, body.sr * 1.35) : 1;
+      if (body && snapshot && snapshot.targetId === body.id) {
+        const source = snapshot.disposition === "correcting"
+          ? snapshot.movingCandidate ?? snapshot.candidate
+          : snapshot.lastGood;
+        const separationAngstrom = source && "rawSeparationAngstrom" in source
+          ? source.rawSeparationAngstrom
+          : source?.separationAngstrom ?? 0.75;
+        separationPx = Math.max(1, body.sr * (1.1 + separationAngstrom * 0.42));
+        projectionOk = writeH2RHFProjection(snapshot, {
+          targetId: body.id,
+          centerX: body.sx,
+          centerY: body.sy,
+          radiusPx: body.sr,
+          separationPx,
+        }, reduce, h2ProjectionScratch);
+        residual = snapshot.disposition === "correcting" ? snapshot.movingCandidate?.residual ?? null : null;
+      } else {
+        h2ProjectionScratch.fill(0);
+      }
+      const axisX = body ? Math.cos(body.rot) : 1;
+      const axisY = body ? Math.sin(body.rot) : 0;
+      writeH2RHFFieldStateValues(
+        h2WebGLField.state,
+        body?.sx ?? 0,
+        body?.sy ?? 0,
+        body?.sr ?? 1,
+        axisX,
+        axisY,
+        separationPx,
+        h2ProjectionScratch,
+        residual,
+        disposition,
+        breath,
+        time,
+        projectionOk,
+      );
+      updateH2RHFFieldClock(h2WebGLField.state, breath, time, projectionOk);
+      if (!h2Sleeping) h2WebGLField.render();
+    };
+
+    // A restored or canonical starter is visible to the field before the
+    // first contact.  A valid empty/populated record without H₂ remains
+    // untouched, so this never fabricates a scientific body.
+    const initialH2Body = mols.find((m) => m.morph.compound === "H2" && !m.retiringAt) ?? null;
+    if (initialH2Body) ensureH2Authority(initialH2Body);
+
     const burst = (x: number, y: number, colors: string[], n: number, speed: number) => {
       for (let i = 0; i < n; i++) {
         const a = (i / n) * Math.PI * 2 + twinkleHash(i + n) * 0.8;
@@ -507,6 +846,7 @@ export default function MoleculesField() {
       const { retired } = settlePopulation(alive, MAX_MOLECULES);
       for (const r of retired) {
         r.retiringAt = performance.now();
+        if (r.id === h2BodyId) dropH2Binding(r.id);
         note(midiOf(r.morph) - 12, 320); // a low word as the eldest dissolves
       }
     };
@@ -514,9 +854,24 @@ export default function MoleculesField() {
     const condense = (x: number, y: number): Mol | null => {
       const nx = clamp01(x / width);
       const ny = clamp(y / height, 0.08, 0.95);
-      const seed = hashSeed(Math.round(nx * 883), Math.round(ny * 877), seedCount);
-      seedCount += 1;
-      const m = makeMol(seed, nx, ny, 0.05);
+      creationState = initializeMoleculeCreationState({
+        status: creationState.status,
+        molecules: mols
+          .filter((q) => !q.retiringAt)
+          .map((q) => ({ id: q.id, seed: q.seed, compound: q.morph.compound, retiring: false })),
+      });
+      const callerSeed = hashSeed(Math.round(nx * 883), Math.round(ny * 877), nextOrdinal);
+      let created: Mol | null = null;
+      const result = createMoleculeOnOpenField(creationState, {
+        callerSeed,
+        makeMolecule: (seed) => {
+          created = makeMol(seed === CANONICAL_H2_SEED ? nextMoleculeId("h2-1") : nextMoleculeId(), seed, nx, ny, 0.05);
+          return { id: created.id, seed: created.seed, compound: created.morph.compound };
+        },
+      });
+      creationState = result.state;
+      if (created === null) return null;
+      const m: Mol = created;
       m.closed = false;
       mols.push(m);
       retireOldest();
@@ -661,6 +1016,7 @@ export default function MoleculesField() {
             const now = performance.now();
             for (const m of chosen) {
               m.retiringAt = now;
+              if (m.id === h2BodyId) dropH2Binding(m.id);
               const d = Math.max(1, Math.hypot(mx - m.sx, my - m.sy));
               m.pushX += ((mx - m.sx) / d) * 26; // the consumed lean into the work
               m.pushY += ((my - m.sy) / d) * 26;
@@ -671,7 +1027,7 @@ export default function MoleculesField() {
               const rad = productSeeds.length > 1 ? (a.sr + b.sr) * 0.45 : 0;
               const nx = clamp01((mx + Math.cos(ang) * rad) / Math.max(1, width));
               const ny = clamp((my + Math.sin(ang) * rad) / Math.max(1, height), 0.08, 0.95);
-              const p = makeMol(ps.seed, nx, ny, Math.max(1, Math.floor(moleculeFromSeed(ps.seed).bonds.length * 0.55)));
+              const p = makeMol(nextMoleculeId(), ps.seed, nx, ny, Math.max(1, Math.floor(moleculeFromSeed(ps.seed).bonds.length * 0.55)));
               p.closed = false;
               p.heat = resolution.energy > 0 ? 1.4 : 0.2;
               mols.push(p);
@@ -691,9 +1047,11 @@ export default function MoleculesField() {
       const seed = reactionProductSeed(a.seed, b.seed);
       const nx = (a.nx + b.nx) / 2;
       const ny = (a.ny + b.ny) / 2;
-      const p = makeMol(seed, nx, ny, Math.max(1, Math.floor(moleculeFromSeed(seed).bonds.length * 0.55)));
+      const p = makeMol(nextMoleculeId(), seed, nx, ny, Math.max(1, Math.floor(moleculeFromSeed(seed).bonds.length * 0.55)));
       p.closed = false;
       p.heat = 1.6; // reactions run hot for a moment
+      if (a.id === h2BodyId) dropH2Binding(a.id);
+      if (b.id === h2BodyId) dropH2Binding(b.id);
       mols = mols.filter((m) => m !== a && m !== b);
       mols.push(p);
       retireOldest();
@@ -880,6 +1238,7 @@ export default function MoleculesField() {
           for (const m of consumed) {
             if (m.retiringAt) continue;
             m.retiringAt = performance.now();
+            if (m.id === h2BodyId) dropH2Binding(m.id);
             const d = Math.max(1, Math.hypot(mx - m.sx, my - m.sy));
             m.pushX += ((mx - m.sx) / d) * 30;
             m.pushY += ((my - m.sy) / d) * 30;
@@ -897,6 +1256,7 @@ export default function MoleculesField() {
               const ang = (pi / Math.max(1, term.n)) * Math.PI * 2 + si;
               const rad = Math.min(width, height) * 0.05;
               const p = makeMol(
+                nextMoleculeId(),
                 seed,
                 clamp01((mx + Math.cos(ang) * rad) / Math.max(1, width)),
                 clamp((my + Math.sin(ang) * rad) / Math.max(1, height), 0.08, 0.95),
@@ -963,7 +1323,17 @@ export default function MoleculesField() {
         }
       }
       hints.clear();
-      try { window.localStorage.setItem(STORE_KEY, JSON.stringify({ molecules: [] })); } catch { /* noop */ }
+      dropH2Binding();
+      creationState = initializeMoleculeCreationState({ status: "valid-empty", molecules: [] });
+      persistedH2 = null;
+      dirty = false;
+      try {
+        const cleared = commitMoleculePersistence(window.localStorage, { molecules: [], nextOrdinal, h2: null }, {
+          oldKey: MOLECULE_STORAGE_V1_KEY,
+          newKey: MOLECULE_STORAGE_V2_KEY,
+        });
+        if (!cleared.ok) dirty = true;
+      } catch { dirty = true; }
       setHasMols(false);
       try { audio().thud(); } catch { /* noop */ }
       try { haptics.roll(); } catch { /* noop */ }
@@ -1067,12 +1437,21 @@ export default function MoleculesField() {
         if (e.fingers !== 1) return;
         const { x, y } = toLocal(e.x, e.y);
         if (e.phase === "enter") {
-          const m = molAt(x, y);
-          hold.molId = m ? m.id : null;
-          hold.partnerId = null;
+          const binding = resolveMoleculeContact(targetBodies(), {
+            x,
+            y,
+            inputMode: "touch",
+            contactEpoch: ++h2ContactEpoch,
+          });
+          const m = binding.status === "bound" ? mols.find((q) => q.id === binding.bodyId && !q.retiringAt) ?? null : null;
+          hold.binding = binding.status === "bound" ? binding : null;
+          hold.molId = m?.id ?? null;
+          hold.partnerId = binding.status === "bound" ? binding.partnerId : null;
           hold.onExisting = !!m;
           hold.seeded = false;
           hold.reacted = false;
+          hold.h2ElapsedMs = 0;
+          if (m && binding.status === "bound" && binding.mode === "h2-rhf") beginH2Contact(binding, m);
           return;
         }
         if (e.phase === "release") {
@@ -1080,9 +1459,14 @@ export default function MoleculesField() {
           if (m) m.charge = 0;
           const p = mols.find((q) => q.id === hold.partnerId);
           if (p) p.charge = 0;
+          if (hold.binding?.status === "bound" && hold.binding.mode === "h2-rhf") {
+            releaseH2Contact(e.elapsed, e.intensity);
+          }
           hold.molId = null;
           hold.partnerId = null;
+          hold.binding = null;
           hold.onExisting = false;
+          hold.h2ElapsedMs = 0;
           save();
           return;
         }
@@ -1090,8 +1474,17 @@ export default function MoleculesField() {
         if (hold.onExisting && hold.molId) {
           const m = mols.find((q) => q.id === hold.molId);
           if (!m || m.retiringAt) return;
-          const partner = dockPartner(m);
-          hold.partnerId = partner ? partner.id : null;
+          if (hold.binding?.status === "bound" && hold.binding.mode === "h2-rhf") {
+            const continuation = resolveBoundMoleculeContact(hold.binding, targetBodies());
+            if (continuation.status !== "bound") {
+              h2Authority?.cancel();
+              return;
+            }
+            hold.h2ElapsedMs = e.elapsed;
+            h2RequestFor(e.elapsed, e.intensity);
+            return;
+          }
+          const partner = hold.partnerId ? mols.find((q) => q.id === hold.partnerId && !q.retiringAt && q.closed) ?? null : null;
           if (!partner || !m.closed) {
             // no partner in reach: the hand only warms what it holds
             m.heat = Math.min(2, m.heat + 0.02);
@@ -1366,6 +1759,37 @@ export default function MoleculesField() {
       },
     });
 
+    const assistiveActivation = (x: number, y: number) => {
+      const binding = resolveMoleculeContact(targetBodies(), {
+        x,
+        y,
+        inputMode: "assistive",
+        contactEpoch: ++h2ContactEpoch,
+      });
+      if (binding.status !== "bound") {
+        if (binding.reason === "no-hit") {
+          const seeded = condense(x, y);
+          if (seeded) buildMol(seeded, 0.4);
+        }
+        return;
+      }
+      const m = mols.find((q) => q.id === binding.bodyId && !q.retiringAt) ?? null;
+      if (!m) return;
+      if (binding.mode === "reaction" && binding.partnerId) {
+        const partner = mols.find((q) => q.id === binding.partnerId && !q.retiringAt) ?? null;
+        if (partner) react(m, partner);
+        return;
+      }
+      if (binding.mode === "h2-rhf") {
+        beginH2Contact(binding, m);
+        h2RequestFor(900, 1);
+        releaseH2Contact(900, 1);
+        return;
+      }
+      if (m.closed) thermalKick(x, y, 0.6);
+      else buildMol(m, 0.4);
+    };
+
     // ————— keyboard dialect (same verbs, quieter) —————
     const onKeyDown = (ev: KeyboardEvent) => {
       const step = 0.05;
@@ -1382,12 +1806,42 @@ export default function MoleculesField() {
       if (ev.key === "Enter" || ev.key === " ") {
         ev.preventDefault();
         lastInteractionAt = performance.now();
+        suppressAssistiveClick = true;
         if (!cursorVisible) { cursorVisible = true; return; }
         const x = cursorNx * width;
         const y = cursorNy * height;
-        const m = molAt(x, y);
-        if (m && m.closed) {
-          const partner = dockPartner(m);
+        let noHit = false;
+        if (!kbBinding) {
+          const contact = resolveMoleculeContact(targetBodies(), {
+            x,
+            y,
+            inputMode: "keyboard",
+            contactEpoch: ++h2ContactEpoch,
+          });
+          noHit = contact.status === "cancelled" && contact.reason === "no-hit";
+          kbBinding = contact.status === "bound" ? contact : null;
+          kbStartEventTime = ev.timeStamp;
+        }
+        const binding = kbBinding;
+        if (!binding || binding.status !== "bound") {
+          if (!ev.repeat && noHit) {
+            const seeded = condense(x, y);
+            if (seeded) buildMol(seeded, 0.4);
+          }
+          return;
+        }
+        const m = mols.find((q) => q.id === binding.bodyId && !q.retiringAt) ?? null;
+        if (!m) return;
+        if (binding.mode === "h2-rhf") {
+          // Every key press is a new semantic contact. Reusing the authority
+          // does not reuse its released/cancelled contact epoch.
+          if (!ev.repeat) beginH2Contact(binding, m);
+          const elapsed = Math.max(900, ev.timeStamp - kbStartEventTime);
+          h2RequestFor(elapsed, 1);
+          return;
+        }
+        if (binding.mode === "reaction" && binding.partnerId) {
+          const partner = mols.find((q) => q.id === binding.partnerId && !q.retiringAt && q.closed) ?? null;
           if (partner) {
             // held Enter repeats — the keyboard's ceremony
             if (kbMolId !== m.id) { kbMolId = m.id; kbCharge = 0; }
@@ -1404,9 +1858,9 @@ export default function MoleculesField() {
               kbMolId = null;
               react(m, partner);
             }
-          } else if (!ev.repeat) {
-            thermalKick(x, y, 0.6);
           }
+        } else if (!ev.repeat && m.closed) {
+          thermalKick(x, y, 0.6);
         } else if (!ev.repeat) {
           const seeded = condense(x, y);
           if (seeded) buildMol(seeded, 0.4);
@@ -1415,6 +1869,10 @@ export default function MoleculesField() {
     };
     const onKeyUp = (ev: KeyboardEvent) => {
       if (ev.key === "Enter" || ev.key === " ") {
+        if (kbBinding?.status === "bound" && kbBinding.mode === "h2-rhf") {
+          const elapsed = Math.max(900, ev.timeStamp - kbStartEventTime);
+          releaseH2Contact(elapsed, 1);
+        }
         const m = mols.find((q) => q.id === kbMolId);
         if (m) {
           m.charge = 0;
@@ -1423,14 +1881,46 @@ export default function MoleculesField() {
         }
         kbCharge = 0;
         kbMolId = null;
+        kbBinding = null;
       }
     };
     const onFocus = () => { focused = true; };
-    const onBlur = () => { focused = false; cursorVisible = false; save(true); };
+    const onBlur = () => {
+      focused = false;
+      cursorVisible = false;
+      if (kbBinding?.status === "bound" && kbBinding.mode === "h2-rhf" && h2Authority) {
+        // A lost keyup must not leave a moving candidate alive.  Cancel the
+        // authority immediately and discard queued keyboard commands before
+        // the next semantic contact can begin a fresh epoch.
+        h2Snapshot = h2Authority.cancel();
+        h2Adapter = createH2RHFAdapter(h2Authority, 50);
+      }
+      const m = mols.find((q) => q.id === kbMolId);
+      if (m) m.charge = 0;
+      kbCharge = 0;
+      kbMolId = null;
+      kbBinding = null;
+      save(true);
+    };
     wrap.addEventListener("keydown", onKeyDown);
     wrap.addEventListener("keyup", onKeyUp);
     wrap.addEventListener("focus", onFocus);
     wrap.addEventListener("blur", onBlur);
+    let suppressAssistiveClick = false;
+    const onAssistiveClick = (ev: MouseEvent) => {
+      // Touch browsers synthesize a detail=1 click; assistive activation is
+      // the detail=0 semantic path.  Keyboard handling marks its own click so
+      // Enter/Space cannot fire the command twice.
+      if (ev.detail !== 0 || suppressAssistiveClick) {
+        suppressAssistiveClick = false;
+        return;
+      }
+      const x = cursorNx * width;
+      const y = cursorNy * height;
+      lastInteractionAt = performance.now();
+      assistiveActivation(x, y);
+    };
+    wrap.addEventListener("click", onAssistiveClick);
     const onVis = () => { if (document.visibilityState === "hidden") save(true); };
     document.addEventListener("visibilitychange", onVis);
 
@@ -1675,9 +2165,23 @@ export default function MoleculesField() {
       if (!reduce && now - lastFrame < 30) return;
       lastFrame = now;
       const detail = detailForTier(tier);
-      const delta = Math.min(64, now - last);
+      // The first RAF timestamp may describe the frame boundary immediately
+      // before this effect sampled performance.now(). Never feed that small
+      // negative clock skew into the fixed-tick scientific adapter.
+      const delta = Math.max(0, Math.min(64, now - last));
       last = now;
       const dt = delta / 1000;
+
+      // The H₂ authority is renderer-free and advances only from this room's
+      // governed loop.  Hidden/gallery-paused time is rebased above, so no
+      // catch-up ticks can appear after a tab returns.
+      if (h2Adapter && h2Authority && !h2Sleeping) {
+        const advanced = h2Adapter.advanceTicks(delta);
+        if (advanced > 0) {
+          h2Snapshot = h2Authority.snapshot();
+          emitH2Cues(h2CueDeduper.drain(h2Snapshot), h2Snapshot);
+        }
+      }
 
       timeScale += (timeScaleTarget - timeScale) * Math.min(1, dt * 5);
       if (!reduce) localT += dt * timeScale;
@@ -1711,9 +2215,11 @@ export default function MoleculesField() {
       // two-finger pan: the frame eases toward the hand's nudge, then home
       panX += (panTargetX - panX) * Math.min(1, dt * 5);
       panY += (panTargetY - panY) * Math.min(1, dt * 5);
-      canvas.style.transform = (Math.abs(panX) > 0.05 || Math.abs(panY) > 0.05)
+      const panTransform = (Math.abs(panX) > 0.05 || Math.abs(panY) > 0.05)
         ? `translate(${panX.toFixed(1)}px, ${panY.toFixed(1)}px)`
         : "";
+      canvas.style.transform = panTransform;
+      webglCanvas.style.transform = panTransform;
       // the vessel's lean: solvent convection runs downhill with real gravity
       const gravX = streamX + tiltLeanX * 0.5;
       const gravY = streamY + tiltLeanY * 0.5;
@@ -1730,11 +2236,14 @@ export default function MoleculesField() {
       let audioT: number | null = null;
       try { audioT = audio().getAudioTime(); } catch { /* noop */ }
       const bt = audioT != null ? audioT : now / 1000;
-      const breath = bt * Math.PI * 2 * 0.14;
-      // the album's shared 7s breath (clocksFrom, 0..1) — the candle beneath
+      const breath = bt * Math.PI * 2 * BREATH_HZ;
+      // the album's shared 7s breath (0..1) — the candle beneath
       // the bench rides its amplitude ±10% so molecules breathe with the
       // shader rooms on either side in the gallery.
-      const { breath: __sharedBreath } = clocksFrom({ time: now / 1000, reducedMotion: reduce });
+      const __sharedBreath = reduce
+        ? 0.5
+        : Math.sin((now / 1000) * Math.PI * 2 * BREATH_HZ) * 0.5 + 0.5;
+      updateH2WebGL(__sharedBreath, localT, h2Snapshot);
 
       // the felt tells: one behavioral word per compound, subtle — CO₂
       // warms the field, flammables shiver near heat, the inert airs stay
@@ -1847,7 +2356,12 @@ export default function MoleculesField() {
       // molecules: assembly, tumble, decay of pushes/heat/charge, retirement
       for (let i = mols.length - 1; i >= 0; i--) {
         const m = mols[i];
-        if (m.retiringAt && now - m.retiringAt > RETIRE_MS) { mols.splice(i, 1); dirty = true; continue; }
+        if (m.retiringAt && now - m.retiringAt > RETIRE_MS) {
+          if (m.id === h2BodyId) dropH2Binding(m.id);
+          mols.splice(i, 1);
+          dirty = true;
+          continue;
+        }
         if (!m.closed) buildMol(m, dt * 0.9); // a condensing molecule finishes on its own
         // a mode does not run forever: the energy is radiated away, and what
         // radiates it is the dipole changing, which is why it stops
@@ -2153,8 +2667,11 @@ export default function MoleculesField() {
       wrap.removeEventListener("keyup", onKeyUp);
       wrap.removeEventListener("focus", onFocus);
       wrap.removeEventListener("blur", onBlur);
+      wrap.removeEventListener("click", onAssistiveClick);
       document.removeEventListener("visibilitychange", onVis);
       mq.removeEventListener?.("change", onMq);
+      h2WebGLField?.dispose();
+      h2WebGLField = null;
       save(true);
     };
   }, []);
@@ -2169,6 +2686,8 @@ export default function MoleculesField() {
         aria-label="a solvent kept dark and warm — rest a finger and a molecule assembles bond by bond; hold where two drift near and they react, with real stoichiometry when the neighbors allow; arrows walk, enter kindles and, held beside a neighbor, reacts"
       >
         <canvas ref={canvasRef} className="molecules-canvas" aria-hidden="true" />
+        <canvas ref={webglCanvasRef} className="molecules-h2-webgl" aria-hidden="true" />
+        <span className="sr-only" aria-live="polite">{h2Announcement}</span>
       </div>
 
       <LetGo label="let the solution clear" onLetGo={() => clearRef.current()} visible={hasMols} />
@@ -2225,6 +2744,16 @@ export default function MoleculesField() {
           cursor: crosshair;
           touch-action: none;
           z-index: 0;
+        }
+
+        .molecules-h2-webgl {
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          height: 100%;
+          display: block;
+          pointer-events: none;
+          z-index: 1;
         }
 
       ` }}

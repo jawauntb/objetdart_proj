@@ -28,7 +28,8 @@ Missing or malformed keys must fail bundle assembly.
     "modelVersions": {                   // one row per scene invoked in the run
       "wave":  "v1",
       "cell":  "v1",
-      "solar": "v1"
+      "solar": "v1",
+      "molecules": "h2-rhf-sto-3g-v1"
     },
     "contractVersions": {                // frozen at CONTRACT_VERSIONS.native
       "native": 1, "action": 1, "continuousGesture": 1,
@@ -168,6 +169,19 @@ Signposts are timestamped by `logicalTick` + monotonic wall-clock delta
 in µs. The stream is bounded per scenario to the same 64-entry ring the
 `UniverseHost.boundaries` uses; overflow is reported once and dropped.
 
+### bounded H₂ milestone projection
+
+Molecule-local H₂ outcomes reuse the shared signpost kinds rather than
+creating a renderer dialect. `field-correcting` is recorded at
+`authoritativelyApplied`; `field-settled` pairs the same immutable outcome ID
+with `checkpointPromoted`; every sensory answer completes at
+`sensoryConfirmed`. `field-refused` is authoritatively applied with one of
+`outside-envelope|max-iterations|reference-unverified|numerical-failure` and
+the retained last-good digest prefix. Each outcome payload names
+`modelVersion`, stable `bodyId`, contact `epoch`, logical `tick`, `kind`, and
+checkpoint digest when present. It never includes shader, Metal, frame,
+pixel, presentation phase, or mutable candidate buffers.
+
 ## Comparison policy
 
 `scenarios[i].comparison` is the machine-verifiable comparison that
@@ -190,6 +204,20 @@ layer:
     "worstRelative": 6.1e-10, "worstAbsolute": 8.3e-14,
     "referenceFixture": "scripts/native/fixtures/cell-reference.json" }
   ```
+
+- **H₂ semantic + tolerance policy** (molecules): action order, logical
+  ticks, milestone order, dispositions, promotion generation, and quantized
+  checkpoint digests compare exactly between TypeScript and Swift. Density,
+  energy, residual, and electron-count fields use the cassette-declared
+  tolerances. The comparison is rejected unless the independent PySCF verifier
+  has already passed all 25 nodes and all 24 midpoints; language parity alone
+  cannot approve the scientific payload.
+
+Every H₂ evidence bundle links the immutable cassette hash and the
+versioned scientific review whose decision is
+`approved-for-bounded-instrument`. A simulator run may prove deterministic
+authority, Metal wiring, and accessibility semantics, but it cannot be
+relabelled as physical haptic, sensor, energy, thermal, or hardware validation.
 
 `compare-cross-language-fixtures.mjs` (this unit) validates this shape
 against `packages/universe-contracts/src/simulation.ts` ReferenceCase

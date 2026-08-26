@@ -165,6 +165,13 @@ export type MoleculeMigrationOptions = {
   readonly cap?: number;
 };
 
+/** Options for a normal live v2 write.  The rollback key is never mutated. */
+export type MoleculeCommitOptions = {
+  readonly oldKey?: string;
+  readonly newKey?: string;
+  readonly cap?: number;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -465,7 +472,7 @@ export function parseMoleculePersistence(raw: string | null | undefined | unknow
 }
 
 /** Read one key and preserve a storage exception as read-failed. */
-export function readMoleculePersistence(storage: MoleculeStorage, key = MOLECULE_STORAGE_V2_KEY): MoleculeLoadResult {
+export function readMoleculePersistence(storage: MoleculeStorage, key: string = MOLECULE_STORAGE_V2_KEY): MoleculeLoadResult {
   try {
     return parseMoleculePersistence(storage.getItem(key));
   } catch (error) {
@@ -591,8 +598,7 @@ export function migrateMoleculePersistence(
   }
   if (
     v2.result.status === "malformed" ||
-    v2.result.status === "read-failed" ||
-    ((v2.result.status === "valid-empty" || v2.result.status === "valid-populated") && v2.result.sourceVersion === 1)
+    v2.result.status === "read-failed"
   ) {
     // Read v1 only to expose rollback material.  Its contents cannot authorize
     // overwriting a broken v2 destination.
@@ -606,10 +612,29 @@ export function migrateMoleculePersistence(
       error:
         v2.result.status === "read-failed"
           ? v2.result.error
-          : new Error(v2.result.status === "malformed" ? v2.result.reason : "v1-shaped payload cannot authorize v2"),
+          : new Error(v2.result.reason),
       rollbackRaw: rollback.raw,
       rollbackSource: rollback.result,
     };
+  }
+
+  if (
+    (v2.result.status === "valid-empty" || v2.result.status === "valid-populated") &&
+    v2.result.sourceVersion === 1
+  ) {
+    // A legacy envelope saved under the new key is still valid legacy data,
+    // not corruption. localStorage setItem is atomic, so canonicalizing it in
+    // place either succeeds completely or leaves the readable legacy bytes.
+    const rollback = readKey(storage, oldKey);
+    return writeAndValidateV2(
+      storage,
+      v2.result,
+      buildMoleculePersistenceEnvelope(v2.result.state),
+      oldKey,
+      newKey,
+      v2.raw,
+      rollback.result,
+    );
   }
 
   // v2 is genuinely absent.  Only now is v1 eligible for migration.
@@ -650,6 +675,71 @@ export function migrateMoleculePersistence(
   return writeAndValidateV2(storage, v1.result, state, oldKey, newKey, v1.raw, v2.result);
 }
 
+/**
+ * Commit the current molecule room state to its already-versioned v2 key.
+ *
+ * A live commit is deliberately narrower than migration: the destination may
+ * be absent or valid v2, but malformed/read-failed bytes are never replaced
+ * by a caller's new state.  The old v1 key is read only so it remains a real
+ * rollback source after a successful write.  Every successful set is followed
+ * by exact-byte and parsed-envelope readback validation.
+ */
+export function commitMoleculePersistence(
+  storage: MoleculeStorage,
+  input: MoleculePersistenceInput,
+  options: MoleculeCommitOptions = {},
+): MoleculeMigrationResult {
+  const oldKey = options.oldKey ?? MOLECULE_STORAGE_V1_KEY;
+  const newKey = options.newKey ?? MOLECULE_STORAGE_V2_KEY;
+  if (oldKey === newKey) {
+    const current = readKey(storage, newKey);
+    return {
+      ok: false,
+      failure: "write-failed",
+      source: current.result,
+      oldKey,
+      newKey,
+      error: new Error("commit destination must differ from rollback source"),
+      rollbackRaw: current.raw,
+    };
+  }
+
+  const v2 = readKey(storage, newKey);
+  if (v2.result.status === "malformed" || v2.result.status === "read-failed") {
+    return {
+      ok: false,
+      failure: v2.result.status === "read-failed" ? "read-failed" : "malformed",
+      source: v2.result,
+      oldKey,
+      newKey,
+      error: v2.result.status === "read-failed" ? v2.result.error : new Error(v2.result.reason),
+      rollbackRaw: null,
+    };
+  }
+  // A valid legacy payload accidentally stored under the v2 key remains a
+  // recoverable source. The canonical live commit below upgrades it atomically.
+
+  const rollback = readKey(storage, oldKey);
+
+  let state: MoleculePersistenceEnvelope;
+  try {
+    state = buildMoleculePersistenceEnvelope({ ...input, cap: options.cap ?? input.cap });
+  } catch (error) {
+    return {
+      ok: false,
+      failure: "malformed",
+      source: v2.result,
+      oldKey,
+      newKey,
+      error,
+      rollbackRaw: rollback.raw,
+      rollbackSource: rollback.result,
+    };
+  }
+  const source = v2.result.status === "missing" ? rollback.result : v2.result;
+  return writeAndValidateV2(storage, source, state, oldKey, newKey, rollback.raw, rollback.result);
+}
+
 // Descriptive aliases keep the boundary easy to discover for callers which
 // think in terms of “stored” records or a transaction rather than a migration.
 export const parseStoredMolecules = parseMoleculePersistence;
@@ -657,3 +747,4 @@ export const createMoleculeEnvelope = buildMoleculePersistenceEnvelope;
 export const serializeStoredMolecules = serializeMoleculePersistence;
 export const migrateStoredMolecules = migrateMoleculePersistence;
 export const transactMoleculePersistence = migrateMoleculePersistence;
+export const commitStoredMolecules = commitMoleculePersistence;

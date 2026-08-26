@@ -19,6 +19,7 @@ import {
   energyForH2Density,
   holdDurationToSeparation,
   interpolateH2Request,
+  validateH2RHFCheckpoint,
   validateH2RHFInput,
 } from "../src/lib/h2-rhf.ts";
 
@@ -52,6 +53,25 @@ function convergeReleased(authority, separation = midpoint, targetId = "h2-1") {
   assertDisposition(authority, "reference-unverified", "bad cassette becomes an explicit refusal");
   assert.equal(authority.snapshot().lastGood, null, "unverified input has no trusted fallback");
   assert.ok(authority.milestones().some((entry) => entry.kind === "reference-unverified"), "refusal milestone is renderer-free");
+}
+
+// — Restored last-good state is an exact, fail-closed boundary —
+{
+  const baseline = createH2RHFAuthority({ initialTargetId: "restored-h2" }).snapshot().lastGood;
+  const restored = createH2RHFAuthority({ initialTargetId: "restored-h2", initialLastGood: baseline });
+  assert.deepEqual(restored.snapshot().lastGood, baseline, "a trusted checkpoint hydrates byte-for-byte");
+  assert.ok(Object.isFrozen(restored.snapshot().lastGood), "hydrated checkpoint is frozen");
+  assert.ok(Object.isFrozen(restored.snapshot().lastGood.density), "hydrated density is cloned and frozen");
+  const invalid = { ...baseline, digest: "stale" };
+  const refused = createH2RHFAuthority({ initialTargetId: "restored-h2", initialLastGood: invalid });
+  assertDisposition(refused, "reference-unverified", "an invalid supplied checkpoint refuses instead of falling back");
+  assert.equal(refused.snapshot().lastGood, null, "invalid checkpoint cannot silently use a generated fallback");
+  const wrongTarget = createH2RHFAuthority({ initialTargetId: "other-body", initialLastGood: baseline });
+  assert.equal(wrongTarget.snapshot().lastGood, null, "checkpoint target must match the requested body");
+  const nullCheckpoint = createH2RHFAuthority({ initialTargetId: "restored-h2", initialLastGood: null });
+  assertDisposition(nullCheckpoint, "reference-unverified", "an explicitly supplied null checkpoint refuses instead of falling back");
+  assert.equal(nullCheckpoint.snapshot().lastGood, null, "null checkpoint cannot silently use a generated fallback");
+  assert.throws(() => validateH2RHFCheckpoint({ ...baseline, separationAngstrom: min - 0.001 }), /outside the trusted envelope/);
 }
 
 // — The exact two-AO map conserves the two-electron singlet —
@@ -207,9 +227,13 @@ for (const separation of [min - 1e-9, max + 1e-9]) {
 {
   const short = holdDurationToSeparation(900, 1);
   const long = holdDurationToSeparation(2400, 1);
+  const deeper = holdDurationToSeparation(2401, 1);
   assert.notEqual(short.rawSeparationAngstrom, long.rawSeparationAngstrom, "hold duration is a continuous axis");
   assert.equal(interpolateH2Request(short.rawSeparationAngstrom).supported, true, "raw short request is checked in the envelope");
   assert.equal(interpolateH2Request(long.rawSeparationAngstrom).supported, true, "raw long request is checked in the envelope");
+  assert.equal(long.rawSeparationAngstrom, max, "the support edge remains inclusive at 2400ms");
+  assert.equal(deeper.supported, false, "a deeper hold crosses the raw support boundary");
+  assert.equal(interpolateH2Request(deeper.rawSeparationAngstrom).supported, false, "outside support is checked before interpolation");
   assert.notEqual(short.separationAngstrom, long.separationAngstrom, "semantic quantization preserves the distinction");
 }
 

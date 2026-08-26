@@ -255,8 +255,13 @@ public func interpolateH2Request(_ rawSeparationAngstrom: Double, cassette: H2RH
 public func holdDurationToSeparation(_ durationMs: Double, intensity: Double = 1, startSeparationAngstrom: Double = 0.9) throws -> H2RHFHoldResult {
   guard durationMs.isFinite, intensity.isFinite, startSeparationAngstrom.isFinite else { throw H2RHFError.invalidInput("H2 hold mapping requires finite values") }
   let duration = max(0, durationMs)
-  let progress = min(1, duration / h2HoldMaxDurationMs)
-  let eased = progress * progress * (3 - 2 * progress)
+  let progress = duration / h2HoldMaxDurationMs
+  // The evidence envelope is the 2400 ms detent, not a clamp. Deeper holds
+  // continue along the same axis so the authority can refuse raw geometry
+  // outside its support instead of silently substituting the boundary.
+  let eased = progress <= 1
+    ? progress * progress * (3 - 2 * progress)
+    : 1 + (progress - 1) * 0.5
   let signedIntensity = min(1, max(-1, intensity))
   let travel = (H2RHFCassette.trusted.envelope.maxAngstrom - H2RHFCassette.trusted.envelope.minAngstrom) * 0.5
   let raw = startSeparationAngstrom + signedIntensity * travel * eased

@@ -26,6 +26,7 @@ import { MOTION, PALETTE, SPACING, TYPOGRAPHY, Z_ORDER } from "../design/tokens"
 import {
   GUIDE_ENTRIES,
   REVEAL_STEPS,
+  SCIENCE_NOTES_BY_SCENE,
   type GuideEntry,
   type GuideVerb,
   type GuideRevealStep,
@@ -55,6 +56,7 @@ export function GuideSheet({
   const { width } = useWindowDimensions();
   const isRegularWidth = width >= REGULAR_WIDTH_POINTS;
   const grouped = useMemo(() => groupByStep(revealedEntries), [revealedEntries]);
+  const scienceNote = SCIENCE_NOTES_BY_SCENE[scene];
 
   return (
     <View
@@ -89,6 +91,24 @@ export function GuideSheet({
           >
             {sceneField}
           </Text>
+          {scienceNote ? (
+            <View style={styles.scienceNote}>
+              <Text
+                style={styles.sciencePlain}
+                allowFontScaling
+                maxFontSizeMultiplier={3}
+              >
+                {scienceNote.plain}
+              </Text>
+              <Text
+                style={styles.scienceNotation}
+                allowFontScaling
+                maxFontSizeMultiplier={3}
+              >
+                {scienceNote.notation}
+              </Text>
+            </View>
+          ) : null}
           {reducedMotion ? (
             <Text
               style={styles.reducedMotion}
@@ -240,6 +260,20 @@ const styles = StyleSheet.create({
     color: PALETTE.ink.quiet,
     fontFamily: TYPOGRAPHY.editorial.family,
     fontSize: TYPOGRAPHY.editorial.sizes.body,
+    marginTop: SPACING.small,
+  },
+  scienceNote: {
+    marginTop: SPACING.medium,
+  },
+  sciencePlain: {
+    color: PALETTE.ink.plain,
+    fontFamily: TYPOGRAPHY.editorial.family,
+    fontSize: TYPOGRAPHY.editorial.sizes.body,
+  },
+  scienceNotation: {
+    color: PALETTE.ink.quiet,
+    fontFamily: TYPOGRAPHY.system.family,
+    fontSize: TYPOGRAPHY.system.sizes.caption,
     marginTop: SPACING.small,
   },
   reducedMotion: {

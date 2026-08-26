@@ -5,6 +5,7 @@ import {
   MOLECULE_STORAGE_V1_KEY,
   MOLECULE_STORAGE_V2_KEY,
   buildMoleculePersistenceEnvelope,
+  commitMoleculePersistence,
   deriveMoleculeId,
   migrateMoleculePersistence,
   parseMoleculePersistence,
@@ -251,10 +252,10 @@ const v1UnderNewKeyStorage = new MemoryStorage({
   [MOLECULE_STORAGE_V1_KEY]: v1,
 });
 const v1UnderNewKey = migrateMoleculePersistence(v1UnderNewKeyStorage);
-assert.equal(v1UnderNewKey.ok, false);
-assert.equal(v1UnderNewKey.failure, "malformed", "v2-first success requires sourceVersion 2");
+assert.equal(v1UnderNewKey.ok, true, "a valid legacy payload under the v2 key upgrades atomically");
 assert.equal(v1UnderNewKey.source.sourceVersion, 1);
-assert.equal(v1UnderNewKeyStorage.writes.length, 0);
+assert.equal(parseMoleculePersistence(v1UnderNewKeyStorage.getItem(MOLECULE_STORAGE_V2_KEY)).sourceVersion, 2);
+assert.equal(v1UnderNewKeyStorage.writes.length, 1);
 
 // A corrupt v2 must never be overwritten by a readable v1.  The old bytes are
 // exposed only as rollback material, and no destination write is attempted.
@@ -302,6 +303,48 @@ assert.equal(successfulStorage.getItem(MOLECULE_STORAGE_V1_KEY), v1, "v1 remains
 assert.equal(successfulStorage.getItem(MOLECULE_STORAGE_V2_KEY), success.serialized);
 assert.deepEqual(JSON.parse(success.serialized), success.state);
 
+// A normal live commit may update a valid v2 record and always keeps only the
+// promoted last-good tuple in its canonical envelope.
+const commitStorage = new MemoryStorage({
+  [MOLECULE_STORAGE_V1_KEY]: v1,
+  [MOLECULE_STORAGE_V2_KEY]: success.serialized,
+});
+const committed = commitMoleculePersistence(commitStorage, {
+  molecules: [molecule("body-b", 42)],
+  nextOrdinal: 43,
+  h2: { ...good("body-b"), candidate: { transient: true }, trace: [{ transient: true }] },
+});
+assert.equal(committed.ok, true, "a valid v2 destination accepts a normal commit");
+assert.equal(committed.source.sourceVersion, 2);
+assert.equal(commitStorage.getItem(MOLECULE_STORAGE_V1_KEY), v1, "a normal commit preserves v1 rollback bytes");
+assert.equal(JSON.parse(commitStorage.getItem(MOLECULE_STORAGE_V2_KEY)).nextOrdinal, 43);
+assert.equal("candidate" in JSON.parse(commitStorage.getItem(MOLECULE_STORAGE_V2_KEY)).h2, false);
+
+// Explicit empty is a real committed state, not a missing record or starter
+// request, and a readback mutation is rejected as an uncommitted write.
+const clearStorage = new MemoryStorage({ [MOLECULE_STORAGE_V2_KEY]: success.serialized });
+const cleared = commitMoleculePersistence(clearStorage, { molecules: [], nextOrdinal: 44, h2: null });
+assert.equal(cleared.ok, true);
+assert.equal(JSON.parse(clearStorage.getItem(MOLECULE_STORAGE_V2_KEY)).initialized, true);
+assert.deepEqual(JSON.parse(clearStorage.getItem(MOLECULE_STORAGE_V2_KEY)).molecules, []);
+assert.equal(JSON.parse(clearStorage.getItem(MOLECULE_STORAGE_V2_KEY)).h2, null);
+
+const commitCorruptV2 = new MemoryStorage({ [MOLECULE_STORAGE_V2_KEY]: "{broken", [MOLECULE_STORAGE_V1_KEY]: v1 });
+const commitCorruptResult = commitMoleculePersistence(commitCorruptV2, { molecules: [], nextOrdinal: 1, h2: null });
+assert.equal(commitCorruptResult.ok, false);
+assert.equal(commitCorruptResult.failure, "malformed");
+assert.equal(commitCorruptV2.writes.length, 0, "a corrupt v2 destination is never overwritten by a live commit");
+
+const commitReadFailureStorage = new MemoryStorage({ [MOLECULE_STORAGE_V1_KEY]: v1 });
+commitReadFailureStorage.getItem = (key) => {
+  if (key === MOLECULE_STORAGE_V2_KEY) throw new Error("v2 unavailable");
+  return v1;
+};
+const commitReadFailure = commitMoleculePersistence(commitReadFailureStorage, { molecules: [], nextOrdinal: 1, h2: null });
+assert.equal(commitReadFailure.ok, false);
+assert.equal(commitReadFailure.failure, "read-failed");
+assert.equal(commitReadFailureStorage.writes.length, 0);
+
 // Quota/write failures are explicit and never erase the readable source.
 const writeFailStorage = new MemoryStorage({ [MOLECULE_STORAGE_V1_KEY]: v1 });
 writeFailStorage.setItem = () => { throw new Error("quota"); };
@@ -310,6 +353,13 @@ assert.equal(writeFailure.ok, false);
 assert.equal(writeFailure.failure, "write-failed");
 assert.equal(writeFailure.rollbackRaw, v1);
 assert.equal(writeFailStorage.getItem(MOLECULE_STORAGE_V1_KEY), v1);
+
+const commitQuotaStorage = new MemoryStorage({ [MOLECULE_STORAGE_V2_KEY]: success.serialized, [MOLECULE_STORAGE_V1_KEY]: v1 });
+commitQuotaStorage.setItem = () => { throw new Error("quota"); };
+const commitQuota = commitMoleculePersistence(commitQuotaStorage, { molecules: [], nextOrdinal: 1, h2: null });
+assert.equal(commitQuota.ok, false);
+assert.equal(commitQuota.failure, "write-failed");
+assert.equal(commitQuotaStorage.getItem(MOLECULE_STORAGE_V1_KEY), v1);
 
 // An interrupted/corrupt readback is not a commit, even though setItem did
 // return.  The old bytes remain available for retry/rollback.

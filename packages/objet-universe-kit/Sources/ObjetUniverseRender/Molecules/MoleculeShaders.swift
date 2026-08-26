@@ -1,7 +1,9 @@
 /// Molecule material shader. The four readings are mixture, structural
 /// geometry, reaction ledger, and vibration. A body arrives with a real
 /// compound register, geometry family, formula atom count, and vibration;
-/// this shader only gives those facts light and motion.
+/// this shader only gives those facts light and motion. The optional H₂ lanes
+/// are already bounded by the renderer; the shader never decides support,
+/// convergence, or checkpoint promotion.
 enum MoleculeShaderSource {
   static let metal = """
   #include <metal_stdlib>
@@ -15,11 +17,16 @@ enum MoleculeShaderSource {
     uint representation;
     uint reducedMotion;
     float breathSeconds;
+    float4 h2Density;
+    float4 h2Projection;
+    float4 h2Presentation;
+    uint4 h2Meta;
   };
 
   struct MoleculeBody {
     float4 positionVibration;
     float4 geometryVelocity;
+    uint4 stableID;
   };
 
   struct FullscreenOut {
@@ -32,6 +39,7 @@ enum MoleculeShaderSource {
     float pointSize [[point_size]];
     float4 identity;
     float3 tint;
+    uint2 stableID;
   };
 
   constant float3 kNight = float3(0.0098, 0.0157, 0.0314);
@@ -141,6 +149,18 @@ enum MoleculeShaderSource {
       float ripple = 0.5 + 0.5 * sin((in.uv.y * 29.0 + in.uv.x * 17.0) - time * 1.35);
       colour += kSea * ripple * well * 0.026;
     }
+    if (u.h2Presentation.z > 0.5) {
+      float densityMagnitude = dot(abs(u.h2Density), float4(0.25));
+      float residual = u.h2Projection.x;
+      float tension = u.h2Projection.y;
+      float radius = length(centre);
+      float wave = 0.5 + 0.5 * sin(radius * (12.0 + densityMagnitude * 10.0) - time * (0.6 + tension));
+      float refusal = u.h2Meta.x >= 4u ? 1.0 : 0.0;
+      float settled = u.h2Meta.x == 2u ? 1.0 : 0.0;
+      float3 h2Colour = mix(kSea, kCoral, refusal);
+      h2Colour = mix(h2Colour, kGold, settled);
+      colour += h2Colour * wave * well * (0.018 + residual * 0.065);
+    }
     float vignette = 1.0 - smoothstep(0.30, 1.45, length((in.uv - 0.5) * 2.0));
     return float4(colour * (0.62 + 0.38 * vignette), 1.0);
   }
@@ -167,6 +187,7 @@ enum MoleculeShaderSource {
       body.geometryVelocity.y
     );
     out.tint = compoundColour(body.positionVibration.w);
+    out.stableID = body.stableID.xy;
     return out;
   }
 
@@ -214,12 +235,32 @@ enum MoleculeShaderSource {
       float wave = 0.5 + 0.5 * sin(length(p) * 25.0 - time * (3.2 + vibration * 3.8));
       vibrationRing = wave * exp(-length(p) * 2.5) * vibration;
     }
+    // Compound register 6 is the bounded H₂ body. Its local field is a
+    // direct visual projection of the copied AO coefficients; the renderer
+    // has already selected last-good for every refused disposition.
+    bool stableTarget = all(in.stableID == u.h2Meta.zw);
+    float isH2 = step(5.5, in.identity.y) * step(in.identity.y, 6.5)
+      * (stableTarget ? 1.0 : 0.0) * u.h2Presentation.z;
+    float h2Field = 0.0;
+    float3 h2Colour = kSea;
+    if (isH2 > 0.5) {
+      float densityContrast = abs(u.h2Density.x - u.h2Density.y)
+        + abs(u.h2Density.z - u.h2Density.w);
+      float localWave = 0.5 + 0.5 * sin(length(p) * (18.0 + densityContrast * 22.0)
+        - time * (1.0 + u.h2Projection.y) + u.h2Presentation.x * 6.28318530718);
+      float refusal = u.h2Meta.x >= 4u ? 1.0 : 0.0;
+      float settled = u.h2Meta.x == 2u ? 1.0 : 0.0;
+      h2Colour = mix(kSea, kCoral, refusal);
+      h2Colour = mix(h2Colour, kGold, settled);
+      h2Field = localWave * (0.08 + u.h2Projection.x * 0.25 + u.h2Projection.z * 0.12);
+    }
     float3 colour = compound * (central * 0.92 + centralGlow * 0.42 + bond * 0.43);
     colour += peripheral * (max(sites - central, 0.0) * 0.90 + bond * 0.22);
     colour += kPale * bond * (u.representation == 1u ? 0.40 : 0.16);
     colour += mix(kCoral, kGold, energy) * reactionRing * (0.46 + energy * 0.54);
     colour += kSea * vibrationRing * (0.32 + outerPulse * 0.44);
-    float alpha = (sites * 0.92 + bond * 0.56 + centralGlow * 0.22 + reactionRing * 0.68 + vibrationRing * 0.32) * envelope;
+    colour += h2Colour * h2Field * isH2;
+    float alpha = (sites * 0.92 + bond * 0.56 + centralGlow * 0.22 + reactionRing * 0.68 + vibrationRing * 0.32 + h2Field * isH2) * envelope;
     if (alpha < 0.008) { discard_fragment(); }
     return float4(colour, min(alpha, 0.96));
   }

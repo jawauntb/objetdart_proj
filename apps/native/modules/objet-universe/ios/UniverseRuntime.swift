@@ -140,6 +140,27 @@ final class UniverseRuntime {
     }
   }
 
+  /// H₂ keeps its own typed stream so correcting, settled, and refused remain
+  /// distinguishable from orbital outcomes. One drained event becomes one
+  /// shared audio/haptic presentation and one non-visible VoiceOver message;
+  /// the kernel's bounded idempotent drain prevents duplicate cues.
+  func publishAuthoritativeMoleculeH2Outcomes(_ outcomes: UnsafeBufferPointer<MoleculeH2OutcomeEvent>) {
+    for outcome in outcomes {
+      let fieldKind = outcome.fieldKind
+      let event = SensoryEvent(
+        id: "kernel-\(outcome.id)",
+        signature: Self.signature(for: fieldKind),
+        clock: SensoryClock(logicalTick: outcome.tick),
+        energy: Self.energy(for: fieldKind)
+      )
+      publishAuthoritativeOutcome(event)
+      UIAccessibility.post(
+        notification: .announcement,
+        argument: Self.accessibilityAnnouncement(for: fieldKind)
+      )
+    }
+  }
+
   /// Assistive actions enter at the same semantic boundary as touch. They
   /// have no UIKit gesture shape, so the route supplies a deterministic
   /// synthetic origin and this method supplies the same sensory answer.
@@ -152,19 +173,30 @@ final class UniverseRuntime {
   ) -> Bool {
     let boundedIntensity = min(max(intensity, 0), 1)
     let expressed = canApplyRepresentation(verb) && (universe?.expresses(verb) ?? false)
+    let moleculePayload: SemanticCommandPayload = verb == .grow && universe?.activeScene == .molecules
+      ? SemanticCommandPayload(contact: SemanticContactPayload(
+        phase: .release,
+        point: origin,
+        durationSeconds: 0.9,
+        normalizedPressure: boundedIntensity
+      ))
+      : .empty
+    let h2ReleaseOwned = verb == .grow && universe?.moleculeH2OwnsContact(at: origin) == true
     committed += 1
     if expressed {
       advanceRepresentation(for: verb)
       universe?.commit(
-        SemanticCommand(id: id, verb: verb, at: CACurrentMediaTime(), intensity: boundedIntensity, origin: origin)
+        SemanticCommand(id: id, verb: verb, at: CACurrentMediaTime(), intensity: boundedIntensity, origin: origin, payload: moleculePayload)
       )
     }
-    answer(
-      id: id,
-      grammarVerb: Self.grammarVerb(for: verb),
-      intensity: boundedIntensity,
-      expressed: expressed
-    )
+    if !h2ReleaseOwned {
+      answer(
+        id: id,
+        grammarVerb: Self.grammarVerb(for: verb),
+        intensity: boundedIntensity,
+        expressed: expressed
+      )
+    }
     return expressed
   }
 
@@ -216,7 +248,10 @@ final class UniverseRuntime {
         )
       )
     }
-    if UniverseRuntime.answerable(routed.shape) {
+    let h2ReleaseOwned = verb == .grow
+      && semanticPayload.contact?.phase == .release
+      && semanticPayload.contact.map { universe?.moleculeH2OwnsContact(at: $0.point) == true } == true
+    if UniverseRuntime.answerable(routed.shape) && !h2ReleaseOwned {
       answer(id: id, grammarVerb: routed.verb, intensity: intensity, expressed: expressed)
     }
     // The vessel is invited by a hand, never demanded on launch: iOS only
@@ -346,6 +381,30 @@ final class UniverseRuntime {
     case .collision: .crossing
     case .consumed: .chop
     case .escaped: .storm
+    }
+  }
+
+  private static func signature(for fieldKind: MoleculeH2FieldKind) -> SensorySignature {
+    switch fieldKind {
+    case .correcting: .roll
+    case .settled: .bloom
+    case .refused: .detent
+    }
+  }
+
+  private static func energy(for fieldKind: MoleculeH2FieldKind) -> Double {
+    switch fieldKind {
+    case .correcting: 0.45
+    case .settled: 0.9
+    case .refused: 0.35
+    }
+  }
+
+  private static func accessibilityAnnouncement(for fieldKind: MoleculeH2FieldKind) -> String {
+    switch fieldKind {
+    case .correcting: "h₂ field correcting"
+    case .settled: "h₂ field settled"
+    case .refused: "h₂ field refused; last stable field retained; try again"
     }
   }
 

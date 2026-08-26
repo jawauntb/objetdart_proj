@@ -28,6 +28,7 @@ import {
   GUIDE_ENTRIES_BY_VERB,
   NATIVE_GUIDE_VERBS,
   REVEAL_STEPS,
+  SCIENCE_NOTES_BY_SCENE,
   entriesForRevealStep,
   type GuideEntry,
   type GuideRevealStep,
@@ -158,6 +159,17 @@ function main(): void {
     "drag open sky with one finger to turn the frame.",
     "the camera instruction must name the one-finger gesture the native router actually accepts",
   );
+
+  const moleculeScience = SCIENCE_NOTES_BY_SCENE.molecules;
+  assert.ok(moleculeScience, "the sought native molecule guide must disclose the H2 model boundary");
+  assert.match(moleculeScience.plain, /neutral singlet H₂/i);
+  assert.match(moleculeScience.plain, /0\.60–1\.20 å/i);
+  assert.match(moleculeScience.notation, /rhf \/ sto-3g/i);
+  assert.match(moleculeScience.notation, /25 pyscf 2\.6\.2 nodes \+ 24 midpoint oracles/i);
+  assert.match(moleculeScience.notation, /no dft, ks-fno, runtime model, or extrapolation/i);
+  assert.equal(SCIENCE_NOTES_BY_SCENE.atoms, undefined, "an H2 disclosure must not leak into the atoms guide");
+  assert.match(GUIDE_ENTRIES_BY_VERB.holdDwell.sceneNotes.molecules ?? "", /isolated H₂/);
+  assert.match(GUIDE_ENTRIES_BY_VERB.holdCeremony.sceneNotes.molecules ?? "", /settles or refuses/);
 
   const coverageByStep = new Map<GuideRevealStep, number>();
   for (const step of REVEAL_STEPS) coverageByStep.set(step, entriesForRevealStep(step).length);

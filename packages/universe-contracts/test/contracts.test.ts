@@ -16,6 +16,7 @@ import {
   isUniverse,
   isVersionedAction,
   NATIVE_SCALE_ADDRESSES,
+  H2_RHF_SCIENTIFIC_SUBSYSTEM,
   validateReleaseSceneManifest,
   validateNativeSceneManifest,
   validateSceneStyle,
@@ -91,6 +92,24 @@ assert.deepEqual(RELEASE_SCENE_MANIFEST.map((scene) => scene.id), ["wave", "cell
 assert.equal(validateNativeSceneManifest(NATIVE_SCENE_MANIFEST).valid, true);
 assert.deepEqual(NATIVE_SCENE_MANIFEST.map((scene) => scene.id), ["wave", "cell", "solar", "molecules", "atoms"]);
 assert.deepEqual(CHEMISTRY_SCENE_MANIFEST.map((scene) => scene.version), [2, 2]);
+assert.deepEqual(CHEMISTRY_SCENE_MANIFEST[0].scientificSubsystems, [H2_RHF_SCIENTIFIC_SUBSYSTEM]);
+assert.equal(CHEMISTRY_SCENE_MANIFEST[1].scientificSubsystems, undefined, "the bounded H2 subsystem must not leak into atoms");
+assert.deepEqual(H2_RHF_SCIENTIFIC_SUBSYSTEM.envelope, { min: 0.6, max: 1.2, unit: "angstrom" });
+assert.equal(H2_RHF_SCIENTIFIC_SUBSYSTEM.cadence.logicalHz, 20);
+assert.deepEqual(H2_RHF_SCIENTIFIC_SUBSYSTEM.refusals, ["outside-envelope", "max-iterations", "reference-unverified", "numerical-failure"]);
+for (const mutation of [
+  { ...CHEMISTRY_SCENE_MANIFEST[0], scientificSubsystems: undefined },
+  { ...CHEMISTRY_SCENE_MANIFEST[0], scientificSubsystems: [{ ...H2_RHF_SCIENTIFIC_SUBSYSTEM, cassetteSha256: "fabricated" }] },
+  { ...CHEMISTRY_SCENE_MANIFEST[0], scientificSubsystems: [{ ...H2_RHF_SCIENTIFIC_SUBSYSTEM, envelope: { min: 0.5, max: 1.2, unit: "angstrom" } }] },
+  { ...CHEMISTRY_SCENE_MANIFEST[0], scientificSubsystems: [{ ...H2_RHF_SCIENTIFIC_SUBSYSTEM, prohibitedClaims: [] }] },
+]) {
+  const changed = [
+    ...NATIVE_SCENE_MANIFEST.slice(0, 3),
+    mutation,
+    NATIVE_SCENE_MANIFEST[4],
+  ];
+  assert.equal(validateNativeSceneManifest(changed).valid, false, "molecule contract mutations must fail closed");
+}
 const wrongChemistrySource = [...NATIVE_SCENE_MANIFEST.slice(0, 4), {
   ...NATIVE_SCENE_MANIFEST[4],
   requirements: {

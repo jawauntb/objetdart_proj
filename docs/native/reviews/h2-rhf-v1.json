@@ -1,0 +1,113 @@
+{
+  "recordVersion": 1,
+  "id": "h2-rhf-scientific-review-v1",
+  "scene": "molecules",
+  "modelVersion": "h2-rhf-sto-3g-v1",
+  "reviewedAt": "2026-08-25T21:00:00Z",
+  "reviewer": {
+    "id": "luna-independent-science-audit-2026-08-25",
+    "kind": "independent-model-audit",
+    "model": "gpt-5.6-luna",
+    "reasoningEffort": "max",
+    "independence": "read-only lane with no implementation ownership",
+    "credentialBoundary": "internal model audit; not external peer review or a credentialed scientific sign-off"
+  },
+  "sourceIds": [
+    "chemistry-iupac-gold-book",
+    "chemistry-nist-webbook",
+    "chemistry-alberts-2022",
+    "h2-rhf-roothaan-1951",
+    "h2-rhf-pyscf-sun-2018",
+    "h2-self-consistency-khan-2026"
+  ],
+  "cassette": {
+    "payloadSha256": "034a06f55bf15f2ae85dcbf6a3f135c7a83e631a995e4aec5095c35a1417db00",
+    "model": "RHF/STO-3G",
+    "species": "H2",
+    "charge": 0,
+    "multiplicity": 1,
+    "basis": "STO-3G",
+    "validityAngstrom": [0.6, 1.2],
+    "nodeCount": 25,
+    "midpointCount": 24,
+    "oracleMaxima": {
+      "densityMatrixMaxAbs": 6.92572e-7,
+      "totalEnergyMaxAbsHartree": 0.000001674353,
+      "electronCountMaxAbs": 1.16e-10
+    },
+    "blockingCeilings": {
+      "densityMatrixMaxAbs": 0.0005,
+      "totalEnergyMaxAbsHartree": 0.00005,
+      "electronCountMaxAbs": 1e-8
+    }
+  },
+  "referenceCases": [
+    {
+      "id": "pyscf-rhf-sto-3g-nodes-0-through-24",
+      "count": 25,
+      "assessment": "pass"
+    },
+    {
+      "id": "pyscf-rhf-sto-3g-adjacent-midpoints-0-through-23",
+      "count": 24,
+      "assessment": "pass"
+    },
+    {
+      "id": "typescript-swift-semantic-trace-parity-v1",
+      "count": 7,
+      "assessment": "pass"
+    }
+  ],
+  "assessments": {
+    "approximation": "RHF/STO-3G is acceptable only as a neutral-singlet H2 fixed-point instrument over 0.60–1.20 angstrom. Three-node quadratic matrix interpolation and exact Coulomb nuclear repulsion pass the committed node and midpoint ceilings; they do not authorize geometry optimization, dissociation, correlation, DFT, or arbitrary molecules.",
+    "promotionAndRefusal": "Release-only promotion after two consecutive density and energy gates is bounded and fail-closed. Outside-envelope, unverified-reference, numerical-failure, and iteration-exhaustion dispositions retain last-good and cannot promote a provisional field.",
+    "perceptualMapping": "AO density coefficients, fixed-point residual, disposition, and last-good identity drive a non-metric light, tone, and haptic projection. The renderer does not solve, gate, or promote state; the mapping is not electron motion, physical relaxation time, or a quantitative density plot.",
+    "crossPlatform": "TypeScript and Swift own separate deterministic authorities with one 20 Hz logical cadence and semantic trace comparison; WebGL and Metal consume compact immutable projections scoped to the stable H2 body."
+  },
+  "resolvedFindings": [
+    "The native field now remains drawable from last-good after release, promotion, and refusal instead of being gated by contact activity.",
+    "The verification contract now names the implemented fail-closed cassette verifier and the separate pinned PySCF regeneration command.",
+    "This versioned record supplies the previously missing review provenance and immutable artifact ledger."
+  ],
+  "limitations": [
+    "This is an internal model audit, not external peer review.",
+    "The audit environment did not independently install and rerun PySCF; it reviewed the committed generator, 25 node references, 24 midpoint references, measured errors, and fail-closed verifier.",
+    "Simulator evidence can establish deterministic authority, Metal wiring, and accessibility semantics, but not physical Taptic timing, sensor behavior, energy, thermal, or device GPU performance.",
+    "The perceptual field is deliberately qualitative and must not be read as an orbital isosurface or measured electron density."
+  ],
+  "prohibitedClaims": [
+    "DFT",
+    "Kohn-Sham",
+    "KS-FNO inference",
+    "electron motion",
+    "physical relaxation time",
+    "dissociation physics",
+    "geometry optimization",
+    "general quantum-chemistry solver",
+    "external peer review"
+  ],
+  "artifacts": [
+    { "path": "scripts/native/fixtures/h2-rhf-v1.json", "sha256": "5c84f4d59814d2059a11e192abc6cbbe81b645590fe34d0f95f7f81dd6f7dd4d" },
+    { "path": "scripts/native/generate-h2-rhf-cassette.py", "sha256": "1aadcc6b7b3718637737f63a29132da7b7733387f4f76278a4ef7fc1a44e74ae" },
+    { "path": "scripts/native/verify-h2-rhf-cassette.mjs", "sha256": "29b26fe655466368abd00f38982a056bbfc5a63828b3f99616c9a58112eaa76f" },
+    { "path": "scripts/native/h2-rhf-model.md", "sha256": "0359ce0cf184c78ccc833bbdaa93f10d4c65670f1b55073ce1cb4dbedf0053e5" },
+    { "path": "src/lib/h2-rhf.ts", "sha256": "3d22d9a5468d46f066795fbfc18b47df644a4e767031b1c0ef202d2b48300615" },
+    { "path": "src/lib/h2-rhf-presentation.ts", "sha256": "d8e3c6650d0559eb82df4dcd196586704715ced43378aca39a9d22465beaf539" },
+    { "path": "src/lib/h2-rhf-webgl.ts", "sha256": "894efb270017655b2f6acffdba6633a3f4f0a3463fa758e3894dfb61278c0225" },
+    { "path": "src/components/MoleculesField.tsx", "sha256": "93315690a89cdc813a1acc8eff940379f1a8b0eff3b9f8647186f84072cc1f71" },
+    { "path": "packages/objet-universe-kit/Sources/ObjetUniverseCore/Molecules/H2RHF.swift", "sha256": "996cda53a0c9e1e2ade67237fce04f0f7e0f2bd4e0e793b21841f71c2e26bb46" },
+    { "path": "packages/objet-universe-kit/Sources/ObjetUniverseCore/Molecules/MoleculeH2Outcome.swift", "sha256": "d96842cf529495625163436544edb9055fbabb738678fa2d8791d5fcd836b44c" },
+    { "path": "packages/objet-universe-kit/Sources/ObjetUniverseCore/Molecules/MoleculeRenderSnapshot.swift", "sha256": "f8dea96b61176461921c043846413037c7ce528f62d9e76ef428006b29286098" },
+    { "path": "packages/objet-universe-kit/Sources/ObjetUniverseRender/Molecules/MoleculeRenderer.swift", "sha256": "1b8d38e081cca08d2a7297b468ca57a273f32df8c43c5b02e9fa5aeb2f81828b" },
+    { "path": "packages/objet-universe-kit/Sources/ObjetUniverseRender/Molecules/MoleculeShaders.swift", "sha256": "c01ad303a8e453e73f9180bd09f2131b9653839bb3afda98981be8e90057972a" },
+    { "path": "apps/native/modules/objet-universe/ios/UniverseRuntime.swift", "sha256": "91e56b271d8ad71e9d6172fd8b59ddc12c1f4809c4324bd985129df1386305d6" },
+    { "path": "src/data/guide.ts", "sha256": "9af12b343eadbdcfc00985aa274b727fb0e2a149293d0a1291628c737b059825" },
+    { "path": "apps/native/src/guide/guideData.ts", "sha256": "9dd4c5b32af9e1cf1508bdb72c282d723961de5ba13b5584591ae88889cb97a3" },
+    { "path": "docs/native/scientific-references.md", "sha256": "a805d6df780dfbe4ce9a53ee20c3a4a22064abd1223d7584ff24acdb1f28df57" },
+    { "path": "docs/native/simulation-contract.md", "sha256": "7325b47a6ac39853b616709c078c293c2cb5f85b4413ed4744772b6c1c4ce83b" },
+    { "path": "docs/native/evidence-schema.md", "sha256": "34a9db98e1047ac9983f47c65847abd6c146486b1fbba5865eb70f6a2f43df9c" }
+  ],
+  "decision": "approved-for-bounded-instrument",
+  "approvalBoundary": "Only approved-for-bounded-instrument permits release; it approves this declared H2 envelope and no broader scientific claim.",
+  "evidenceSha256": "22cc9401f06948e212c15a8aa9f17bbb5a0ed33fa721f9ce04a1e0df94087c84"
+}
