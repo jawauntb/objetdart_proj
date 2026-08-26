@@ -88,8 +88,13 @@ assert.equal(
 );
 assert.equal(
   nativePackage.scripts["build:prod"],
-  "npx eas-cli@22.0.0 build --platform ios --profile production",
-  "production TestFlight must pin eas-cli 22 the same way Mapvest does",
+  "npx eas-cli@22.4.0 build --platform ios --profile production",
+  "production TestFlight must pin the verified eas-cli release",
+);
+assert.equal(
+  nativePackage.scripts.submit,
+  "npx eas-cli@22.4.0 submit --platform ios --latest",
+  "manual TestFlight submit must use the same verified eas-cli release",
 );
 assert.match(nativePackage.dependencies.expo, /^~57\./, "native app must target Expo SDK 57");
 assert.equal(nativePackage.dependencies.react, "19.2.3", "native React is locked independently from web React 18");
@@ -113,6 +118,7 @@ assert.equal(nativeTsconfig.compilerOptions.allowImportingTsExtensions, true, "n
 
 const expoConfig = resolvedExpoConfig();
 assert.equal(expoConfig.ios?.deploymentTarget, "17.0", "iOS 17 is the native deployment floor");
+assert.equal(expoConfig.ios?.buildNumber, undefined, "remote EAS versioning must be the only iOS build-number authority");
 assert.equal(expoConfig.ios?.supportsTablet, true, "native app must support iPad");
 assert.equal(expoConfig.userInterfaceStyle, "dark", "launch field begins in darkness");
 assert.ok(expoConfig.plugins?.includes("./plugins/withObjetUniverse"), "native config must resolve the source-controlled native-root plugin");
@@ -157,6 +163,7 @@ assert.ok(
   Object.values(eas.build).every((profile) => !("channel" in profile)),
   "update channels must wait for an explicit expo-updates integration",
 );
+assert.equal(expoConfig.runtimeVersion, undefined, "runtime policy must land with the explicit expo-updates integration");
 
 const metro = nativeRequire("./metro.config.js");
 assert.ok(
@@ -202,7 +209,7 @@ const appConfig = readText("apps/native/app.config.ts");
 assert.match(appConfig, /name:\s*["']ObjetUniverseKit["']/, "prebuild must extra-pod the Swift kit");
 assert.match(appConfig, /path:\s*["']\.\.\/\.\.\/\.\.\/packages\/objet-universe-kit["']/, "the kit extra pod path must resolve from the generated ios/ tree");
 assert.match(appConfig, /appleTeamId:\s*["']58877MPK38["']/, "the Expo ios config must name the Apple team for EAS credentials");
-assert.match(appConfig, /runtimeVersion:\s*\{\s*policy:\s*["']appVersion["']\s*\}/, "OTA updates must not cross native runtime versions");
+assert.doesNotMatch(appConfig, /runtimeVersion/, "unused OTA runtime policy must not warn during binary-only TestFlight builds");
 assert.match(appConfig, /version:\s*["']0\.2\.0["']/, "the chemistry native slice must ship a new app runtime version");
 assert.match(universeView, /import ObjetUniverseKit/, "the native view must import the shared Swift kit module");
 assert.match(universeHost, /func handoff\(to/, "the host must own transactional scene handoff");
@@ -356,6 +363,9 @@ assert.match(nativeCi, /npm run native:check/, "native CI must own its workspace
 assert.match(nativeCi, /apps\/native/, "native CI must watch native app changes independently");
 assert.match(nativeCi, /runs-on: ubuntu-latest/, "workspace-only native CI must not reserve a macOS runner");
 assert.match(nativeCi, /node-version:\s*22\.13\.x/, "native CI must run the Node line declared by the native workspace");
+assert.match(nativeCi, /actions\/checkout@v7/, "native CI checkout must use the Node 24 action runtime");
+assert.match(nativeCi, /actions\/setup-node@v7/, "native CI setup-node must use the Node 24 action runtime");
+assert.doesNotMatch(nativeCi, /cache:\s*npm/, "native release gates must not depend on GitHub's optional cache service");
 assert.match(nativeCi, /expo\s+--\s+export\s+--platform ios/, "native CI must execute Metro for an iOS bundle");
 assert.match(nativeCi, /name: Native iOS prebuild/, "native CI must reproduce the generated iOS project on macOS");
 assert.match(nativeCi, /npm run native:host/, "native CI must execute the Swift host lifecycle suite on macOS");
@@ -372,7 +382,12 @@ assert.match(nativeCi, /\.easignore/, "native CI must run when the EAS archive r
 const easWorkflow = readText(".github/workflows/ios-eas-production.yml");
 assert.match(easWorkflow, /working-directory: apps\/native/, "TestFlight CI must run eas from the Expo app, not the web root");
 assert.match(easWorkflow, /--auto-submit/, "TestFlight CI must hand the IPA to App Store Connect");
-assert.match(easWorkflow, /eas-version: 22\.0\.0/, "TestFlight CI must pin eas-cli 22");
+assert.match(easWorkflow, /actions\/checkout@v7/, "TestFlight checkout must use the Node 24 action runtime");
+assert.match(easWorkflow, /actions\/setup-node@v7/, "TestFlight setup-node must use the Node 24 action runtime");
+assert.match(easWorkflow, /expo\/expo-github-action@v9/, "TestFlight EAS setup must use Expo's Node 24 action runtime");
+assert.match(easWorkflow, /eas-version: 22\.4\.0/, "TestFlight CI must pin the verified eas-cli release");
+assert.match(easWorkflow, /eas-cache:\s*false/, "TestFlight delivery must not depend on the optional EAS CLI cache");
+assert.doesNotMatch(easWorkflow, /cache:\s*npm/, "TestFlight delivery must not depend on the optional npm cache");
 assert.doesNotMatch(easWorkflow, /^\s*EAS_NO_VCS=1/m, "EAS must keep the git root so packages/objet-universe-kit is on the worker");
 assert.match(easWorkflow, /secrets\.EXPO_TOKEN/, "TestFlight CI needs the Expo token the same way Mapvest does");
 

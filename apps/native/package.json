@@ -11,8 +11,8 @@
     "prebuild": "expo prebuild --clean --platform ios --no-install",
     "ios": "expo run:ios",
     "typecheck": "tsc --noEmit",
-    "build:prod": "npx eas-cli@22.0.0 build --platform ios --profile production",
-    "submit": "npx eas-cli@22.0.0 submit --platform ios --latest"
+    "build:prod": "npx eas-cli@22.4.0 build --platform ios --profile production",
+    "submit": "npx eas-cli@22.4.0 submit --platform ios --latest"
   },
   "dependencies": {
     "@objet/objet-universe": "file:./modules/objet-universe",

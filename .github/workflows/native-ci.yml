@@ -32,11 +32,10 @@ jobs:
     name: Native workspace
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22.13.x
-          cache: npm
       - run: npm ci
       - run: npm run native:check
       - run: npm --workspace @objet/native-universe exec expo -- export --platform ios --output-dir /tmp/objet-native-export
@@ -44,11 +43,10 @@ jobs:
     name: Native iOS prebuild
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22.13.x
-          cache: npm
       - run: npm ci
       - run: npm run native:host
       - run: swift test -c release --package-path packages/objet-universe-kit

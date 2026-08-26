@@ -7,8 +7,9 @@ Expo is the shell, not the simulator: routes, chrome, accessibility, and local
 progression run in JavaScript, while the clock, kernels, gesture bridge, haptic
 and audio buses, and Metal material run in the native binary. Any Swift/Metal
 change requires a new TestFlight/EAS binary; an Expo OTA update cannot replace
-those files. `runtimeVersion: appVersion` keeps an OTA bundle from crossing
-that boundary, and this chemistry release is `0.2.0` / iOS build `2`.
+those files. `expo-updates` is not enabled yet, so no OTA channel can cross
+that boundary. The app version is `0.2.0`; EAS owns and increments the store
+build number remotely for every production submission.
 
 ## Run
 
@@ -35,7 +36,7 @@ extra-pod.
 npm ci
 npm run native:prebuild
 cd apps/native
-npx eas-cli@22.0.0 build --platform ios --profile production --auto-submit
+npx eas-cli@22.4.0 build --platform ios --profile production --auto-submit
 ```
 
 Green `Native CI` on `main` also runs `.github/workflows/ios-eas-production.yml`
