@@ -345,6 +345,36 @@ State: `started: boolean`, `muted: boolean`, `liveTones: Map<id, ToneHandle>`. T
 
 Gemini/Lyria is now the only path for prompt-led `/signal` clips: pressing Enter with text waits for a returned clip, decodes it through the shared analyser, then loops it. If the model is unavailable the page says so instead of silently starting a procedural Aeolian piece. The procedural composer remains the unprompted `compose` path because determinism + audio-visual coherence still matter when the listener is playing the field itself.
 
+### The H₂ self-consistency instrument
+
+**What.** `/molecules` and native `.molecules` keep their existing compound,
+vibration, tap-train, and balanced-reaction material, but one stable H₂ body
+has a deeper electronic reading. Holding isolated H₂ changes its nuclear
+separation. A deterministic 20 Hz restricted Hartree–Fock / STO-3G fixed-point
+map corrects a provisional two-AO density after release; residual becomes
+field tension, sound, and haptic cadence. Two consecutive density and energy
+gates promote one last-good field. Unsupported geometry or failed convergence
+refuses explicitly and leaves that field untouched.
+
+**Scientific boundary.** This is neutral singlet H₂ from 0.60 through 1.20
+å, not DFT, Kohn–Sham, KS-FNO inference, electron motion, dissociation physics,
+or a general solver. Its offline cassette contains 25 PySCF 2.6.2 RHF/STO-3G
+nodes and 24 independently checked midpoints. The clients use evidence-tested
+three-node quadratic interpolation for matrices and exact Coulomb nuclear
+repulsion; no Python, network request, or learned weight ships at runtime.
+The supplied neural-operator manuscript contributes the design law—preserve
+self-consistent revision and expose its support boundary—not the numerical
+authority.
+
+**Why.** The room previously jumped from touch to a finished molecular answer.
+The correction field lets the visitor feel an answer becoming trustworthy,
+and lets refusal retain meaning instead of hiding behind a clamp. Authority,
+projection, and persistence remain separate: TypeScript and Swift own matched
+renderer-free traces; WebGL and Metal only project immutable snapshots; web
+storage keeps stable molecule identity and promoted last-good state, never a
+candidate. The room itself adds no explanatory text—the sought `?` and guide
+carry the approximation and non-claims.
+
 ### AI integration
 
 The text-generation API routes, `app/api/ask-the-room/route.ts` and `app/api/imagine-entry/route.ts`. Each:

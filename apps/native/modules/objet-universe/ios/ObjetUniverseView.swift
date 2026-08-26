@@ -177,6 +177,16 @@ public final class ObjetUniverseView: ExpoView {
     return (surfaceKernels.kernel as? any SolarSnapshotProviding)?.solarTargetBody(at: projected)
   }
 
+  /// The generic gesture answer must yield to the molecule authority when a
+  /// release actually owns the canonical H₂ field. Re-resolving here is a
+  /// read-only suppression check; the kernel still locks and executes the
+  /// contact epoch itself.
+  func moleculeH2OwnsContact(at materialPoint: SemanticOrigin) -> Bool {
+    guard host.activeScene == .molecules,
+          let kernel = surfaceKernels.kernel as? MoleculeKernel else { return false }
+    return kernel.moleculeH2OwnsContact(at: materialPoint)
+  }
+
   /// Open-sky drags turn the presentation camera. They bypass the kernel, so
   /// looking around can never move the selected body or alter replay state.
   func orientSolarCamera(
@@ -289,10 +299,17 @@ public final class ObjetUniverseView: ExpoView {
   }
 
   private func publishFrameOutcomesOnMain() {
-    guard let source = surfaceKernels.kernel as? any SimulationOutcomeProducing else { return }
-    source.drainSimulationOutcomes { outcomes in
-      guard !outcomes.isEmpty else { return }
-      UniverseRuntime.shared.publishAuthoritativeOutcomes(outcomes)
+    if let source = surfaceKernels.kernel as? any SimulationOutcomeProducing {
+      source.drainSimulationOutcomes { outcomes in
+        guard !outcomes.isEmpty else { return }
+        UniverseRuntime.shared.publishAuthoritativeOutcomes(outcomes)
+      }
+    }
+    if let source = surfaceKernels.kernel as? any MoleculeH2OutcomeProducing {
+      source.drainMoleculeH2Outcomes { outcomes in
+        guard !outcomes.isEmpty else { return }
+        UniverseRuntime.shared.publishAuthoritativeMoleculeH2Outcomes(outcomes)
+      }
     }
   }
 

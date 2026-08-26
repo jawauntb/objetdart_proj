@@ -1,11 +1,17 @@
 import type { SceneStyle } from "./scene-style.ts";
 import { validateSceneStyle, type ContractValidation } from "./scene-style.ts";
+import {
+  H2_RHF_MODEL_TUPLE,
+  H2_RHF_TRUSTED_PAYLOAD_SHA256,
+  canonicalH2RHFJson,
+} from "./h2-rhf.ts";
 import { isScaleAddress, NATIVE_SCALE_ADDRESSES, type ScaleAddress } from "./scale.ts";
 import type { SimulationContract } from "./simulation.ts";
 import { validateSimulationContract } from "./simulation.ts";
 
 export const NATIVE_CONTRACT_VERSION = 1 as const;
 export const NATIVE_CHEMISTRY_CONTRACT_VERSION = 2 as const;
+export const H2_RHF_SCIENTIFIC_REVIEW_EVIDENCE_ID = "h2-rhf-scientific-review-v1:sha256:22cc9401f06948e212c15a8aa9f17bbb5a0ed33fa721f9ce04a1e0df94087c84" as const;
 export const CONTRACT_VERSIONS = Object.freeze({ native: NATIVE_CONTRACT_VERSION, action: 1, continuousGesture: 1, universe: 1, history: 1, scale: 1, simulation: 1, sceneStyle: 1 });
 export type NativeSceneId = "wave" | "cell" | "solar" | "molecules" | "atoms";
 export type ReleaseOneSceneId = "wave" | "cell" | "solar";
@@ -31,6 +37,26 @@ export type SceneRequirements = Readonly<{
   guide: RequiredContract;
   performance: RequiredContract;
 }>;
+export type H2RHFScientificSubsystem = Readonly<{
+  version: 1;
+  id: "h2-rhf";
+  model: typeof H2_RHF_MODEL_TUPLE.model;
+  modelVersion: typeof H2_RHF_MODEL_TUPLE.modelVersion;
+  cassetteSha256: typeof H2_RHF_TRUSTED_PAYLOAD_SHA256;
+  quantizationVersion: typeof H2_RHF_MODEL_TUPLE.quantizationVersion;
+  traceVersion: typeof H2_RHF_MODEL_TUPLE.traceVersion;
+  species: typeof H2_RHF_MODEL_TUPLE.species;
+  charge: typeof H2_RHF_MODEL_TUPLE.charge;
+  multiplicity: typeof H2_RHF_MODEL_TUPLE.multiplicity;
+  basis: typeof H2_RHF_MODEL_TUPLE.basis;
+  envelope: Readonly<{ min: number; max: number; unit: "angstrom" }>;
+  cadence: Readonly<{ logicalHz: number; damping: number; maxIterations: number; consecutiveGateTicks: number }>;
+  interpolation: typeof H2_RHF_MODEL_TUPLE.interpolation;
+  residual: "fixed-point density-matrix change";
+  promotion: "two consecutive density and energy gates after release";
+  refusals: readonly ["outside-envelope", "max-iterations", "reference-unverified", "numerical-failure"];
+  prohibitedClaims: readonly ["DFT", "Kohn-Sham", "KS-FNO", "electron motion", "dissociation physics", "general solver"];
+}>;
 export type NativeSceneManifest = Readonly<{
   version: typeof NATIVE_CONTRACT_VERSION | typeof NATIVE_CHEMISTRY_CONTRACT_VERSION;
   id: NativeSceneId;
@@ -40,7 +66,34 @@ export type NativeSceneManifest = Readonly<{
   simulation: SimulationContract;
   style: SceneStyle;
   requirements: SceneRequirements;
+  scientificSubsystems?: readonly H2RHFScientificSubsystem[];
 }>;
+
+export const H2_RHF_SCIENTIFIC_SUBSYSTEM: H2RHFScientificSubsystem = Object.freeze({
+  version: 1,
+  id: "h2-rhf",
+  model: H2_RHF_MODEL_TUPLE.model,
+  modelVersion: H2_RHF_MODEL_TUPLE.modelVersion,
+  cassetteSha256: H2_RHF_TRUSTED_PAYLOAD_SHA256,
+  quantizationVersion: H2_RHF_MODEL_TUPLE.quantizationVersion,
+  traceVersion: H2_RHF_MODEL_TUPLE.traceVersion,
+  species: H2_RHF_MODEL_TUPLE.species,
+  charge: H2_RHF_MODEL_TUPLE.charge,
+  multiplicity: H2_RHF_MODEL_TUPLE.multiplicity,
+  basis: H2_RHF_MODEL_TUPLE.basis,
+  envelope: Object.freeze({ min: H2_RHF_MODEL_TUPLE.envelope.minAngstrom, max: H2_RHF_MODEL_TUPLE.envelope.maxAngstrom, unit: "angstrom" }),
+  cadence: Object.freeze({
+    logicalHz: H2_RHF_MODEL_TUPLE.solver.logicalHz,
+    damping: H2_RHF_MODEL_TUPLE.solver.damping,
+    maxIterations: H2_RHF_MODEL_TUPLE.solver.maxIterations,
+    consecutiveGateTicks: H2_RHF_MODEL_TUPLE.solver.consecutiveGateTicks,
+  }),
+  interpolation: Object.freeze({ ...H2_RHF_MODEL_TUPLE.interpolation }),
+  residual: "fixed-point density-matrix change",
+  promotion: "two consecutive density and energy gates after release",
+  refusals: Object.freeze(["outside-envelope", "max-iterations", "reference-unverified", "numerical-failure"] as const),
+  prohibitedClaims: Object.freeze(["DFT", "Kohn-Sham", "KS-FNO", "electron motion", "dissociation physics", "general solver"] as const),
+});
 
 const REQUIRED_CATEGORIES: readonly RequiredContractCategory[] = ["science", "sensory", "persistence", "accessibility", "guide", "performance"];
 /** Stable source map retained for consumers that index by NativeSceneId. */
@@ -48,7 +101,14 @@ export const SCIENCE_SOURCE_IDS: Readonly<Record<NativeSceneId, readonly string[
   wave: ["wave-fdtd-taflove-hagness-2005", "wave-cooley-tukey-1965", "wave-nist-dlmf"],
   cell: ["cell-turing-1952", "cell-murray-2002", "cell-alberts-2022"],
   solar: ["solar-murray-dermott-1999", "solar-wisdom-holman-1991", "solar-hairer-lubich-wanner-2006"],
-  molecules: ["chemistry-iupac-gold-book", "chemistry-nist-webbook", "chemistry-alberts-2022"],
+  molecules: [
+    "chemistry-iupac-gold-book",
+    "chemistry-nist-webbook",
+    "chemistry-alberts-2022",
+    "h2-rhf-roothaan-1951",
+    "h2-rhf-pyscf-sun-2018",
+    "h2-self-consistency-khan-2026",
+  ],
   atoms: ["atoms-nist-asd", "atoms-iupac-periodic-table", "atoms-cowan-1981"],
 };
 
@@ -75,7 +135,13 @@ function requirements(sceneId: NativeSceneId, summary: Readonly<Record<RequiredC
   const reviewerId: Record<RequiredContractCategory, string> = { science: "native-science-review", sensory: "native-sensory-review", persistence: "native-persistence-review", accessibility: "native-accessibility-review", guide: "native-guide-review", performance: "native-performance-review" };
   const sourceIds = isReleaseOneSceneId(sceneId) ? SCIENCE_SOURCE_IDS[sceneId] : CHEMISTRY_SCIENCE_SOURCE_IDS[sceneId as "molecules" | "atoms"];
   const entries = REQUIRED_CATEGORIES.map((category) => {
-    const evidence: RequirementEvidence = { evidenceIds: [`${sceneId}-${category}-evidence-v1`], reviewerId: reviewerId[category], approval: { status: "required", evidenceId: `${sceneId}-${category}-approval-v1` } };
+    const evidence: RequirementEvidence = sceneId === "molecules" && category === "science"
+      ? {
+          evidenceIds: [H2_RHF_SCIENTIFIC_REVIEW_EVIDENCE_ID],
+          reviewerId: "luna-independent-science-audit-2026-08-25",
+          approval: { status: "approved", evidenceId: H2_RHF_SCIENTIFIC_REVIEW_EVIDENCE_ID },
+        }
+      : { evidenceIds: [`${sceneId}-${category}-evidence-v1`], reviewerId: reviewerId[category], approval: { status: "required", evidenceId: `${sceneId}-${category}-approval-v1` } };
     const requirement = { version: 1 as const, status: "required" as const, summary: summary[category], evidence: category === "science" ? { ...evidence, sourceIds } : evidence };
     return [category, requirement];
   });
@@ -135,6 +201,7 @@ function chemistryScene(config: ChemistrySceneConfig): NativeSceneManifest {
     simulation: simulation(id, model, units, invariant, conserved, validity, intervention, state, causalStatement, reference, approximation),
     style: style(id, field, forms, motion, "material", state, causalStatement),
     requirements: requirements(id, { science: scienceSummary, sensory: sensorySummary, persistence: persistenceSummary, accessibility: accessibilitySummary, guide: guideSummary, performance: performanceSummary }),
+    scientificSubsystems: id === "molecules" ? Object.freeze([H2_RHF_SCIENTIFIC_SUBSYSTEM]) : undefined,
   };
 }
 
@@ -145,21 +212,21 @@ export const CHEMISTRY_SCENE_MANIFEST: readonly NativeSceneManifest[] = [
     field: "a dark molecular field where bonds become light",
     forms: ["compound-forms", "reaction-pulses"],
     motion: "vibration and condensation",
-    state: "formula and reaction energy",
-    causalStatement: "bond order and reaction energy become light, tone, and pulse",
-    model: "curated compound and reaction instrument",
-    units: [{ quantity: "length", symbol: "pm" }, { quantity: "energy", symbol: "kJ/mol" }],
-    invariant: "formula and reaction ledgers remain bounded and deterministic",
-    conserved: ["reaction identity", "compound population"],
-    validity: "Only the curated compound register and balanced reaction subset are authoritative.",
-    intervention: "seed, agitate, and combine compounds",
-    reference: "canonical combustion pair selects water or carbon dioxide",
-    approximation: "The field is a reduced compound instrument, not molecular dynamics.",
-    scienceSummary: "curated formulas, geometry, balanced reactions, and order-independent fallback",
-    sensorySummary: "reaction energy drives coupled sight, sound, and haptics",
-    persistenceSummary: "compound births and reactions remain in the trail",
-    accessibilitySummary: "named molecule and reaction actions",
-    guideSummary: "post-discovery formula and reaction causality",
+    state: "formula, reaction energy, and bounded H2 density residual and disposition",
+    causalStatement: "bond order, reaction energy, and verified H2 correction become light, tone, and pulse",
+    model: "curated compound and reaction instrument with a bounded H2 RHF/STO-3G subsystem",
+    units: [{ quantity: "length", symbol: "pm" }, { quantity: "reaction energy", symbol: "kJ/mol" }, { quantity: "H2 nuclear separation", symbol: "Å" }, { quantity: "H2 electronic energy", symbol: "Eₕ" }],
+    invariant: "formula and reaction ledgers remain deterministic, and only a reference-verified released H2 candidate may replace last-good",
+    conserved: ["reaction identity", "compound population", "H2 last-good trust boundary"],
+    validity: "Only the curated compound register, balanced reaction subset, and the separately declared neutral-singlet H2 envelope are authoritative.",
+    intervention: "seed, agitate, combine compounds, and perturb isolated H2 separation",
+    reference: "canonical combustion pairs balance, and the 0.75 angstrom H2 node reproduces its cassette density, energy, and two-electron count",
+    approximation: "The field is not molecular dynamics; the H2 subsystem is RHF/STO-3G rather than DFT, KS-FNO, dissociation physics, or a general solver.",
+    scienceSummary: "curated formulas and balanced reactions plus a hashed, midpoint-verified H2 RHF/STO-3G fixed-point map",
+    sensorySummary: "reaction energy and H2 residual/disposition drive coupled sight, sound, and haptics",
+    persistenceSummary: "compound births and reactions remain in the trail; H2 stores only its promoted last-good checkpoint",
+    accessibilitySummary: "named molecule and reaction actions plus transition-only H2 correcting, settled, and refused outcomes",
+    guideSummary: "post-discovery formula, reaction, H2 approximation, residual, and refusal causality",
     performanceSummary: "bounded molecule count and fixed-step authority",
   }),
   chemistryScene({
@@ -216,6 +283,12 @@ function isRequiredContract(value: unknown, sourceIds?: readonly string[]): bool
   return isRecord(value) && value.version === 1 && value.status === "required" && typeof value.summary === "string" && value.summary.length > 0 && isRequirementEvidence(value.evidence, sourceIds);
 }
 
+function hasExactH2ScientificSubsystem(value: unknown): boolean {
+  return Array.isArray(value)
+    && value.length === 1
+    && canonicalH2RHFJson(value[0]) === canonicalH2RHFJson(H2_RHF_SCIENTIFIC_SUBSYSTEM);
+}
+
 function validateScenePayload(scene: Record<string, unknown>, id: string, expectedSources: readonly string[]): string[] {
   const errors: string[] = [];
   if (!isRecord(scene.sharedIdentity) || scene.sharedIdentity.parameter !== "equilibrium-temperature-k" || typeof scene.sharedIdentity.relationship !== "string" || !scene.sharedIdentity.relationship) errors.push(`${id}: missing shared identity relationship`);
@@ -227,6 +300,11 @@ function validateScenePayload(scene: Record<string, unknown>, id: string, expect
       const sources = category === "science" ? expectedSources : undefined;
       if (!isRequiredContract(scene.requirements[category], sources)) errors.push(`${id}: missing ${category} requirement evidence`);
     }
+  }
+  if (id === "molecules") {
+    if (!hasExactH2ScientificSubsystem(scene.scientificSubsystems)) errors.push(`${id}: missing or altered bounded H2 scientific subsystem`);
+  } else if (scene.scientificSubsystems !== undefined) {
+    errors.push(`${id}: scientific subsystem belongs only to its declaring scene`);
   }
   for (const error of validateSimulationContract(scene.simulation).errors) errors.push(`${id}: ${error}`);
   for (const error of validateSceneStyle(scene.style).errors) errors.push(`${id}: ${error}`);

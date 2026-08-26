@@ -13,6 +13,11 @@ Their machine-readable declarations live in `@objet/universe-contracts`; this
 document distinguishes that settled structural schema from the evidence that
 later makes its scientific claims credible.
 
+The later `molecules` and `atoms` chemistry instruments do not enter Release 1.
+They live in the same native manifest under their chemistry release. Molecules
+declares one additional, separately versioned `h2-rhf` subsystem so its narrow
+electronic authority cannot silently widen the curated reaction model.
+
 ## required contract facts
 
 Every Release 1 scene has all six top-level `requirements`. The settled
@@ -38,6 +43,8 @@ The package exports `RELEASE_SCENE_MANIFEST`: every entry has `version`, `id`,
 `equilibrium-temperature-k`; `simulation.id` and `style.id` identify the same
 scene. The scope test rejects a missing, empty, unversioned, optional, or
 evidence-free requirement, and rejects invalid simulation or style structures.
+For `molecules`, it also requires the exact hashed `h2-rhf` subsystem tuple;
+other scenes reject that subsystem rather than inheriting it accidentally.
 
 ## settled simulation structure
 
@@ -67,6 +74,15 @@ the matching scene's `requirements.science.evidence.sourceIds`; labels such as
 | `wave` | `wave-fdtd-taflove-hagness-2005`, `wave-cooley-tukey-1965`, `wave-nist-dlmf` |
 | `cell` | `cell-turing-1952`, `cell-murray-2002`, `cell-alberts-2022` |
 | `solar` | `solar-murray-dermott-1999`, `solar-wisdom-holman-1991`, `solar-hairer-lubich-wanner-2006` |
+| `molecules` | `chemistry-iupac-gold-book`, `chemistry-nist-webbook`, `chemistry-alberts-2022`, `h2-rhf-roothaan-1951`, `h2-rhf-pyscf-sun-2018`, `h2-self-consistency-khan-2026` |
+
+The H₂ subsystem is neutral singlet H₂ under RHF/STO-3G from 0.60 through
+1.20 å. Its cassette SHA-256, 25 PySCF 2.6.2 nodes, 24 independent midpoint
+oracles, 20 Hz fixed-point cadence, damping, iteration budget, interpolation,
+residual definition, refusal set, quantization version, and trace version are
+one exact manifest fact. The Khan et al. manuscript motivates showing an
+iterative correction and a boundary; it does not make this instrument DFT,
+Kohn–Sham, KS-FNO, dissociation physics, or a general electronic solver.
 
 Before release candidate status, each scientific review record identifies the
 scene and model version, reviewer, decision date, cited source IDs, reviewed
@@ -80,7 +96,7 @@ The minimum review record is a durable artifact with this shape (the storage
 path is chosen by the release-evidence lane, not by a playable scene):
 
 ```yaml
-scene: wave | cell | solar
+scene: wave | cell | solar | molecules
 modelVersion: v1
 reviewer: named scientific reviewer
 reviewedAt: ISO-8601 timestamp
@@ -89,13 +105,16 @@ referenceCases: [simulation reference-case IDs]
 validityReviewed: true
 approximationsReviewed: true
 perceptualMappingsReviewed: true
-decision: approved | changes-requested | rejected
+decision: approved | approved-for-bounded-instrument | changes-requested | rejected
 approvalEvidence: immutable evidence or report identifier
 ```
 
-Only `decision: approved` with a non-empty `approvalEvidence` satisfies the
-scientific review gate. Review provenance must never be inferred from a green
-fixture or a present source citation.
+`decision: approved` with non-empty `approvalEvidence` satisfies a Release 1
+scene. The H₂ subsystem accepts only
+`decision: approved-for-bounded-instrument`; that phrase approves the declared
+envelope and prohibited claims, not external peer review or a broader model.
+Review provenance must never be inferred from a green fixture or a present
+source citation.
 
 ## shared authority rules
 
@@ -128,6 +147,10 @@ for language-independent tests, not serializations of renderer state.
 - `solar-reference.json` characterizes Kepler position/velocity, seeded
   systems, orbital energy/angular-momentum invariants, and accretion
   identities from `orbits.ts`.
+- `h2-rhf-v1.json` carries canonical semantic scenarios compared between the
+  independent TypeScript and Swift authorities. Its separate generated
+  cassette contains all 25 node references and all 24 midpoint oracles; parity
+  is accepted only after the PySCF verifier independently passes both sets.
 
 Each fixture declares `fixtureVersion`, `contractVersion`, `scene`,
 `modelVersion`, `simulationVersion`, `seed`, `units`, `referenceCase`, and an
@@ -145,6 +168,12 @@ identity exact while acknowledging that cross-language `sin`, division, and
 fractional culture calculations are not portable as JSON bytes. A fixture
 change requires a model-version or evidence change, never a silent snapshot
 refresh.
+
+For H₂, only a released candidate that passes both declared density and
+energy gates for two consecutive 20 Hz ticks may replace last-good. Candidate
+state, presentation phase, renderer fields, and refused values never enter the
+checkpoint. `outside-envelope`, `max-iterations`, `reference-unverified`, and
+`numerical-failure` preserve last-good and remain explicit outcomes.
 
 ## approval boundary
 

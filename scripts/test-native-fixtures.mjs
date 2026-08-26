@@ -9,6 +9,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const generator = path.join(root, "scripts/native/generate-reference-fixtures.mjs");
 const committedDirectory = path.join(root, "scripts/native/fixtures");
 const contractEntry = path.join(root, "packages/universe-contracts/src/index.ts");
+const h2Verifier = path.join(root, "scripts/native/verify-h2-rhf-cassette.mjs");
+const h2File = "h2-rhf-v1.json";
 const expectedFiles = ["cell-reference.json", "solar-reference.json", "wave-reference.json"];
 
 function assertComparisonPolicy(fixture, file) {
@@ -58,8 +60,11 @@ try {
 
   const committedFiles = readdirSync(committedDirectory).filter((file) => file.endsWith(".json")).sort();
   const generatedFiles = readdirSync(temporaryDirectory).filter((file) => file.endsWith(".json")).sort();
-  assert.deepEqual(committedFiles, expectedFiles, "committed fixture directory must contain exactly the three Release 1 references");
+  assert.deepEqual(committedFiles.filter((file) => file !== h2File), expectedFiles, "committed fixture directory must contain exactly the three Release 1 references");
+  assert.deepEqual(committedFiles.filter((file) => file === h2File), [h2File], "the H2 cassette must remain in its own verified lane");
   assert.deepEqual(generatedFiles, expectedFiles, "fixture generator must emit exactly the three Release 1 references");
+
+  execFileSync(process.execPath, [h2Verifier, `--fixture=${path.join(committedDirectory, h2File)}`], { cwd: root, encoding: "utf8", stdio: "pipe" });
 
   for (const file of expectedFiles) {
     const committed = readFileSync(path.join(committedDirectory, file));

@@ -2,7 +2,8 @@
 
 ## use of sources
 
-These sources constrain the Release 1 reduced models. They are not runtime
+These sources constrain the Release 1 reduced models and the later chemistry
+instruments declared in the native manifest. They are not runtime
 dependencies, nor permission to claim a broader model than the corresponding
 simulation contract declares. The settled runtime `SimulationContract` does
 not carry citations; the matching scene's
@@ -40,6 +41,9 @@ the scientific review record and release evidence.
 | `chemistry-iupac-gold-book` | IUPAC. *Compendium of Chemical Terminology (the Gold Book)*, online 5th ed. | canonical terminology for compounds, bonds, geometry, and reaction language |
 | `chemistry-nist-webbook` | NIST. *Chemistry WebBook*, SRD 69. | reference thermochemical values and infrared/vibrational vocabulary for the curated compound register |
 | `chemistry-alberts-2022` | Alberts, B. et al. *Molecular Biology of the Cell*, 7th ed., W. W. Norton (2022). | molecular structure vocabulary and the declared boundary before biological chemistry |
+| `h2-rhf-roothaan-1951` | Roothaan, C. C. J. “New Developments in Molecular Orbital Theory.” *Reviews of Modern Physics* 23, 69–89 (1951). DOI: [10.1103/RevModPhys.23.69](https://doi.org/10.1103/RevModPhys.23.69). | the closed-shell restricted Hartree–Fock matrix construction used by the two-AO H₂ fixed-point map |
+| `h2-rhf-pyscf-sun-2018` | Sun, Q. et al. “PySCF: the Python-based simulations of chemistry framework.” *WIREs Computational Molecular Science* 8, e1340 (2018). DOI: [10.1002/wcms.1340](https://doi.org/10.1002/wcms.1340). | the pinned PySCF 2.6.2 offline oracle that generated 25 cassette nodes and 24 independent midpoint references; PySCF does not ship in either client |
+| `h2-self-consistency-khan-2026` | Khan, D. et al. [“Learning the Kohn–Sham map with neural operators for quasi-linear scaling density functional theory.”](https://tensorlab.cms.caltech.edu/users/anima/ks_fno/KS-FNO-manuscript.pdf) Manuscript (2026). | inspiration for exposing self-consistent correction and refusal; it is not authority for this RHF instrument, and no KS-FNO weights, DFT claim, or runtime learned model are used |
 
 ## atomic structure and fusion
 
@@ -58,3 +62,8 @@ then recorded in `requirements.science.evidence`. The listed sources do not turn
 visual plausibility into validation: a changed integrator, unit convention,
 or perceptual mapping must be reviewed against the changed contract and its
 fixtures.
+
+The bounded H₂ approval is recorded at
+`docs/native/reviews/h2-rhf-v1.json`. Its hash is repeated in the native
+manifest, so any reviewed scientific or perceptual artifact drift fails the
+release gate until a new internal audit is stamped.

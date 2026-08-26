@@ -8,6 +8,7 @@
   "types": "./src/index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit --target ES2022 --module esnext --moduleResolution bundler --allowImportingTsExtensions --strict src/*.ts test/*.ts",
-    "test": "node --experimental-strip-types test/contracts.test.ts"
+    "test:cassette": "node --experimental-strip-types --test test/h2-rhf-cassette.test.ts",
+    "test": "node --experimental-strip-types test/contracts.test.ts && npm run test:cassette"
   }
 }

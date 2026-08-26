@@ -1,0 +1,612 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ideation: a self-consistent molecule for iOS and web</title>
+  <style>
+    :root {
+      --paper: #f2eee6;
+      --paper-2: #e8e2d5;
+      --ink: #15171a;
+      --ink-2: #3a3d42;
+      --line: #bcb3a3;
+      --candle: #c8732a;
+      --candle-soft: #f2dac3;
+      --candle-text: #6c3512;
+      --sea: #2c4a5c;
+      --sea-soft: #d7e2e6;
+      --sea-text: #173542;
+      --kept: #6e5a2e;
+      --kept-soft: #e8dfc2;
+      --closed: #7a1f1f;
+      --closed-soft: #eed2ce;
+      --shadow: rgba(21, 23, 26, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+      font-size: 15px;
+      line-height: 1.65;
+      font-variant-ligatures: none;
+    }
+    a { color: var(--sea); text-underline-offset: 0.18em; }
+    a:hover { color: var(--candle-text); }
+    code { font: inherit; font-size: 0.92em; }
+    .page { width: min(960px, calc(100% - 32px)); margin: 0 auto; padding: 42px 0 64px; }
+    .prose { max-width: 72ch; }
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--candle-text);
+      font-size: 0.76rem;
+      font-weight: 500;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3 {
+      font-family: "Cormorant Garamond", Georgia, serif;
+      font-weight: 500;
+      line-height: 1.1;
+      text-wrap: balance;
+    }
+    h1 { max-width: 17ch; margin: 0; font-size: clamp(2.45rem, 7vw, 4.8rem); letter-spacing: -0.035em; }
+    h2 { margin: 0 0 18px; font-size: clamp(1.65rem, 4vw, 2.3rem); }
+    h3 { margin: 0; font-size: 1.55rem; }
+    p { margin: 0 0 1em; }
+    strong { color: inherit; }
+
+    .hero { padding: 30px; border: 1px solid var(--ink); background: var(--paper-2); box-shadow: 8px 8px 0 var(--ink); }
+    .lede { max-width: 67ch; margin: 18px 0 0; color: var(--ink-2); font-size: 1.02rem; }
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin: 28px 0 0;
+      padding: 18px 0 0;
+      border-top: 1px solid var(--line);
+    }
+    .meta div { min-width: 0; }
+    .meta dt, .field dt {
+      margin: 0 0 4px;
+      color: var(--ink-2);
+      font-size: 0.69rem;
+      font-weight: 500;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+    .meta dd, .field dd { margin: 0; overflow-wrap: anywhere; }
+    .meta dd { font-size: 0.83rem; }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin: 26px 0 0;
+    }
+    .stat { padding: 14px; border: 1px solid var(--line); background: rgba(242, 238, 230, 0.58); }
+    .stat strong { display: block; font-family: Georgia, serif; font-size: 1.8rem; font-weight: 500; line-height: 1; }
+    .stat span { display: block; margin-top: 6px; color: var(--ink-2); font-size: 0.72rem; }
+
+    .toc {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 28px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+    .toc a, .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 5px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--paper);
+      color: var(--ink-2);
+      font-size: 0.72rem;
+      line-height: 1.2;
+      text-decoration: none;
+    }
+    .toc a:hover { border-color: var(--sea); color: var(--sea-text); }
+
+    section { margin-top: 62px; scroll-margin-top: 24px; }
+    .callout {
+      margin: 24px 0 0;
+      padding: 22px;
+      border: 1px solid var(--candle);
+      background: var(--candle-soft);
+      color: var(--candle-text);
+    }
+    .callout .eyebrow { color: inherit; }
+    .callout p:last-child { margin-bottom: 0; }
+    .platform-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-top: 24px;
+    }
+    .platform-card { padding: 18px; border: 1px solid var(--line); background: var(--paper-2); }
+    .platform-card h3 { margin-bottom: 8px; font-size: 1.18rem; }
+    .platform-card p { margin: 0; color: var(--ink-2); font-size: 0.83rem; }
+
+    .axis-list {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      counter-reset: axes;
+    }
+    .axis-list li {
+      min-height: 132px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      background: var(--paper-2);
+      counter-increment: axes;
+    }
+    .axis-list li::before {
+      display: block;
+      margin-bottom: 28px;
+      color: var(--candle-text);
+      content: "0" counter(axes);
+      font-size: 0.72rem;
+    }
+
+    .jump-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin: 0 0 24px;
+      padding: 0;
+      list-style: none;
+    }
+    .jump-list a {
+      display: block;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      background: rgba(232, 226, 213, 0.7);
+      text-decoration: none;
+    }
+    .jump-list a:hover { background: var(--sea-soft); }
+
+    .idea {
+      margin: 0 0 22px;
+      padding: 24px;
+      border: 1px solid var(--line);
+      background: rgba(242, 238, 230, 0.72);
+      box-shadow: 0 10px 30px var(--shadow);
+      scroll-margin-top: 20px;
+    }
+    .idea.top { border-color: var(--ink); background: var(--paper-2); box-shadow: 6px 6px 0 var(--ink); }
+    .idea-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+    .rank { display: block; margin-bottom: 4px; color: var(--candle-text); font-size: 0.72rem; }
+    .pills { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+    .pill { white-space: nowrap; }
+    .pill.axis { background: var(--sea-soft); color: var(--sea-text); border-color: #9eb2bb; }
+    .pill.confidence { background: var(--kept-soft); color: #4c3c17; border-color: #c7b77b; }
+    .pill.complexity { background: var(--candle-soft); color: var(--candle-text); border-color: #d9aa83; }
+    .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 24px; margin: 22px 0 0; }
+    .field { margin: 0; }
+    .field.wide { grid-column: 1 / -1; }
+    .basis-tag { font-weight: 500; color: var(--sea-text); }
+
+    .diagram {
+      margin: 24px 0 0;
+      padding: 14px;
+      border: 1px solid var(--line);
+      background: #f7f3eb;
+      overflow-x: auto;
+    }
+    .diagram svg { display: block; width: 100%; height: auto; min-width: 680px; }
+    .diagram figcaption { max-width: 72ch; margin: 10px 4px 0; color: var(--ink-2); font-size: 0.72rem; }
+    .svg-label { font-family: "JetBrains Mono", monospace; font-size: 13px; fill: var(--ink); }
+    .svg-small { font-family: "JetBrains Mono", monospace; font-size: 11px; fill: var(--ink-2); }
+    .svg-line { stroke: var(--sea); stroke-width: 2; fill: none; }
+    .svg-box { fill: var(--sea-soft); stroke: var(--sea); stroke-width: 1.5; }
+    .svg-warm { fill: var(--candle-soft); stroke: var(--candle); stroke-width: 1.5; }
+    .svg-neutral { fill: var(--paper-2); stroke: var(--ink-2); stroke-width: 1.5; }
+    .svg-stop { fill: var(--closed-soft); stroke: var(--closed); stroke-width: 1.5; }
+
+    table { width: 100%; border-collapse: collapse; background: rgba(242, 238, 230, 0.7); font-size: 0.82rem; }
+    th, td { padding: 12px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: var(--paper-2); color: var(--ink-2); font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; }
+    td:first-child { width: 3.4rem; color: var(--candle-text); }
+    td:nth-child(2) { width: 25%; font-weight: 500; }
+
+    .sources { columns: 2; column-gap: 32px; margin: 0; padding-left: 1.4rem; }
+    .sources li { break-inside: avoid; margin: 0 0 12px; padding-left: 4px; font-size: 0.82rem; }
+    .source-note { color: var(--ink-2); }
+    footer { margin-top: 72px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--ink-2); font-size: 0.72rem; }
+
+    @media (max-width: 780px) {
+      .page { width: min(100% - 24px, 960px); padding-top: 18px; }
+      .hero { padding: 22px; box-shadow: 5px 5px 0 var(--ink); }
+      .meta, .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .platform-grid, .axis-list { grid-template-columns: 1fr; }
+      .axis-list li { min-height: auto; }
+      .axis-list li::before { margin-bottom: 8px; }
+      .jump-list, .fields { grid-template-columns: 1fr; }
+      .field.wide { grid-column: auto; }
+      .idea-head { display: block; }
+      .pills { justify-content: flex-start; margin-top: 14px; }
+      .sources { columns: 1; }
+      .table-wrap { overflow-x: auto; }
+      table { min-width: 720px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+    @media print {
+      body { background: white; }
+      .page { width: 100%; padding: 0; }
+      .hero, .idea.top { box-shadow: none; }
+      a { color: inherit; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <p class="eyebrow">repo-grounded ideation</p>
+      <h1>the molecule that finds itself</h1>
+      <p class="lede">How the Kohn–Sham neural-operator research could improve objet d’art on iOS and web without turning an author-hosted manuscript into an unsupported runtime dependency.</p>
+
+      <dl class="meta">
+        <div><dt>Date</dt><dd><time datetime="2026-08-25">2026-08-25</time></dd></div>
+        <div><dt>Topic</dt><dd>kohn-sham-ios-web</dd></div>
+        <div><dt>Focus</dt><dd>use the supplied research to improve both apps</dd></div>
+        <div><dt>Mode</dt><dd>repo-grounded</dd></div>
+      </dl>
+
+      <div class="stats" aria-label="Ideation summary">
+        <div class="stat"><strong>1</strong><span>bounded room to prove first</span></div>
+        <div class="stat"><strong>5</strong><span>independent opportunity axes</span></div>
+        <div class="stat"><strong>7</strong><span>ranked directions retained</span></div>
+        <div class="stat"><strong>0</strong><span>client-side ML dependencies recommended now</span></div>
+      </div>
+
+      <nav aria-label="Document sections">
+        <ul class="toc">
+          <li><a href="#grounding-context">Grounding Context</a></li>
+          <li><a href="#topic-axes">Topic Axes</a></li>
+          <li><a href="#ranked-ideas">Ranked Ideas</a></li>
+          <li><a href="#rejection-summary">Rejection Summary</a></li>
+          <li><a href="#sources">Sources &amp; References</a></li>
+        </ul>
+      </nav>
+    </header>
+
+    <section id="grounding-context">
+      <p class="eyebrow">the answer</p>
+      <h2>Grounding Context</h2>
+      <div class="prose">
+        <p>The strongest use of the paper is <strong>not</strong> to install its Fourier neural operator in the apps. Use its central law—an electronic state should be reached through visible, revisable self-consistency—to deepen one molecule room. Let a hand perturb a bounded cause, let the field gather and correct itself, and let failure remain a legitimate ending.</p>
+        <p>That move fits the work already present. The web atom and molecule rooms are deterministic scientific stylizations, while native <code>AtomKernel</code> explicitly disclaims being a quantum solver and <code>MoleculeKernel</code> uses a curated register. Native already has scalar surfaces, fixed-step simulation, checkpoint promotion, and quarantine; neither client currently ships an ML runtime. The paper therefore offers a better behavior and evidence shape before it offers a deployable model.</p>
+        <p>The scientific boundary matters. The supplied August 24 manuscript reports a learned potential→density map inside a retained self-consistent field cycle, trained across 8,504 molecular and solid examples. It also reports that its unfine-tuned model diverged on every tested magnesium-defect case. As of August 25, the paper is author-hosted and no indexed publication, public code, weights, browser deployment, or phone deployment was found. Convergence is useful evidence, but it is not an accuracy certificate.</p>
+      </div>
+
+      <aside class="callout" aria-label="Primary recommendation">
+        <p class="eyebrow">primary recommendation</p>
+        <p><strong>Prototype “the self-consistent molecule” on one canonical molecule, fed by an offline reference-field cassette and recorded as a renderer-free trace.</strong> WebGL and Metal may interpret the same scientific score differently; the score, residual milestones, validity envelope, and refusal state remain shared.</p>
+      </aside>
+
+      <div class="platform-grid" aria-label="Cross-platform translation">
+        <article class="platform-card">
+          <h3>shared authority</h3>
+          <p>seed, semantic interventions, reference-field cassette, logical iterations, residual milestones, validity disposition, and a versioned field-quantization rule</p>
+        </article>
+        <article class="platform-card">
+          <h3>web expression</h3>
+          <p>WebGL field reconstruction, Web Audio beating, gesture grammar, keyboard and reduced-motion paths, 390px evidence</p>
+        </article>
+        <article class="platform-card">
+          <h3>iOS expression</h3>
+          <p>Metal field reconstruction, haptic tension and release, vessel response, fixed-step authority, thermal and memory evidence</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="topic-axes">
+      <p class="eyebrow">five ways the research can matter</p>
+      <h2>Topic Axes</h2>
+      <ol class="axis-list">
+        <li>playable self-consistency</li>
+        <li>electronic-field fidelity</li>
+        <li>trust and failure</li>
+        <li>cross-platform state and replay</li>
+        <li>runtime delivery envelope</li>
+      </ol>
+    </section>
+
+    <section id="ranked-ideas">
+      <p class="eyebrow">ranked by value, evidence, and fit</p>
+      <h2>Ranked Ideas</h2>
+      <ol class="jump-list" aria-label="Jump to a ranked idea">
+        <li><a href="#idea-1">1. The self-consistent molecule</a></li>
+        <li><a href="#idea-2">2. The electronic field press</a></li>
+        <li><a href="#idea-3">3. Calm is not trust</a></li>
+        <li><a href="#idea-4">4. One molecule, no excuses</a></li>
+        <li><a href="#idea-5">5. The portable electronic trace</a></li>
+        <li><a href="#idea-6">6. Make model migration a room lens</a></li>
+        <li><a href="#idea-7">7. The reciprocal-space spectrograph</a></li>
+      </ol>
+
+      <article class="idea top" id="idea-1">
+        <div class="idea-head">
+          <div><span class="rank">1.</span><h3>The self-consistent molecule</h3></div>
+          <div class="pills">
+            <span class="pill axis">playable self-consistency</span>
+            <span class="pill confidence">confidence 80%</span>
+            <span class="pill complexity">complexity medium</span>
+          </div>
+        </div>
+        <dl class="fields">
+          <div class="field wide"><dt>Description</dt><dd>In one molecule room, the hand perturbs nuclei or a bounded effective-potential well—it never paints the density. A deterministic authored loop lets the electronic field gather, overshoot, mix, and settle. Residual drives moiré, audio beating, and haptic tension. A longer hold reveals later corrections and may still end unresolved.</dd></div>
+          <div class="field"><dt>Basis</dt><dd><span class="basis-tag">direct:</span> <code>docs/gesture-grammar.md</code> and <code>AGENTS.md</code> make duration continuous and require meaningful acts to land through shared visual, audio, and haptic buses. <span class="basis-tag">external:</span> the Khan et al. manuscript keeps potential construction, density updates, mixing, a convergence residual, and an explicit unconverged outcome. <span class="basis-tag">reasoned:</span> residual can become sensory tension without being presented as physical electron time.</dd></div>
+          <div class="field"><dt>Rationale</dt><dd>This converts the paper’s central architectural insight into an instrument. Most electronic visualizers show a finished field; this room makes correction itself playable while preserving the distinction between hand, cause, and electronic response.</dd></div>
+          <div class="field"><dt>Downsides</dt><dd>Solver iteration is not physical electron time. The guide and sensory timing must avoid that misconception, and a reference trajectory is needed before the motion can claim electronic meaning.</dd></div>
+          <div class="field"><dt>Proof gate</dt><dd>In a silent 30-second test, a visitor should distinguish perturbation, settling, a residual spike, recovery, and refusal. The same seed must reproduce exact semantic action and logical-tick ordering; numeric fields must agree within declared tolerances.</dd></div>
+        </dl>
+
+        <figure class="diagram">
+          <svg viewBox="0 0 1060 330" role="img" aria-labelledby="loop-title loop-desc">
+            <title id="loop-title">Conceptual self-consistency loop</title>
+            <desc id="loop-desc">A hand changes a bounded cause. A provisional density is reconstructed and corrected while an iteration budget remains. A small residual opens a separate domain and reference-support gate; exhausted or unsupported runs are not promoted. Residual drives visual, audio, and haptic tension throughout.</desc>
+            <defs>
+              <marker id="arrow-loop" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#2c4a5c"></path>
+              </marker>
+            </defs>
+            <rect class="svg-warm" x="20" y="90" width="130" height="70" rx="35"></rect>
+            <text class="svg-label" x="85" y="119" text-anchor="middle">hand changes</text>
+            <text class="svg-small" x="85" y="139" text-anchor="middle">bounded cause</text>
+
+            <rect class="svg-box" x="190" y="70" width="160" height="110" rx="10"></rect>
+            <text class="svg-label" x="270" y="110" text-anchor="middle">provisional</text>
+            <text class="svg-label" x="270" y="130" text-anchor="middle">density field</text>
+            <text class="svg-small" x="270" y="154" text-anchor="middle">reference-backed</text>
+
+            <polygon class="svg-neutral" points="420,125 490,65 560,125 490,185"></polygon>
+            <text class="svg-label" x="490" y="120" text-anchor="middle">residual</text>
+            <text class="svg-small" x="490" y="140" text-anchor="middle">small enough?</text>
+
+            <polygon class="svg-neutral" points="430,255 490,210 550,255 490,300"></polygon>
+            <text class="svg-label" x="490" y="250" text-anchor="middle">iteration</text>
+            <text class="svg-small" x="490" y="270" text-anchor="middle">budget remains?</text>
+
+            <polygon class="svg-neutral" points="635,125 715,65 795,125 715,185"></polygon>
+            <text class="svg-label" x="715" y="111" text-anchor="middle">domain + reference</text>
+            <text class="svg-small" x="715" y="132" text-anchor="middle">support adequate?</text>
+
+            <rect class="svg-box" x="870" y="38" width="164" height="70" rx="10"></rect>
+            <text class="svg-label" x="952" y="68" text-anchor="middle">settled + supported</text>
+            <text class="svg-small" x="952" y="88" text-anchor="middle">allowed to promote</text>
+
+            <rect class="svg-stop" x="870" y="230" width="164" height="70" rx="10"></rect>
+            <text class="svg-label" x="952" y="260" text-anchor="middle">not promotable</text>
+            <text class="svg-small" x="952" y="280" text-anchor="middle">last good remains</text>
+
+            <path class="svg-line" marker-end="url(#arrow-loop)" d="M150 125 H184"></path>
+            <path class="svg-line" marker-end="url(#arrow-loop)" d="M350 125 H414"></path>
+            <path class="svg-line" marker-end="url(#arrow-loop)" d="M560 125 H629"></path>
+            <path class="svg-line" marker-end="url(#arrow-loop)" d="M770 90 C812 70 830 73 864 73"></path>
+            <path class="svg-line" marker-end="url(#arrow-loop)" d="M770 160 C812 190 830 250 864 258"></path>
+            <path class="svg-line" marker-end="url(#arrow-loop)" d="M490 185 V204"></path>
+            <path class="svg-line" marker-end="url(#arrow-loop)" d="M432 270 C390 315 270 316 270 186"></path>
+            <path class="svg-line" marker-end="url(#arrow-loop)" d="M550 255 H864"></path>
+            <text class="svg-small" x="595" y="111" text-anchor="middle" style="paint-order:stroke fill;stroke:#f7f3eb;stroke-width:3px">yes</text>
+            <text class="svg-small" x="820" y="54" text-anchor="middle">supported</text>
+            <text class="svg-small" x="820" y="218" text-anchor="middle" style="paint-order:stroke fill;stroke:#f7f3eb;stroke-width:3px">unknown / outside</text>
+            <text class="svg-small" x="388" y="301" text-anchor="middle" style="paint-order:stroke fill;stroke:#f7f3eb;stroke-width:3px">yes — mix and correct</text>
+            <text class="svg-small" x="704" y="244" text-anchor="middle" style="paint-order:stroke fill;stroke:#f7f3eb;stroke-width:3px">no — exhausted</text>
+          </svg>
+          <figcaption>The hand changes the cause; density remains the material’s answer. A small residual only opens the trust gate. Promotion also requires adequate domain and reference support; unsupported or iteration-exhausted runs leave the last trustworthy field in place.</figcaption>
+        </figure>
+      </article>
+
+      <article class="idea" id="idea-2">
+        <div class="idea-head">
+          <div><span class="rank">2.</span><h3>The electronic field press</h3></div>
+          <div class="pills">
+            <span class="pill axis">runtime delivery envelope</span>
+            <span class="pill confidence">confidence 80%</span>
+            <span class="pill complexity">complexity high</span>
+          </div>
+        </div>
+        <dl class="fields">
+          <div class="field wide"><dt>Description</dt><dd>An offline compiler turns conventional SCF trajectories—or later, a reproducible and licensed learned solver—into content-addressed field cassettes. Each cassette carries compact basis fields, coefficient tracks, residuals, invariants, a validity envelope, provenance, fixtures, and disclosures. WebGL and Metal reconstruct it locally with no runtime model.</dd></div>
+          <div class="field"><dt>Basis</dt><dd><span class="basis-tag">direct:</span> <code>scripts/native/generate-reference-fixtures.mjs</code> and <code>docs/plans/2026-08-19-1352-feat-native-cosmogony-garden-plan.md</code> establish versioned offline scientific fixtures while keeping runtime state deterministic. <span class="basis-tag">external:</span> ONNX Runtime Web and Core ML make inference possible in principle, but the Khan et al. manuscript provides no released model or mobile/browser envelope.</dd></div>
+          <div class="field"><dt>Rationale</dt><dd>This captures useful electronic behavior now while protecting offline play, startup, thermal headroom, frame budgets, and scientific review. The paper can later become one press input without becoming the app’s authority by decree.</dd></div>
+          <div class="field"><dt>Downsides</dt><dd>Compression fidelity, source licensing, reference-compute cost, and authoring ergonomics are all unproven. “Cassette” is a hypothesis to measure, not a promised format.</dd></div>
+          <div class="field"><dt>Proof gate</dt><dd>One cassette must load instantly offline, reconstruct a trajectory within a declared reference tolerance, and pass browser plus device frame, memory, and thermal evidence.</dd></div>
+        </dl>
+
+        <figure class="diagram">
+          <svg viewBox="0 0 860 230" role="img" aria-labelledby="press-title press-desc">
+            <title id="press-title">Offline electronic field press</title>
+            <desc id="press-desc">Conventional calculations and future reproducible learned solvers feed an offline compiler. It emits one signed cassette used by both web and iOS renderers without runtime machine learning.</desc>
+            <defs>
+              <marker id="arrow-press" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#2c4a5c"></path>
+              </marker>
+            </defs>
+            <rect class="svg-neutral" x="24" y="26" width="170" height="68" rx="10"></rect>
+            <text class="svg-label" x="109" y="54" text-anchor="middle">conventional SCF</text>
+            <text class="svg-small" x="109" y="75" text-anchor="middle">reference trajectory</text>
+            <rect class="svg-neutral" x="24" y="136" width="170" height="68" rx="10"></rect>
+            <text class="svg-label" x="109" y="164" text-anchor="middle">future KS-FNO</text>
+            <text class="svg-small" x="109" y="185" text-anchor="middle">only if reproducible</text>
+
+            <rect class="svg-warm" x="276" y="62" width="174" height="106" rx="10"></rect>
+            <text class="svg-label" x="363" y="103" text-anchor="middle">offline field press</text>
+            <text class="svg-small" x="363" y="126" text-anchor="middle">compress · validate</text>
+            <text class="svg-small" x="363" y="146" text-anchor="middle">version · disclose</text>
+
+            <polygon class="svg-box" points="510,72 642,72 668,115 642,158 510,158 484,115"></polygon>
+            <text class="svg-label" x="576" y="110" text-anchor="middle">field cassette</text>
+            <text class="svg-small" x="576" y="132" text-anchor="middle">authority + evidence</text>
+
+            <rect class="svg-box" x="714" y="28" width="122" height="64" rx="10"></rect>
+            <text class="svg-label" x="775" y="56" text-anchor="middle">web</text>
+            <text class="svg-small" x="775" y="76" text-anchor="middle">WebGL + audio</text>
+            <rect class="svg-box" x="714" y="138" width="122" height="64" rx="10"></rect>
+            <text class="svg-label" x="775" y="166" text-anchor="middle">iOS</text>
+            <text class="svg-small" x="775" y="186" text-anchor="middle">Metal + haptics</text>
+
+            <path class="svg-line" marker-end="url(#arrow-press)" d="M194 60 C232 60 236 92 270 98"></path>
+            <path class="svg-line" marker-end="url(#arrow-press)" d="M194 170 C232 170 236 138 270 132"></path>
+            <path class="svg-line" marker-end="url(#arrow-press)" d="M450 115 H478"></path>
+            <path class="svg-line" marker-end="url(#arrow-press)" d="M668 94 C687 83 693 60 708 60"></path>
+            <path class="svg-line" marker-end="url(#arrow-press)" d="M668 136 C687 147 693 170 708 170"></path>
+          </svg>
+          <figcaption>The runtime receives a small, reviewed scientific artifact—not a hidden solver loop. Each platform keeps its native renderer and sensory buses while consuming the same authority and evidence.</figcaption>
+        </figure>
+      </article>
+
+      <article class="idea" id="idea-3">
+        <div class="idea-head">
+          <div><span class="rank">3.</span><h3>Calm is not trust</h3></div>
+          <div class="pills">
+            <span class="pill axis">trust and failure</span>
+            <span class="pill confidence">confidence 90%</span>
+            <span class="pill complexity">complexity medium</span>
+          </div>
+        </div>
+        <dl class="fields">
+          <div class="field wide"><dt>Description</dt><dd>Replace binary “stable” with scientific dispositions: converged-in-domain, residual-rising, maximum-iterations, domain-unknown, and reference-unverified. Residual controls one sensory layer; domain support or model disagreement controls another. Only explicitly permitted states promote, and the last trustworthy checkpoint remains when a run is quarantined.</dd></div>
+          <div class="field"><dt>Basis</dt><dd><span class="basis-tag">direct:</span> <code>packages/objet-universe-kit/Sources/ObjetUniverseCore/SimulationProtocol.swift</code> exposes <code>stable: Bool</code>, while <code>UniverseHost.swift</code> quarantines non-stable output. Current atom and molecule checks largely establish finite-number validity. <span class="basis-tag">external:</span> the Khan et al. manuscript treats residual as a convergence signal and reports magnesium transfer failure; Mouli et al. show that neural-operator uncertainty under distribution shift is a separate problem.</dd></div>
+          <div class="field"><dt>Rationale</dt><dd>Both apps gain an honest trust grammar without badges or diagnostic panels inside the room. The visitor feels whether the field is still working, unsupported despite calm, or refused; the guide names the distinction when asked.</dd></div>
+          <div class="field"><dt>Downsides</dt><dd>A defensible support or disagreement measure must be calibrated. Purely aesthetic failure signals can remain ambiguous, so guide language and play testing matter.</dd></div>
+          <div class="field"><dt>Proof gate</dt><dd>Visitors should distinguish “still settling,” “settled but unsupported,” and “quarantined” without labels, while tests prove promotion rules and last-good rollback.</dd></div>
+        </dl>
+      </article>
+
+      <article class="idea" id="idea-4">
+        <div class="idea-head">
+          <div><span class="rank">4.</span><h3>One molecule, no excuses</h3></div>
+          <div class="pills">
+            <span class="pill axis">electronic-field fidelity</span>
+            <span class="pill confidence">confidence 80%</span>
+            <span class="pill complexity">complexity medium</span>
+          </div>
+        </div>
+        <dl class="fields">
+          <div class="field wide"><dt>Description</dt><dd>Limit the first proof to H₂ or one canonical molecule in a declared bond-length and pose envelope. Back every allowed state with reference fields, electron-count conservation, pose equivariance, and explicit refusal outside the envelope. Spend fidelity on depth rather than expanding the catalog.</dd></div>
+          <div class="field"><dt>Basis</dt><dd><span class="basis-tag">direct:</span> <code>packages/objet-universe-kit/Sources/ObjetUniverseCore/Atoms/AtomKernel.swift</code> explicitly disclaims quantum solving. <span class="basis-tag">external:</span> the Khan et al. manuscript’s magnesium results make broad out-of-distribution transfer an explicit evidence boundary. <span class="basis-tag">reasoned:</span> a narrow physical domain makes charge conservation, pose behavior, interpolation, and refusal falsifiable.</dd></div>
+          <div class="field"><dt>Rationale</dt><dd>This creates one defensible fidelity anchor and the smallest experiment that can decide whether electronic fields genuinely improve the artwork.</dd></div>
+          <div class="field"><dt>Downsides</dt><dd>The first release deepens only one molecule. Choosing the reference method, basis, grid, validity interval, and wording requires scientific review.</dd></div>
+          <div class="field"><dt>Proof gate</dt><dd>Every approved bond and pose state must match references, conserve charge, replay on both platforms, and refuse unsupported states.</dd></div>
+        </dl>
+      </article>
+
+      <article class="idea" id="idea-5">
+        <div class="idea-head">
+          <div><span class="rank">5.</span><h3>The portable electronic trace</h3></div>
+          <div class="pills">
+            <span class="pill axis">cross-platform state and replay</span>
+            <span class="pill confidence">confidence 80%</span>
+            <span class="pill complexity">complexity high</span>
+          </div>
+        </div>
+        <dl class="fields">
+          <div class="field wide"><dt>Description</dt><dd>Persist a renderer-free score: seed, model or fixture version, semantic interventions, logical ticks, iteration packets, residual milestones, dispositions, checkpoints, and a versioned quantization rule for field digests. Swift and TypeScript render differently but replay the same semantic event order; continuous numeric fields compare within declared tolerances.</dd></div>
+          <div class="field"><dt>Basis</dt><dd><span class="basis-tag">direct:</span> <code>docs/native/simulation-contract.md</code> and <code>packages/objet-universe-kit/Sources/ObjetUniverseCore/ScenarioTrace.swift</code> establish renderer-free, versioned actions, traces, checkpoints, recovery, and cross-language comparison. They are not yet the live molecule authority. <span class="basis-tag">external:</span> the Khan et al. manuscript makes intermediate iteration milestones worth preserving rather than storing only an endpoint.</dd></div>
+          <div class="field"><dt>Rationale</dt><dd>A molecular act can remain the same artwork across browser and phone instead of merely looking similar. It also produces inspectable regression evidence without forcing the renderers into lockstep.</dd></div>
+          <div class="field"><dt>Downsides</dt><dd>The quantization rule, numeric tolerances, event-version migrations, persistence wiring, and platform floating-point differences make this a substantial contract project.</dd></div>
+          <div class="field"><dt>Proof gate</dt><dd>A web-exported score must reproduce exact semantic event ordering plus the same residual and disposition milestones on iOS across relaunch and frame tiers. Continuous fields must stay within tolerance; digests compare only after both clients apply the same versioned quantization.</dd></div>
+        </dl>
+      </article>
+
+      <article class="idea" id="idea-6">
+        <div class="idea-head">
+          <div><span class="rank">6.</span><h3>Make model migration a room lens</h3></div>
+          <div class="pills">
+            <span class="pill axis">cross-platform state and replay</span>
+            <span class="pill confidence">confidence 70%</span>
+            <span class="pill complexity">complexity medium</span>
+          </div>
+        </div>
+        <dl class="fields">
+          <div class="field wide"><dt>Description</dt><dd>Every model or fixture upgrade emits paired, same-seed traces from current and candidate authorities. A twist moves through both fields and their difference; interference, beating, and haptics expose drift. The same paired artifact supports automated regression checks, scientific review, and—if it stands as material—a visitor-facing lens.</dd></div>
+          <div class="field"><dt>Basis</dt><dd><span class="basis-tag">direct:</span> <code>docs/native/simulation-contract.md</code> requires a model-version or evidence change rather than a silent fixture refresh, and <code>docs/gesture-grammar.md</code> assigns representation changes to the lens layer. <span class="basis-tag">reasoned:</span> endpoint calm can hide scientific drift, while paired deterministic traces isolate the changed authority without changing the underlying visitor state.</dd></div>
+          <div class="field"><dt>Rationale</dt><dd>Normally invisible model migration becomes audible, visible, and reviewable. One artifact may pay for both quality control and art.</dd></div>
+          <div class="field"><dt>Downsides</dt><dd>This is downstream of two credible authorities and may feel like a developer diff tool if the comparison lacks intrinsic material interest.</dd></div>
+          <div class="field"><dt>Proof gate</dt><dd>An intentionally altered candidate must be caught by the paired trace and felt through the lens without running two solvers in the frame loop.</dd></div>
+        </dl>
+      </article>
+
+      <article class="idea" id="idea-7">
+        <div class="idea-head">
+          <div><span class="rank">7.</span><h3>The reciprocal-space spectrograph</h3></div>
+          <div class="pills">
+            <span class="pill axis">electronic-field fidelity</span>
+            <span class="pill confidence">confidence 70%</span>
+            <span class="pill complexity">complexity medium</span>
+          </div>
+        </div>
+        <dl class="fields">
+          <div class="field wide"><dt>Description</dt><dd>A two-finger lens turns one approved density field between real-space fog and physical-radius reciprocal bands. Pose rotates the real field coherently while the spectral relationships remain stable across the approved domain. The lens interprets the same authority; it never invents a second state.</dd></div>
+          <div class="field"><dt>Basis</dt><dd><span class="basis-tag">direct:</span> <code>src/components/AtomsField.tsx</code> already contains a representation-lens precedent. <span class="basis-tag">external:</span> the Khan et al. operator uses physical reciprocal-radius filters plus SE(3)-equivariant structure. <span class="basis-tag">reasoned:</span> a real/reciprocal contrast can expose the same field’s spatial-frequency structure and pose relationships without adding explanatory labels.</dd></div>
+          <div class="field"><dt>Rationale</dt><dd>This could make pose equivariance and scale structure physical without embedding the paper’s model, claiming that a Fourier view itself proves nonlocal response, or adding in-room copy.</dd></div>
+          <div class="field"><dt>Downsides</dt><dd>It can become a classroom spectrogram. The room needs a reference-backed field and an interaction whose sensory reward survives without labels.</dd></div>
+          <div class="field"><dt>Proof gate</dt><dd>Rotation and domain tests must preserve declared spectral relationships, and play testing must read as “the same field under another lens,” not “a new chart.”</dd></div>
+        </dl>
+      </article>
+    </section>
+
+    <section id="rejection-summary">
+      <p class="eyebrow">useful cuts</p>
+      <h2>Rejection Summary</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Idea</th><th>Reason rejected</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>The bond must earn itself</td><td>Fixing the current fallback is valid, but the paper supplies no chemical reaction-coordinate authority for a density passage.</td></tr>
+            <tr><td>2</td><td>One beautiful refusal</td><td>Keep one authored refusal inside ideas 3 and 4; do not turn it into a mandate for every science room.</td></tr>
+            <tr><td>3</td><td>Three-tier fidelity rail</td><td>A framework before the required one-room proof, with no deployable learned tier to justify it.</td></tr>
+            <tr><td>4</td><td>Honest progressive frame</td><td>The native cadence and presentation boundary already establish this behavior; it does not create a distinct research-derived improvement.</td></tr>
+            <tr><td>5</td><td>Electronic corpus flywheel</td><td>A later data-governance consequence of the field press, not a distinct app improvement yet.</td></tr>
+            <tr><td>6</td><td>Unbounded body</td><td>It assigned representation change to one-finger hold, conflicting with the shared gesture grammar. Its useful fragment survives in idea 7.</td></tr>
+            <tr><td>7</td><td>No endpoints, only corrections</td><td>It conflated correction against a baseline with signed inter-iteration correction and mislabeled residual decline as energy.</td></tr>
+            <tr><td>8</td><td>Independent solvers, shared evidence</td><td>Mostly an existing cross-language precedent and not distinct from the portable trace.</td></tr>
+            <tr><td>9</td><td>Ten-times compute ceremony</td><td>No phone or browser evidence supports a positive claim that rare high-cost inference is viable.</td></tr>
+            <tr><td>10</td><td>Physical field passport</td><td>A sound guardrail whose substantive pieces—provenance, validity, digests—already belong in ideas 2 and 5.</td></tr>
+            <tr><td>11</td><td>Self-consistent reaction passage</td><td>Self-consistent convergence at fixed geometry is not movement along a chemical reaction coordinate.</td></tr>
+            <tr><td>12</td><td>Trust-aware field cassette</td><td>Scientifically sound but overlapping: evidence travels with the cassette as a requirement of ideas 2 and 3.</td></tr>
+            <tr><td>13</td><td>Authoring-to-room closed loop</td><td>It bundled multiple later systems before one-room evidence exists.</td></tr>
+            <tr><td>14</td><td>Representation without assertion</td><td>Correct as a guardrail, but its strongest substance is already explicit in ideas 4 and 7.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="sources">
+      <p class="eyebrow">evidence and boundaries</p>
+      <h2>Sources &amp; References</h2>
+      <ol class="sources">
+        <li><a href="https://tensorlab.cms.caltech.edu/users/anima/ks_fno/KS-FNO-manuscript.pdf">Khan et al., “Learning the Kohn–Sham map with neural operators for quasi-linear scaling density functional theory”</a> <span class="source-note">— author-hosted manuscript supplied by the user, dated 2026-08-24.</span></li>
+        <li>User-supplied Caltech research summary, “Properties of molecules and materials ultimately arise …” <span class="source-note">— supplied text, dated 2026-08-24.</span></li>
+        <li><a href="https://www.nature.com/articles/s41524-026-02110-0">NeuralSCF: iterative learned self-consistency</a> <span class="source-note">— independent peer-reviewed support for repeated learned updates over a one-shot endpoint.</span></li>
+        <li><a href="https://proceedings.mlr.press/v235/mouli24a.html">OOD uncertainty for neural operators</a> <span class="source-note">— support for separating convergence from distribution-shift confidence.</span></li>
+        <li><a href="https://arxiv.org/abs/2402.01960">Functional conformal prediction</a> <span class="source-note">— calibration-bound uncertainty for function-valued outputs.</span></li>
+        <li><a href="https://onnxruntime.ai/docs/tutorials/web/">ONNX Runtime Web</a> and <a href="https://onnxruntime.ai/docs/tutorials/web/large-models.html">large-model constraints</a> <span class="source-note">— deployment is possible in principle, not established for this 3D operator.</span></li>
+        <li><a href="https://developer.apple.com/documentation/CoreML">Apple Core ML documentation</a> <span class="source-note">— iOS inference substrate, not evidence that the manuscript model fits a phone.</span></li>
+        <li><a href="https://github.com/Yasuaki-Ito/morbvis">MOrbVis</a> and <a href="https://arxiv.org/abs/1904.03992">OpenMX Viewer</a> <span class="source-note">— prior art for final electronic-field visualization.</span></li>
+        <li><a href="https://w1neskin.github.io/quantum-field-molecules/">Tiny browser quantum-field molecule example</a> <span class="source-note">— evidence that small basis-limited calculations can run in-browser.</span></li>
+        <li><a href="https://github.com/NeuralOperator/neuraloperator">NeuralOperator</a> and <a href="https://papers.nips.cc/paper/2021/hash/78f1893678afbeaa90b1fa01b9cfb860-Abstract.html">PhiSNet</a> <span class="source-note">— operator and equivariant electronic-structure precedents.</span></li>
+        <li><a href="https://github.com/jawauntb/objetdart_proj/blob/main/src/components/AtomsField.tsx">Web <code>AtomsField</code></a> and <a href="https://github.com/jawauntb/objetdart_proj/blob/main/src/lib/chemistry.ts">curated web chemistry</a>.</li>
+        <li><a href="https://github.com/jawauntb/objetdart_proj/blob/main/packages/objet-universe-kit/Sources/ObjetUniverseCore/Atoms/AtomKernel.swift">Native <code>AtomKernel</code></a>, <a href="https://github.com/jawauntb/objetdart_proj/blob/main/packages/objet-universe-kit/Sources/ObjetUniverseCore/Molecules/MoleculeKernel.swift"><code>MoleculeKernel</code></a>, <a href="https://github.com/jawauntb/objetdart_proj/blob/main/packages/objet-universe-kit/Sources/ObjetUniverseCore/UniverseHost.swift"><code>UniverseHost</code></a>, and <a href="https://github.com/jawauntb/objetdart_proj/blob/main/packages/objet-universe-kit/Sources/ObjetUniverseCore/SimulationProtocol.swift">simulation protocol</a>.</li>
+        <li><a href="https://github.com/jawauntb/objetdart_proj/blob/main/INSPIRATION.md">Objet d’art laws</a>, <a href="https://github.com/jawauntb/objetdart_proj/blob/main/docs/gesture-grammar.md">gesture grammar</a>, and <a href="https://github.com/jawauntb/objetdart_proj/blob/main/DESIGN.md">design brief</a>.</li>
+      </ol>
+    </section>
+
+    <footer class="composition-signal">Composed 2026-08-25T18:52:51Z by ce-ideate from the user’s two supplied August 24 Kohn–Sham research texts and the <code>objetdart_proj</code> repository.</footer>
+  </main>
+</body>
+</html>

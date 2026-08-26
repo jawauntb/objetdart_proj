@@ -18,6 +18,107 @@ struct MoleculeShaderUniforms {
   var representation: UInt32 = 0
   var reducedMotion: UInt32 = 0
   var breathSeconds: Float = Float(WaveField.breathSeconds)
+  /// Four authoritative AO density coefficients. The renderer never derives
+  /// these lanes from reaction energy, vibration, or a presentation phase.
+  var h2Density = SIMD4<Float>(repeating: 0)
+  /// residual, tension, footprint, field strength; all are bounded projection
+  /// values, not inputs to the RHF authority.
+  var h2Projection = SIMD4<Float>(repeating: 0)
+  /// phase, separation, active flag, reserved. Phase is the only decorative
+  /// lane that reduced motion is allowed to hold at a detent.
+  var h2Presentation = SIMD4<Float>(repeating: 0)
+  /// disposition code, promotion generation, reserved, reserved.
+  var h2Meta = SIMD4<UInt32>(repeating: 0)
+}
+
+/// The finite, immutable H₂ presentation record accepted by Metal. Core owns
+/// the authority and creates this value at its render-snapshot boundary; this
+/// target owns only the bounded projection into fixed uniforms. In particular,
+/// no candidate is promoted here and no support or convergence decision is
+/// inferred from a coefficient, residual, or generation number.
+public struct MoleculeH2MetalSnapshot: Equatable, Sendable {
+  public enum Disposition: UInt32, Equatable, Sendable {
+    case idle = 0
+    case correcting = 1
+    case promoted = 2
+    case cancelled = 3
+    case outsideEnvelope = 4
+    case maxIterations = 5
+    case referenceUnverified = 6
+    case numericalFailure = 7
+  }
+
+  public let bodyID: UInt64
+  public let candidateDensity: SIMD4<Float>?
+  public let lastGoodDensity: SIMD4<Float>?
+  public let residual: Float?
+  public let tension: Float
+  public let footprint: Float
+  public let phase: Float
+  public let fieldStrength: Float
+  public let separation: Float
+  public let disposition: Disposition
+  public let promotionGeneration: UInt32
+  public let active: Bool
+
+  public init(
+    bodyID: UInt64 = 0,
+    candidateDensity: SIMD4<Float>? = nil,
+    lastGoodDensity: SIMD4<Float>?,
+    residual: Float? = nil,
+    tension: Float = 0,
+    footprint: Float = 0,
+    phase: Float = 0.5,
+    fieldStrength: Float = 0,
+    separation: Float = 0,
+    disposition: Disposition,
+    promotionGeneration: UInt32 = 0,
+    active: Bool
+  ) {
+    self.bodyID = bodyID
+    self.candidateDensity = candidateDensity
+    self.lastGoodDensity = lastGoodDensity
+    self.residual = residual
+    self.tension = tension
+    self.footprint = footprint
+    self.phase = phase
+    self.fieldStrength = fieldStrength
+    self.separation = separation
+    self.disposition = disposition
+    self.promotionGeneration = promotionGeneration
+    self.active = active
+  }
+
+  /// Converts the core-owned immutable handoff without asking the renderer to
+  /// inspect a live authority. The remaining lanes are presentation defaults;
+  /// they are intentionally not inferred as scientific decisions.
+  public init(core snapshot: MoleculeH2RenderSnapshot) {
+    self.init(
+      bodyID: snapshot.bodyID,
+      candidateDensity: snapshot.candidateDensity,
+      lastGoodDensity: snapshot.lastGoodDensity,
+      residual: snapshot.residual,
+      separation: snapshot.separationAngstrom,
+      disposition: Disposition(core: snapshot.disposition),
+      promotionGeneration: snapshot.promotionGeneration,
+      active: snapshot.active
+    )
+  }
+}
+
+private extension MoleculeH2MetalSnapshot.Disposition {
+  init(core disposition: H2RHFDisposition) {
+    switch disposition {
+    case .idle: self = .idle
+    case .correcting: self = .correcting
+    case .promoted: self = .promoted
+    case .cancelled: self = .cancelled
+    case .outsideEnvelope: self = .outsideEnvelope
+    case .maxIterations: self = .maxIterations
+    case .referenceUnverified: self = .referenceUnverified
+    case .numericalFailure: self = .numericalFailure
+    }
+  }
 }
 
 /// Fixed GPU record copied from one borrowed compound record.
@@ -26,6 +127,9 @@ struct MoleculeGPUBody {
   var positionVibration = SIMD4<Float>(repeating: 0)
   /// geometry family, atom count, x velocity, y velocity
   var geometryVelocity = SIMD4<Float>(repeating: 0)
+  /// Stable body identity split into low/high 32-bit lanes for Metal. The
+  /// H₂ field is addressed by this pair, never by the transient array slot.
+  var stableID = SIMD4<UInt32>(repeating: 0)
 }
 
 struct MoleculePipelineBundle {
@@ -137,10 +241,11 @@ public final class MoleculeRenderer: MoleculeSystemRenderer, ReducedMotionRender
   private let frames: [FrameResources]
   private let frameSlots = MetalFrameSlotPool(capacity: MoleculeRenderer.framesInFlight)
   private let pass = MTLRenderPassDescriptor()
-  private let pipelinePublication = MetalPipelinePublication<MoleculePipelineBundle>()
+  private var pipelinePublication = MetalPipelinePublication<MoleculePipelineBundle>()
   private let pipelineRetry = MetalPipelineRetryPolicy()
   private var reservedFrameIndex: Int?
   private var running = false
+  private var retired = false
   private var hasPresentedOwnFrame = false
   private var presentationTiming = MetalPresentationTiming()
 
@@ -187,6 +292,14 @@ public final class MoleculeRenderer: MoleculeSystemRenderer, ReducedMotionRender
   }
 
   public func submitMolecules(_ snapshot: MoleculeRenderSnapshot) {
+    submitMolecules(snapshot, h2: snapshot.h2.map(MoleculeH2MetalSnapshot.init(core:)))
+  }
+
+  /// Uploads the chemistry snapshot and, when present, the one immutable H₂
+  /// render record produced by the core boundary. The existing display-link
+  /// cadence remains the only scheduler; this overload only changes bytes in
+  /// the frame slot already reserved for the molecule submission.
+  public func submitMolecules(_ snapshot: MoleculeRenderSnapshot, h2: MoleculeH2MetalSnapshot?) {
     if reservedFrameIndex == nil {
       guard let acquired = frameSlots.tryAcquire() else { return }
       reservedFrameIndex = acquired
@@ -201,7 +314,12 @@ public final class MoleculeRenderer: MoleculeSystemRenderer, ReducedMotionRender
       releaseReservedFrame()
       return
     }
-    var uniforms = Self.makeUniforms(for: snapshot)
+    let scopedH2 = h2.flatMap { candidate in
+      snapshot.bodies.contains {
+        $0.id == candidate.bodyID && $0.compoundIndex == 6 && candidate.active
+      } ? candidate : nil
+    }
+    var uniforms = Self.makeUniforms(for: snapshot, h2: scopedH2)
     memcpy(frame.uniforms.contents(), &uniforms, MemoryLayout<MoleculeShaderUniforms>.stride)
     frame.bodyCount = bodyCount
     frame.secondsPerStep = snapshot.secondsPerTick
@@ -276,8 +394,22 @@ public final class MoleculeRenderer: MoleculeSystemRenderer, ReducedMotionRender
     presentationTiming.setReducedMotion(enabled)
   }
 
+  /// Re-arms only the renderer-owned pipeline publication after a Metal
+  /// drawable/context restoration. Existing frame slots and scientific state
+  /// stay intact; the caller's normal render cadence will submit the next
+  /// immutable snapshot once the replacement pipeline is ready.
+  public func contextDidBecomeAvailable() {
+    guard !retired else { return }
+    pipelinePublication.retire()
+    pipelinePublication = MetalPipelinePublication<MoleculePipelineBundle>()
+    pipelineRetry.resetAfterSuspend()
+    hasPresentedOwnFrame = false
+    prepare()
+  }
+
   public func retire() {
     running = false
+    retired = true
     releaseReservedFrame()
     pipelinePublication.retire()
   }
@@ -310,6 +442,12 @@ public final class MoleculeRenderer: MoleculeSystemRenderer, ReducedMotionRender
           Float(min(max(body.atomCount, 2), 5)),
           body.velocity.x,
           body.velocity.y
+        ),
+        stableID: SIMD4<UInt32>(
+          UInt32(truncatingIfNeeded: body.id),
+          UInt32(truncatingIfNeeded: body.id >> 32),
+          0,
+          0
         )
       )
     }
@@ -317,12 +455,105 @@ public final class MoleculeRenderer: MoleculeSystemRenderer, ReducedMotionRender
   }
 
   static func makeUniforms(for snapshot: MoleculeRenderSnapshot) -> MoleculeShaderUniforms {
+    makeUniforms(for: snapshot, h2: nil)
+  }
+
+  static func makeUniforms(
+    for snapshot: MoleculeRenderSnapshot,
+    h2: MoleculeH2MetalSnapshot?
+  ) -> MoleculeShaderUniforms {
     var uniforms = MoleculeShaderUniforms()
     uniforms.elapsed = Float(snapshot.elapsedSeconds)
     uniforms.reactionEnergy = min(max(snapshot.reactionEnergy, -1_200), 1_200)
     uniforms.representation = UInt32(clamping: snapshot.representation)
     uniforms.breathSeconds = Float(WaveField.breathSeconds)
+    if let h2 {
+      _ = packH2(h2, into: &uniforms)
+    }
     return uniforms
+  }
+
+  /// Copies the immutable H₂ snapshot into a fixed Metal ABI record. This is
+  /// intentionally a fail-closed, allocation-free projection: a refusal may
+  /// carry a provisional candidate, but only its last-good density is copied;
+  /// no residual or generation threshold can promote a checkpoint here.
+  @discardableResult
+  static func packH2(
+    _ snapshot: MoleculeH2MetalSnapshot,
+    into uniforms: inout MoleculeShaderUniforms
+  ) -> Bool {
+    uniforms.h2Density = SIMD4<Float>(repeating: 0)
+    uniforms.h2Projection = SIMD4<Float>(repeating: 0)
+    uniforms.h2Presentation = SIMD4<Float>(repeating: 0)
+    uniforms.h2Meta = SIMD4<UInt32>(
+      snapshot.disposition.rawValue,
+      snapshot.promotionGeneration,
+      UInt32(truncatingIfNeeded: snapshot.bodyID),
+      UInt32(truncatingIfNeeded: snapshot.bodyID >> 32)
+    )
+
+    guard snapshot.separation.isFinite, snapshot.separation >= 0,
+          snapshot.tension.isFinite, snapshot.footprint.isFinite,
+          snapshot.phase.isFinite, snapshot.fieldStrength.isFinite,
+          snapshot.active else {
+      // An inactive record is a valid empty room state only when all optional
+      // science lanes are absent; malformed active values must never paint.
+      if !snapshot.active,
+         snapshot.candidateDensity == nil,
+         snapshot.lastGoodDensity == nil,
+         snapshot.residual == nil {
+        uniforms.h2Meta = SIMD4<UInt32>(
+          snapshot.disposition.rawValue,
+          snapshot.promotionGeneration,
+          UInt32(truncatingIfNeeded: snapshot.bodyID),
+          UInt32(truncatingIfNeeded: snapshot.bodyID >> 32)
+        )
+        return true
+      }
+      return false
+    }
+
+    let candidateIsUsable = snapshot.candidateDensity.map(isFiniteDensity) ?? false
+    let lastGoodIsUsable = snapshot.lastGoodDensity.map(isFiniteDensity) ?? false
+    let selected: SIMD4<Float>?
+    switch snapshot.disposition {
+    case .correcting:
+      selected = candidateIsUsable ? snapshot.candidateDensity : (lastGoodIsUsable ? snapshot.lastGoodDensity : nil)
+    case .idle, .promoted, .cancelled, .outsideEnvelope, .maxIterations, .referenceUnverified, .numericalFailure:
+      selected = lastGoodIsUsable ? snapshot.lastGoodDensity : nil
+    }
+    guard let selected else { return false }
+    if let residual = snapshot.residual, !residual.isFinite { return false }
+
+    uniforms.h2Density = selected
+    uniforms.h2Projection = SIMD4<Float>(
+      bounded(abs(snapshot.residual ?? 0)),
+      bounded(snapshot.tension),
+      bounded(snapshot.footprint),
+      bounded(snapshot.fieldStrength)
+    )
+    uniforms.h2Presentation = SIMD4<Float>(
+      bounded(snapshot.phase),
+      bounded(snapshot.separation / 4),
+      1,
+      0
+    )
+    uniforms.h2Meta = SIMD4<UInt32>(
+      snapshot.disposition.rawValue,
+      snapshot.promotionGeneration,
+      UInt32(truncatingIfNeeded: snapshot.bodyID),
+      UInt32(truncatingIfNeeded: snapshot.bodyID >> 32)
+    )
+    return true
+  }
+
+  private static func isFiniteDensity(_ density: SIMD4<Float>) -> Bool {
+    density.x.isFinite && density.y.isFinite && density.z.isFinite && density.w.isFinite
+  }
+
+  private static func bounded(_ value: Float) -> Float {
+    guard value.isFinite else { return 0 }
+    return min(max(value, 0), 1)
   }
 
   private func releaseReservedFrame() {
