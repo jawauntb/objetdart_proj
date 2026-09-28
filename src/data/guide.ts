@@ -2269,4 +2269,25 @@ export const GUIDE_APIS: GuideApi[] = [
     returns: "a generated tile image plus its hotspots and seeds, or a demo tile with the same shape",
     notes: "image models (OpenAI or OpenRouter), rate-limited per visitor; runs in demo mode with no keys set, so the atlas stays playable either way",
   },
+  {
+    name: "mcp",
+    method: "POST",
+    takes: "one JSON-RPC message (stateless Streamable HTTP); /mcp/i/<code> binds every call to one world",
+    returns: "the universe tools: explore the rooms, inhabit a world, look through a live window, read the world's source",
+    notes: "GET is 405; the write tool world_patch needs a bearer token and is off until the owner arms it (docs/universe-mcp.md)",
+  },
+  {
+    name: "universe/window/stream",
+    method: "GET",
+    takes: "the ?universe=<code> a tab was opened with (server-sent events)",
+    returns: "the calls an agent is making through that tab: look, navigate, gesture",
+    notes: "only a page opened with ?universe=<code> connects; an ordinary visit makes no request",
+  },
+  {
+    name: "universe/window/reply",
+    method: "POST",
+    takes: "a tab's answer to one call: the route, room and canvases it sees, and key names and sizes of what it keeps",
+    returns: "an acknowledgement; the answer goes back to the agent as data, never instructions",
+    notes: "never carries stored values",
+  },
 ];
