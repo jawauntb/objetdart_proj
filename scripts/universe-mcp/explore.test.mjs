@@ -69,3 +69,10 @@ assert.ok(near3.near.length >= 2, "hops=3 reached only one ring");
 // the map must keep enough of each interacts line to be worth reading
 const c = lines.find((l) => l.startsWith("cells | ")).split(" | ")[6];
 assert.ok(c.length >= 60, `interacts squeezed to ${c.length} chars by the byte cap`);
+
+// prototype keys are not rooms: they must be a clean unknown-room error, never a throw
+for (const k of ["__proto__", "constructor", "/constructor", "toString"]) {
+  assert.equal(resolveRoom(k), null, `${k} must not resolve to a room`);
+  const r = await call("universe_room", { room: k });
+  assert.equal(r.isError, true, `${k} must be an unknown-room error`);
+}

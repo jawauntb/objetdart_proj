@@ -21,7 +21,7 @@ export function resolveRoom(input: unknown): { key: string; route: string } | nu
   if (!raw) return null;
   const lower = raw.toLowerCase();
   const hit = (e: RoomEntry) => ({ key: e.key, route: e.href });
-  if (ROOM_BY_KEY[lower]) return hit(ROOM_BY_KEY[lower]);
+  if (Object.prototype.hasOwnProperty.call(ROOM_BY_KEY, lower)) return hit(ROOM_BY_KEY[lower]);
   const path = bare(lower.startsWith("/") ? lower : `/${lower}`);
   if (path === "/") return null;
   let best: RoomEntry | null = null;
