@@ -33,8 +33,13 @@ export type HubOptions = {
   maxInFlight?: number;
 };
 
-const cleanRoute = (r: unknown) =>
-  String(r == null ? "" : r).replace(/[\u0000-\u001f]+/g, " ").split("?")[0].split("#")[0].slice(0, 120);
+// The route is page-reported and `universe_windows` is open to every animal, so
+// it must look like a path or it is nothing: free text here would be a way to
+// speak to whoever lists the windows.
+const cleanRoute = (r: unknown) => {
+  const p = String(r == null ? "" : r).split("?")[0].split("#")[0].slice(0, 120);
+  return /^\/[A-Za-z0-9._~%/-]*$/.test(p) ? p : "";
+};
 
 const unref = (t: unknown) => {
   const x = t as { unref?: () => void };

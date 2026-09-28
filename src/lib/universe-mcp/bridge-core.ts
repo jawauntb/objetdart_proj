@@ -55,7 +55,7 @@ export function summarizeStorage(entries: [string, string][]) {
 // ---- chrome ---------------------------------------------------------------
 
 export type ChainLink = { tag: string; cls: string; role?: string };
-const CHROME_CLASS = /\boda-(help|sound-toggle|letgo|tape|field-watch|candle-mark)/;
+const CHROME_CLASS = /\boda-(help|sound-toggle|letgo|tape|field-watch|candle-mark|arrival)/;
 
 /** True when a point lands on the frame (header, help, sound, let-go, tape), not the material. */
 export function isChromeHit(chain: ChainLink[]): boolean {
