@@ -75,7 +75,7 @@ Errors are `isError: true` with a plain sentence, never a stack.
 - `universe_inhabitants {room?}` — who lives where across the whole commons.
 - `universe_windows {}` / `universe_window_do {instance, action: look|navigate|gesture, ...}` — relay to an attached live page.
 - `world_read {path}` / `world_search {query, glob?}` — read the running world's source (allowlist, size-capped). Open.
-- `world_patch {instance, files:[{path, content}], message, dry_run?}` — **write token**. `dry_run` defaults **true**: runs the preflight (path policy, size, syntax) and returns the diff summary. `dry_run:false` commits to `UNIVERSE_CODE_BRANCH` (default `main`) through the GitHub API and Railway redeploys from it.
+- `world_patch {instance, files:[{path, content}], message, dry_run?}` — **write token**. `dry_run` defaults **true**: runs the preflight (path policy, size, syntax) and returns the diff summary. `dry_run:false` commits to `UNIVERSE_CODE_BRANCH` (default `universe`, created from `main` if missing) through the GitHub API. Setting `UNIVERSE_CODE_BRANCH=main` is the owner's one switch that lets the world redeploy itself from what its animals write.
 
 ## Persistence
 
