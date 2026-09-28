@@ -17,6 +17,23 @@ with a position, a path, per-room state, and inhabitants, addressed by a code
 lattice animal derives one code per unit and per rung of its ladder (mind,
 body, connectome, tissue, field, pattern) so each explores its own.
 
+### World codes (both repos compute this identically)
+
+```js
+const fnv1a = (s, seed) => { let h = seed >>> 0; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h; };
+const worldCode = (from, layer, unit) => {
+  const key = `${from}|${layer}|${unit}`;                       // from = the field's instance code, or "anon"
+  return "w" + [0x811c9dc5, 0x9e3779b1].map((sd) => fnv1a(key, sd).toString(36).padStart(7, "0")).join("").slice(0, 13);
+};
+```
+
+Golden vectors (pin them in tests on both sides):
+`("abcd1234","mind","7") → w18sdely0a62ke`, `("abcd1234","body","frog") → w0riwarz1cq1mp`,
+`("abcd1234","field","") → w1puy7wr08av8b`, `("anon","pattern","0") → w1dglo291beunb`.
+`layer` is one of `mind body connectome tissue field pattern visitor`. The server
+accepts any code that matches the pattern; `universe_open` without `instance`
+derives it this way.
+
 Two honest kinds of "being in a room":
 
 - **the headless twin** — the server holds each instance's room state and applies
