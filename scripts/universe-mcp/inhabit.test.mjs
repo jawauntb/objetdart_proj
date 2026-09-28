@@ -323,4 +323,21 @@ const script = (store, code) => {
   assert.equal(RT.dataDirFor({}).mode, "disk");
   assert.match(RT.persistenceText("disk"), /not redeploys/);
 }
+// ——— a persisted room that left the registry; memory can be read back ———
+{
+  const { store } = mk();
+  ok(W.open(store, { instance: "stalerooms1", layer: "mind" }, 1));
+  store.get().instances.stalerooms1.room = "a-room-the-world-deleted";
+  const l = ok(W.look(store, { instance: "stalerooms1" }, 2));
+  assert.equal(l.room, "cells", "a vanished room must send the world home to its layer, not throw");
+  store.get().instances.stalerooms1.room = "a-room-the-world-deleted";
+  assert.equal(W.gesture(store, { instance: "stalerooms1", verb: "tap", count: 3 }, 3).ok, true);
+  assert.deepEqual(l.memory, [], "no animal, no memory");
+  ok(W.inhabit(store, { instance: "stalerooms1", animal: { id: "mem-1", species: "s", cells: [[0, 0]] } }, 4));
+  for (let n = 0; n < 10; n++) ok(W.remember(store, { instance: "stalerooms1", note: `thought ${n}` }, 5));
+  const m = ok(W.look(store, { instance: "stalerooms1" }, 6)).memory;
+  assert.equal(m.length, 8, "look returns the last 8 notes");
+  assert.equal(m[7], "thought 9", "a remembered note must be readable, newest last");
+  assert.ok(!JSON.stringify(ok(W.inhabitants(store, {}))).includes("thought"), "the public listing still carries no notes");
+}
 console.log("inhabit: ok");

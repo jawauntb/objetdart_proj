@@ -29,6 +29,8 @@ function getInstance(store: Store, code: unknown, now: number): Instance | null 
   if (!has(d.instances, code)) return null;
   const i = d.instances[code];
   i.seen = now;
+  // a persisted room can outlive its registry entry (the world rewrites its own code): come home rather than throw
+  if (!roomOf(i.room)) i.room = has(LAYER_HOME, i.layer) ? LAYER_HOME[i.layer] : "manifold";
   return i;
 }
 const NO_INSTANCE = "No such world. Call universe_open first; codes are 8 to 16 lowercase letters and digits.";
@@ -90,6 +92,7 @@ export function look(store: Store, args: { instance?: unknown }, now: number): R
       population: { [e.creates ?? "things"]: st.objects.length, ripples: st.ripples },
       state: { lens: st.lens, frame: st.frame, law: st.law, material: st.material, bloom: st.bloom, night: st.night },
       inhabitants: pop.map(publicOf),
+      memory: target(store, i, undefined)?.notes.slice(-8) ?? [],
       inhabitantsSense: pop.slice(0, 8).map((h) => ({ id: h.id, sense: s.sound })),
       senses: s,
       breath: { phase, everySeconds: Math.round((1 / reg.lfoHz) * 10) / 10 },

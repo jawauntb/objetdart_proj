@@ -29,7 +29,7 @@ export function makeTools(getStore: () => Store): ToolDef[] {
     def("universe_open", "Get or create a world of your own. With no instance, the code is derived from from, layer and unit, so the same inputs return the same world.",
       obj({ instance, from: { type: "string", description: "The field's instance code, or omit for anon." }, layer: { type: "string", enum: [...W.LAYERS] }, unit: { type: "string" } }),
       (s, a, n) => W.open(s, a, n)),
-    def("universe_look", "Where this world is: the room, its population, what its inhabitants sense, the breath phase and the last steps.", obj({ instance }, ["instance"]), (s, a, n) => W.look(s, a, n)),
+    def("universe_look", "Where this world is: the room, its population, what its inhabitants sense, the last notes of this world's animal (memory), the breath phase and the last steps.", obj({ instance }, ["instance"]), (s, a, n) => W.look(s, a, n)),
     def("universe_step", "Travel. to is a room key, a route, in or out along the scale axis, or wander (the least-visited neighbor).",
       obj({ instance, to: { type: "string" } }, ["instance", "to"]), (s, a, n) => W.step(s, a, n)),
     def("universe_gesture", "Touch the room with a verb from the gesture grammar. A tap climbs the train 1, 3, 5, n; a hold deepens with ms. Returns what changed and the senses it lands in.",
