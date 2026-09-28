@@ -131,10 +131,10 @@ function dropOldest<T>(map: Dict<T>, keys: string[], stamp: (v: T) => number, ov
 }
 
 /** Every cap in one place. Oldest / least-recently-seen retires first. */
-export function enforceCaps(d: UniverseData): void {
+export function enforceCaps(d: UniverseData, full = true): void {
   const ik = Object.keys(d.instances);
   if (ik.length > CAPS.instances) dropOldest(d.instances, ik, (i) => i.seen, ik.length - CAPS.instances);
-  for (const k of Object.keys(d.instances)) {
+  if (full) for (const k of Object.keys(d.instances)) {
     const i = d.instances[k];
     if (i.path.length > CAPS.path) i.path.splice(0, i.path.length - CAPS.path);
     for (const rk of Object.keys(i.rooms)) {
@@ -146,9 +146,11 @@ export function enforceCaps(d: UniverseData): void {
   const byRoom = dict<string[]>();
   for (const k of hk) {
     const h = d.commons.inhabitants[k];
-    if (h.cells.length > CAPS.cells) h.cells.length = CAPS.cells;
-    if (h.notes.length > CAPS.notes) h.notes.splice(0, h.notes.length - CAPS.notes);
-    if (h.lineage.length > CAPS.lineage) h.lineage.splice(0, h.lineage.length - CAPS.lineage);
+    if (full) {
+      if (h.cells.length > CAPS.cells) h.cells.length = CAPS.cells;
+      if (h.notes.length > CAPS.notes) h.notes.splice(0, h.notes.length - CAPS.notes);
+      if (h.lineage.length > CAPS.lineage) h.lineage.splice(0, h.lineage.length - CAPS.lineage);
+    }
     (byRoom[h.room] ??= []).push(k);
   }
   for (const room of Object.keys(byRoom)) {
@@ -182,7 +184,7 @@ export function createStore(opts: StoreOpts): Store {
     get: () => data,
     mutate(fn) {
       const out = fn(data);
-      enforceCaps(data);
+      enforceCaps(data, false); // per-item caps are held at the write sites; a load checks them all
       dirty = true;
       if (!pending) {
         pending = true;

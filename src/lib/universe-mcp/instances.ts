@@ -110,6 +110,7 @@ export function step(store: Store, args: { instance?: unknown; to?: unknown }, n
     i.room = pick.room;
     i.visits[pick.room] = (has(i.visits, pick.room) ? i.visits[pick.room] : 0) + 1;
     i.path.push({ room: pick.room, how: pick.how, at: now });
+    if (i.path.length > CAPS.path) i.path.splice(0, i.path.length - CAPS.path);
     const { e, st, pop } = hereOf(store, i);
     return ok({ arrived: pick.room, route: e.href, by: pick.how, creates: e.creates, here: { [e.creates ?? "things"]: st.objects.length, inhabitants: pop.map(publicOf) }, visits: i.visits[pick.room], neighbors: neighborsOf(pick.room) });
   });
