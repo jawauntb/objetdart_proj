@@ -333,6 +333,12 @@ so the rooms never have to — in-room copy stays instruction-free, always.
   lanes share `lib/`.
 - AI endpoints (`src/app/api/*`) prefer `ANTHROPIC_API_KEY`, fall back to
   `GEMINI_API_KEY`, and must keep the hard-coded voice rules in their system prompts.
+- The universe MCP lives in `src/lib/universe-mcp`; its contract is
+  `docs/universe-mcp.md`, its tests are in `scripts/universe-mcp` (aggregated by
+  `npm run test:universe-mcp`). The leash files (`code*.ts`, `tools-code.ts`,
+  `auth.ts`, `src/app/api/mcp/**`) must not be loosened by an agent. A room author
+  changes nothing for it, except that a synthetic gesture must not throw: guard
+  `setPointerCapture`.
 - Deploys: Railway from `main` (see `docs/railway-autodeploy.md`).
 
 ## The pre-merge checklist — all of it, every time

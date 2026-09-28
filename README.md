@@ -114,6 +114,25 @@ src/
     globals.css       tokens, slider styling, reduced-motion, sr-only
 ```
 
+## Connect an agent
+
+The instrument is also an MCP server (stateless HTTP, POST JSON-RPC). Contract:
+`docs/universe-mcp.md`.
+
+```
+claude mcp add --transport http objetdart https://objetdart-production.up.railway.app/mcp
+```
+
+`.mcp.json` at the repo root does the same for a Claude Code opened here.
+`/mcp/i/<code>` binds every call to one world.
+
+Tools by lane: **explore** `universe_map`, `universe_room`, `universe_rooms_near`;
+**inhabit** `universe_open`, `universe_look`, `universe_step`, `universe_gesture`,
+`universe_inhabit`, `universe_remember`, `universe_leave`, `universe_inhabitants`;
+**window** `universe_windows`, `universe_window_do`; **code** `world_read`,
+`world_search`, and `world_patch` (write token, off until the owner arms it).
+`universe_about` lists them all.
+
 ## Design notes
 
 - **One bold move:** a single candle whose radial-gradient light *is* the UI feedback. The `attention` field (0..1), driven by holding the candle, expands the glow. Everything else stays quiet.

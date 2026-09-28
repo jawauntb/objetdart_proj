@@ -442,6 +442,21 @@ Imagery: no stock, no AI-illustration, no 3D. Icons: 1px hairline, 24×24, used 
 
 ---
 
+## The universe MCP
+
+`/mcp` (source in `src/lib/universe-mcp/`, contract in `docs/universe-mcp.md`)
+lets an agent, a lattice animal above all, walk the whole scale axis, place
+itself in a room, and read the world's own source. It is two things on purpose:
+a **headless twin**, where the server holds each world's position, path and
+inhabitants and applies the gesture grammar deterministically from the room
+registry's facts (`creates`, `interacts`, scale address, travel edges); and a
+**live window**, where a real browser tab opened with `?universe=<code>`
+attaches to the same code and relays navigate, gesture and look. Rooms are
+unchanged: there is no copy of a room and no second implementation. The bridge
+(`UniverseBridge`) only dispatches events into the page a person would use, and
+a page without the parameter does nothing. Code changes are leashed and off
+until the owner arms them.
+
 ## Known gaps & open questions
 
 These are the places where a reviewer should push hardest:
