@@ -176,6 +176,9 @@ export function inhabit(store: Store, args: { instance?: unknown; animal?: unkno
     }
     const inh = store.get().commons.inhabitants;
     const prev = has(inh, a.id) ? inh[a.id] : null;
+    // An animal belongs to the world that placed it: another world may see it in the
+    // commons but cannot overwrite it (ids are public). The owner leaves first to hand it on.
+    if (prev && prev.instance !== i.code) return fail(`That animal already lives in another world (${prev.instance}); only that world can move it or have it leave.`);
     const lineage = prev ? prev.lineage.slice() : [];
     const push = (s: string) => { if (s && lineage[lineage.length - 1] !== s) lineage.push(s); };
     if (typeof a.from === "string" && a.from) push(clean(a.from, 64));
@@ -193,7 +196,8 @@ export function inhabit(store: Store, args: { instance?: unknown; animal?: unkno
 function target(store: Store, i: Instance, animal: unknown): Inhabitant | null {
   const id = typeof animal === "string" && animal ? animal : i.animal;
   const inh = store.get().commons.inhabitants;
-  return id && has(inh, id) ? inh[id] : null;
+  const h = id && has(inh, id) ? inh[id] : null;
+  return h && h.instance === i.code ? h : null; // only the owning world may write to or retire it
 }
 
 export function remember(store: Store, args: { instance?: unknown; note?: unknown; animal?: unknown }, now: number): Res<Record<string, unknown>> {

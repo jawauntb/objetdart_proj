@@ -2684,7 +2684,7 @@ export default function Atlas() {
     if (!rect) return;
     event.preventDefault();
     stopInertia();
-    event.currentTarget.setPointerCapture(event.pointerId);
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* a synthetic pointer has no capture */ }
     const point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     // intensity from the best physical channel (force → contact area),
     // read once at landing so taps and hotspot halos share it

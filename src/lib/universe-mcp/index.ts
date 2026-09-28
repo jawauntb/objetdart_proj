@@ -5,7 +5,7 @@ import type { ToolCtx, ToolDef } from "@/lib/universe-mcp/types";
 import { text } from "@/lib/universe-mcp/protocol";
 import { isAuthed } from "@/lib/universe-mcp/auth";
 import { TOOLS as EXPLORE } from "@/lib/universe-mcp/tools-explore";
-import { TOOLS as INHABIT } from "@/lib/universe-mcp/tools-inhabit";
+import { TOOLS as INHABIT, persistenceNote } from "@/lib/universe-mcp/tools-inhabit";
 import { TOOLS as WINDOW } from "@/lib/universe-mcp/tools-window";
 import { TOOLS as CODE } from "@/lib/universe-mcp/tools-code";
 
@@ -25,6 +25,8 @@ const ABOUT: ToolDef = {
       [
         INSTRUCTIONS,
         "",
+        `persistence: ${persistenceNote()}`,
+        "",
         ...[["explore", EXPLORE], ["inhabit", INHABIT], ["window", WINDOW], ["code", CODE]].flatMap(([lane, tools]) => [
           `${lane}:`,
           ...(tools as ToolDef[]).map((t) => `  ${t.name}${t.access === "write" ? " (write token)" : ""} — ${t.description}`),
@@ -41,7 +43,10 @@ export function makeCtx(
   bound: string | null,
   now: () => number = Date.now,
 ): ToolCtx {
+  // The host's proxy sets x-real-ip; a client can prepend anything to x-forwarded-for, so
+  // when only that is present trust the entry the proxy appended (the last), never the first.
   const fwd = req.headers.get("x-forwarded-for");
-  const ip = (fwd ? fwd.split(",")[0].trim() : "") || req.headers.get("x-real-ip") || "";
+  const last = fwd ? fwd.split(",").pop()!.trim() : "";
+  const ip = (req.headers.get("x-real-ip") || "").trim() || last;
   return { now, ip, env, bound, authed: isAuthed(req.headers.get("authorization"), env.UNIVERSE_WRITE_TOKEN) };
 }

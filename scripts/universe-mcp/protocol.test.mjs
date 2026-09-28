@@ -57,7 +57,9 @@ assert.equal(isAuthed(null, T), false);
 assert.equal(bearerOf("bearer  abc "), "abc");
 const req = (h) => ({ headers: { get: (k) => h[k.toLowerCase()] ?? null } });
 assert.equal(makeCtx(req({ authorization: `Bearer ${T}` }), { UNIVERSE_WRITE_TOKEN: T }, null).authed, true);
-assert.equal(makeCtx(req({ "x-forwarded-for": "9.9.9.9, 1.1.1.1" }), {}, null).ip, "9.9.9.9");
+// a spoofed leading x-forwarded-for entry must not choose the rate-limit bucket
+assert.equal(makeCtx(req({ "x-forwarded-for": "9.9.9.9, 1.1.1.1" }), {}, null).ip, "1.1.1.1");
+assert.equal(makeCtx(req({ "x-forwarded-for": "9.9.9.9, 1.1.1.1", "x-real-ip": "2.2.2.2" }), {}, null).ip, "2.2.2.2");
 
 // limiter counts per address and forgets after a minute
 let t = 0;

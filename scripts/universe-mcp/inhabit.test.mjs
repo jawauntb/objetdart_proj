@@ -196,17 +196,25 @@ const script = (store, code) => {
   assert.equal(a.resumed, false);
   ok(W.remember(store, { instance: "worldaaaa1", note: "a\tb\u0007c" }, 3));
   assert.equal(store.get().commons.inhabitants["frog-1"].notes[0], "a bc", "control chars stripped");
-  const b = ok(W.inhabit(store, { instance: "worldbbbb2", animal: { id: "frog-1", species: "frog", cells: [[0, 0]] }, room: "/zeus" }, 4));
-  assert.equal(b.resumed, true, "the same id in another instance is the same inhabitant");
-  assert.equal(b.inhabitant.room, "zeus");
+  // ownership: an id is public, so another world must not overwrite, write to or retire it
+  assert.equal(W.inhabit(store, { instance: "worldbbbb2", animal: { id: "frog-1", species: "toad", cells: [[0, 0]] }, room: "/zeus" }, 4).ok, false, "a stranger cannot overwrite an animal by id");
+  assert.equal(W.remember(store, { instance: "worldbbbb2", note: "hijack", animal: "frog-1" }, 4).ok, false, "a stranger cannot write to its memory");
+  assert.equal(W.leave(store, { instance: "worldbbbb2", animal: "frog-1" }, 4).ok, false, "a stranger cannot retire it");
+  assert.equal(store.get().commons.inhabitants["frog-1"].species, "frog");
+  assert.equal(store.get().commons.inhabitants["frog-1"].notes.length, 1);
+  // the owner moves it within its own world and can hand it on by leaving first
+  const mv = ok(W.inhabit(store, { instance: "worldaaaa1", animal: { id: "frog-1", species: "frog", cells: [[0, 0]] }, room: "/zeus" }, 4));
+  assert.equal(mv.resumed, true);
+  assert.equal(mv.inhabitant.room, "zeus");
+  ok(W.leave(store, { instance: "worldaaaa1", animal: "frog-1" }, 4));
+  const b = ok(W.inhabit(store, { instance: "worldbbbb2", animal: { id: "frog-1", species: "frog", cells: [[0, 0]] }, room: "/zeus" }, 5));
+  assert.equal(b.resumed, false, "after the owner lets go, the id is free");
   const h = store.get().commons.inhabitants["frog-1"];
-  assert.equal(h.notes.length, 1, "notes survive moving worlds");
-  assert.deepEqual(h.lineage, ["seed", "@worldaaaa1", "@worldbbbb2"], "lineage records where it has been");
   assert.equal(Object.keys(store.get().commons.inhabitants).length, 1);
   for (const id of ["", "a b", "x".repeat(65), "é"]) assert.equal(W.inhabit(store, { instance: "worldaaaa1", animal: { id, species: "s", cells } }, 5).ok, false, `id ${JSON.stringify(id)}`);
   assert.equal(W.remember(store, { instance: "worldaaaa1", note: "x".repeat(281) }, 5).ok, false);
   assert.equal(W.remember(store, { instance: "worldaaaa1", note: "  " }, 5).ok, false);
-  assert.equal(W.remember(store, { instance: "worldaaaa1", note: "x".repeat(280) }, 5).ok, true);
+  assert.equal(W.remember(store, { instance: "worldbbbb2", note: "x".repeat(280) }, 5).ok, true);
   for (let n = 0; n < 45; n++) ok(W.remember(store, { instance: "worldbbbb2", note: `n${n}` }, 6));
   assert.equal(h.notes.length, 40);
   assert.equal(h.notes[0], "n5", "oldest notes retire first");

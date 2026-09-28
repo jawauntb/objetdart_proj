@@ -1952,7 +1952,7 @@ export default function Storm() {
   };
 
   const onBaroDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.currentTarget.setPointerCapture(e.pointerId);
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* a synthetic pointer has no capture */ }
     setDragMode("baro");
     setPressureFromPointer(e.clientX, e.clientY);
     useField.getState().recordTape("concern", 0.5, "storm/pressure");
@@ -1980,7 +1980,7 @@ export default function Storm() {
     playDialTone(180 + ((ang + Math.PI) / (Math.PI * 2)) * 260);
   };
   const onWindDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.currentTarget.setPointerCapture(e.pointerId);
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* a synthetic pointer has no capture */ }
     setDragMode("wind");
     setWindFromPointer(e.clientX, e.clientY);
     try { getFieldAudio().chime(); } catch { /* noop */ }
