@@ -10,6 +10,7 @@ import ConcernTint from "@/components/ConcernTint";
 import GlobalPretextText from "@/components/GlobalPretextText";
 import TravelPassageHost from "@/components/TravelPassage";
 import GoogleAnalytics from "@/components/GoogleAnalytics";
+import UniverseBridge from "@/components/UniverseBridge";
 import { SITE_ORIGIN } from "@/lib/site-icon-config";
 import { siteMetadata } from "@/lib/site-metadata";
 
@@ -94,6 +95,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             the root layout). Renders nothing until a crossing cues it. */}
         <TravelPassageHost />
         <GoogleAnalytics />
+        <UniverseBridge />
       </body>
     </html>
   );
