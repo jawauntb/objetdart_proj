@@ -165,7 +165,7 @@ export type Verb = (typeof VERBS)[number];
 const VERB_BINDING: Partial<Record<Verb, string>> = { tilt: "tilt", shake: "shake", knock: "knock", flip: "flip", dwell: "dwell", ceremony: "ceremony", twist: "lens" };
 
 export type GestureResult =
-  | { ok: true; verb: Verb; kind: string; tier?: number | string; depth?: number; events: string[]; senses: Senses; room: Dict<number | boolean | string> }
+  | { ok: true; verb: Verb; kind: string; tier?: number | string; depth?: number; events: string[]; senses: Senses; state: Dict<number | boolean | string> }
   | { ok: false; error: string };
 
 function plant(room: RoomState, rng: () => number, x?: number, y?: number): void {
@@ -320,7 +320,7 @@ export function applyVerb(entry: RoomEntry, room: RoomState, instSeed: number, c
   if (room.log.length > 6) room.log.splice(0, room.log.length - 6);
   const s = sensesFor(entry, room, subject, weight);
   const summary = { objects: room.objects.length, ripples: room.ripples, lens: room.lens, frame: room.frame, law: room.law, material: room.material, bloom: room.bloom, night: room.night } as Dict<number | boolean | string>;
-  const out: GestureResult = { ok: true, verb, kind, events, senses: s, room: summary };
+  const out: GestureResult = { ok: true, verb, kind, events, senses: s, state: summary };
   if (tier !== undefined) out.tier = tier;
   if (depth !== undefined) out.depth = depth;
   return out;
