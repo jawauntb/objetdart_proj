@@ -145,14 +145,15 @@ export function createCodeTools(over: Partial<CodeDeps> = {}): ToolDef[] {
           if (st.dir) { walk(rel); continue; }
           if (!st.file || st.size > READ_MAX_FILE_BYTES) continue;
           if (!readPolicy(rel).ok) continue;
-          if (globRe && !globRe.test(rel)) continue;
+          // the budget comes before the glob so files the glob skips still spend it
           if (++files > SEARCH_MAX_FILES || ctx.now() - started > SEARCH_MAX_MS) { stopped = "the search budget ran out"; return; }
+          if (globRe && !globRe.test(rel)) continue;
           const body = fs.read(rel);
           if (body === null) continue;
           const ls = body.split("\n");
           for (let i = 0; i < ls.length; i++) {
-            if (++lines > SEARCH_MAX_LINES) { stopped = "the search budget ran out"; return; }
-            const l = ls[i].length > 300 ? ls[i].slice(0, 300) : ls[i];
+            if (++lines > SEARCH_MAX_LINES || ctx.now() - started > SEARCH_MAX_MS) { stopped = "the search budget ran out"; return; }
+            const l = ls[i].length > 200 ? ls[i].slice(0, 200) : ls[i];
             if (m.test(l)) {
               hits.push(`${rel}:${i + 1}:${l.trim().slice(0, 160)}`);
               if (hits.length >= SEARCH_MAX_HITS) { stopped = `stopped at ${SEARCH_MAX_HITS} hits`; return; }
@@ -166,7 +167,7 @@ export function createCodeTools(over: Partial<CodeDeps> = {}): ToolDef[] {
         const body = fs.read(f);
         if (body === null) continue;
         body.split("\n").forEach((l, i) => {
-          if (hits.length < SEARCH_MAX_HITS && m.test(l.slice(0, 300))) hits.push(`${f}:${i + 1}:${l.trim().slice(0, 160)}`);
+          if (hits.length < SEARCH_MAX_HITS && m.test(l.slice(0, 200))) hits.push(`${f}:${i + 1}:${l.trim().slice(0, 160)}`);
         });
       }
       if (!hits.length) return text(`No hits.${stopped ? ` (${stopped})` : ""}`);
@@ -274,8 +275,10 @@ export function createCodeTools(over: Partial<CodeDeps> = {}): ToolDef[] {
       });
       if (!res.ok) return text(scrub(`Nothing was committed: ${res.error}.`, token), true);
       const live = branch === "main";
+      const unchecked = changing.filter((r) => r.syntax.startsWith("unchecked")).map((r) => r.path);
       return text(scrub([
         `Committed ${changing.length} file(s) as ${res.sha}.`,
+        ...(unchecked.length ? [`Warning: syntax was NOT checked for ${unchecked.join(", ")}.`] : []),
         res.url,
         `branch: ${res.branch}${res.createdBranch ? " (created from the default branch)" : ""}`,
         live

@@ -31,6 +31,13 @@ const readAttacks = [
 ];
 for (const a of readAttacks) assert.ok(denied(P.readPolicy(a)), `read policy let through ${JSON.stringify(a)}`);
 
+// ---- the leash holds by stem: Next resolves .js/.mjs before .ts, and a file route outranks the /mcp rewrite
+for (const a of [
+  "src/lib/universe-mcp/auth.js", "src/lib/universe-mcp/auth.mjs", "src/lib/universe-mcp/auth.tsx", "src/lib/universe-mcp/protocol.js", "src/lib/universe-mcp/code-policy.js",
+  "src/lib/universe-mcp/code-github.mjs", "src/lib/universe-mcp/tools-code.tsx", "src/lib/universe-mcp/index.js", "src/lib/universe-mcp/types.tsx", "src/lib/universe-mcp/serve.mjs",
+  "src/lib/universe-mcp/code/index.ts", "src/lib/universe-mcp/Auth.JS", "src/app/mcp/route.ts", "src/app/mcp/i/[code]/route.ts", "src/app/MCP/route.ts", "src/middleware.ts", "src/middleware.js", "src/instrumentation.ts",
+]) assert.ok(denied(P.writePolicy(a)), `leash shadow let through ${a}`);
+
 // ---- allowed paths stay allowed (a policy that denies everything is also a bug)
 for (const a of ["src/lib/x.ts", "src/components/Foo.tsx", "docs/notes.md", "public/a.svg", "public/x/y.json", "scripts/test-foo.mjs", "scripts/universe-mcp/foo.test.mjs", "src/app/page.tsx", "./src//lib/./y.ts", "src/lib/universe-mcp/tools-explore.ts", "src/app/api/other/route.ts"]) {
   assert.ok(P.writePolicy(a).ok, `write policy blocked legitimate ${a}`);
@@ -51,10 +58,35 @@ assert.equal(P.sliceLines(big, 401, 405).text, "line 401\nline 402\nline 403\nli
 assert.equal(P.sliceLines("a\nb\n").total, 2, "trailing newline counted as a line");
 const wide = P.sliceLines(Array.from({ length: 300 }, () => "x".repeat(1000)).join("\n"));
 assert.ok(Buffer.byteLength(wide.text) <= 200 * 1024 && wide.next !== null, "200 KB cap missing");
-for (const r of ["(a+)+$", "(a|aa)+b", "(a*)*", "(.*a){9}x*", "(x+x+)+y", "(a+)*b", "(\\w+\\s?)*$", "(a)\\1", "a".repeat(101), "a*b*c*d*e*f*g*"]) {
+for (const r of [".*.*.*.*Q", "\\w*\\w*\\w*\\w*x", "a{1,}b{1,}c{1,}d{1,}e", "[a-z]{0,300}[a-z]{0,300}[a-z]{0,300}[a-z]{0,300}!", "(a+)+$", "(a|aa)+b", "(a*)*", "(.*a){9}x*", "(x+x+)+y", "(a+)*b", "(\\w+\\s?)*$", "(a)\\1", "a".repeat(101), "a*b*c*d*e*f*g*"]) {
   assert.ok(P.regexRisk(r), `regex ${r} would be allowed to run: catastrophic backtracking`);
 }
 for (const r of ["foo\\(bar\\)", "[a-z]+\\d{2,3}", "export (const|function) \\w+", "(abc)+", "\\[(x+)\\]"]) assert.equal(P.regexRisk(r), null, `safe regex ${r} refused`);
+
+// ---- glob: a pile of wildcards is a backtracking bomb; it must be refused, and the wildcards that remain must stay cheap
+assert.equal(P.globToRegExp("**/".repeat(30) + "Q"), null, "glob with dozens of ** accepted");
+{
+  const run = P.globToRegExp("**".repeat(30) + "Q");
+  const t0 = Date.now();
+  run?.test("src/components/rooms/ManifoldAtlasRoomView.ts");
+  assert.ok(Date.now() - t0 < 500, "a run of stars must collapse to one wildcard");
+}
+assert.equal(P.globToRegExp("*a".repeat(30) + "Q"), null, "glob with dozens of * accepted");
+assert.ok(P.globToRegExp("src/**/rooms/*.tsx") && P.globToRegExp("**/*.md")?.test("docs/a.md"), "ordinary globs refused");
+{
+  const g = P.globToRegExp("**/*/*/*/x");
+  const t0 = Date.now();
+  g?.test("src/components/rooms/ManifoldAtlasRoomView.ts");
+  assert.ok(Date.now() - t0 < 500, "four-wildcard glob is not cheap");
+}
+{
+  const m = P.buildMatcher("/.*.*.*Q/");
+  assert.ok(m.ok, "three open-ended repeats should still run");
+  const t0 = Date.now();
+  m.test("  const registry = buildRoomRegistry(rooms, { scale: 'log', bands: 12 }); // stays deterministic".repeat(3).slice(0, 200));
+  assert.ok(Date.now() - t0 < 1500, "three-repeat regex on a 200-char line is not cheap");
+  assert.ok(!P.buildMatcher("/.*.*.*.*Q/").ok, "four open-ended repeats accepted");
+}
 
 // ---- fake checkout, fake github
 const files = new Map([
@@ -141,6 +173,17 @@ assert.deepEqual(createCodeTools({ getFs: async () => fsx }).map((t) => `${t.nam
   const slow = mk(mkGh(), {});
   const budget = T(await slow("world_search", { query: "zzzz-none" }, { now: () => (t += 3000) }));
   assert.match(budget, /budget/, "search has no time budget");
+  // files a glob skips still spend the budget; a glob cannot make the walk free
+  t = 0;
+  const skipped = T(await slow("world_search", { query: "zzzz-none", glob: "nomatch/**" }, { now: () => (t += 3000) }));
+  assert.match(skipped, /budget/, "glob-skipped files were free");
+  // the clock is also read between lines, not only between files
+  files.set("docs/lines.md", Array.from({ length: 30 }, () => "HITLINE").join("\n"));
+  t = 0;
+  const lineBudget = T(await slow("world_search", { query: "HITLINE", glob: "docs/lines.md" }, { now: () => (t += 3000) }));
+  assert.ok(/budget/.test(lineBudget) && lineBudget.split("\n").filter((l) => l.includes("HITLINE")).length < 30, "no time check between lines");
+  files.delete("docs/lines.md");
+  assert.ok((await call("world_search", { query: "NEEDLE", glob: "**/".repeat(30) + "Q" })).isError, "glob bomb accepted by the tool");
 }
 
 // ---- syntax checker: never silently passes
@@ -213,6 +256,7 @@ const args = { instance: "w18sdely0a62ke", files: [goodFile], message: msg, dry_
   assert.match(T(r), /c1/); assert.match(T(r), /github\.com\/o\/r\/commit\/c1/); assert.match(T(r), /branch: universe/);
   assert.match(T(r), /side branch; the owner merges it/);
   assert.ok(!T(r).includes("redeploys"), "side branch claimed a redeploy");
+  assert.match(T(r), /Warning: syntax was NOT checked for src\/lib\/new\.ts/, "a commit of unchecked code must say so");
   assert.ok(gh.calls.every((c) => c.auth === `Bearer ${TOKEN}`), "token not sent to github");
 }
 { // side branch is created from the default branch when missing

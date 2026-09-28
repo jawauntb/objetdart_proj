@@ -81,7 +81,9 @@ export function readPolicy(raw: unknown): PathVerdict {
 
 const WRITE_DENY_BASENAME = /^(railway\.json|package[^/]*\.json|next\.config\..*|doppler\.yaml|agents\.md|claude\.md|inspiration\.md|\.env.*)$/;
 const LEASH_DIR = "src/lib/universe-mcp/";
-const LEASH_FILE = /^(code[^/]*\.ts|tools-code\.ts|auth\.ts|protocol\.ts|serve\.ts|index\.ts|types\.ts)$/;
+// By stem, not by extension: Next resolves an extensionless import to .js and .mjs before .ts,
+// so a written auth.js would shadow auth.ts. Any file or folder with a leash stem is denied.
+const LEASH_STEM = /^(code[^/]*|tools-code|auth|protocol|serve|index|types)$/;
 
 /** May this file be written by an animal? Stricter than readPolicy and independent of it. */
 export function writePolicy(raw: unknown): PathVerdict {
@@ -95,7 +97,12 @@ export function writePolicy(raw: unknown): PathVerdict {
   }
   if (WRITE_DENY_BASENAME.test(segs[segs.length - 1])) return { ok: false, reason: "that file is never writable" };
   if (lc.startsWith("src/app/api/mcp/") || lc.startsWith("src/app/api/universe/")) return { ok: false, reason: "the leash and its transport are never writable" };
-  if (lc.startsWith(LEASH_DIR) && LEASH_FILE.test(lc.slice(LEASH_DIR.length))) return { ok: false, reason: "the leash itself is never writable" };
+  if (lc.startsWith(LEASH_DIR)) {
+    const first = lc.slice(LEASH_DIR.length).split("/")[0];
+    if (LEASH_STEM.test(first.replace(/\.[^.]*$/, ""))) return { ok: false, reason: "the leash itself is never writable" };
+  }
+  // A file route or middleware outranks the /mcp rewrite in next.config, so it could stand in for the transport.
+  if (lc.startsWith("src/app/mcp/") || /^src\/(middleware|instrumentation)\./.test(lc)) return { ok: false, reason: "the leash and its transport are never writable" };
   if (lc === "scripts/universe-mcp/code.test.mjs") return { ok: false, reason: "the leash's own test is never writable" };
   const ext = extOf(p);
   const top = segs[0];
@@ -154,7 +161,11 @@ export function regexRisk(src: string): string | null {
     if (c === "|" && stack.length) { stack[stack.length - 1].hasAlt = true; continue; }
     const quant = c === "*" || c === "+" || (c === "{" && /^\{\d*,\d*\}/.test(src.slice(i)));
     if (quant) {
-      if (c !== "{" || /^\{\d*,\}/.test(src.slice(i))) unbounded++;
+      if (c !== "{") unbounded++;
+      else {
+        const q = /^\{(\d*),(\d*)\}/.exec(src.slice(i));
+        if (q && (q[2] === "" || Number(q[2]) > 50)) unbounded++;
+      }
       if (stack.length) stack[stack.length - 1].hasQuant = true;
       continue;
     }
@@ -170,7 +181,8 @@ export function regexRisk(src: string): string | null {
       }
     }
   }
-  if (unbounded > 6) return "too many open-ended repeats";
+  // Each open-ended repeat multiplies the work on a failing line by its length: keep it to three.
+  if (unbounded > 3) return "too many open-ended repeats";
   return null;
 }
 
@@ -195,6 +207,9 @@ export function buildMatcher(query: unknown): Matcher {
 /** Small glob: **, *, ? over a posix path. */
 export function globToRegExp(glob: string): RegExp | null {
   if (glob.length > 100 || /[\u0000-\u001f\\]/.test(glob)) return null;
+  glob = glob.replace(/\*{2,}/g, "**"); // a run of stars is one wildcard
+  // Every * or ** is a backtracking loop over the path; a few are fine, dozens hang the process.
+  if ((glob.match(/\*+/g) || []).length > 4) return null;
   let re = "";
   for (let i = 0; i < glob.length; i++) {
     const c = glob[i];
