@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "objetdart": {
+      "type": "http",
+      "url": "https://objetdart-production.up.railway.app/mcp"
+    },
+    "lattice-animal": {
+      "type": "http",
+      "url": "https://latticeanimal-production.up.railway.app/mcp"
+    }
+  }
+}

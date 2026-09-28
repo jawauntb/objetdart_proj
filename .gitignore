@@ -25,3 +25,4 @@ videos/
 data/object-compiler/
 __pycache__/
 scratchpad/
+.universe-data/
