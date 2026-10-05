@@ -6,7 +6,7 @@ Extraction run on 2026-10-05 from Jawaun's three sibling repos (private, GitHub)
 - [the-human-internet-app](https://github.com/jawauntb/the-human-internet-app) — SwiftUI iOS
 - [the-human-internet-backend](https://github.com/jawauntb/the-human-internet-backend) — Rust Lambda + Supabase Edge Functions Each repo's `CLAUDE.md` is the authoritative source. Items are ordered by expected ROI for *this* repo — a candlelit symbolic field instrument with a Next.js front, an iOS app at `ios/`, a `universe-mcp` library in `src/lib/universe-mcp/`, and Doppler-managed secrets.
 
-Nothing in this doc modifies code. Pick, read the source, apply what fits.
+**Default behavior for a coding agent reading this**: implement every section. One PR per section, each on its own `git worktree` branched from `main` — see `AGENTS.md` → ALPHA.md for the exact flow. Only skip a section with a written reason inside a strike-through.
 
 ---
 
@@ -142,6 +142,6 @@ Source: `the-human-internet-app/CLAUDE.md` → "Shipping (TestFlight)" four-poin
 
 ## How to use this doc
 
-Treat each numbered item as a candidate, not a prescription. Start with the items that protect against *silent* failures (3, 5, 6, 10, 11, 12) before the ones that protect against *loud* ones. The right first move is usually: read the referenced source section in full → look at the one or two files that implement it → decide whether the invariant actually binds here yet.
+**Implement every numbered item.** Start with the items that protect against *silent* failures (3, 5, 6, 10, 11, 12), then work through the rest. For each: read the referenced source section in full → look at the one or two files that implement it in the trio → open a worktree branched from `main` and ship one PR per section. Only skip an item with a written reason inside a strike-through.
 
 Written by Claude on 2026-10-05 from the state of the three sibling repos on that date.
