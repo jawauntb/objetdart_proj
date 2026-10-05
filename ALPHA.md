@@ -1,6 +1,10 @@
 # ALPHA.md — Patterns to borrow from the-human-internet-{app,backend,website}
 
-Extraction run on 2026-10-05 from Jawaun's three sibling repos: `the-human-internet` (Next.js website), `the-human-internet-app` (SwiftUI iOS), `the-human-internet-backend` (Rust Lambda + Supabase Edge Functions). Each repo's `CLAUDE.md` is the authoritative source. Items are ordered by expected ROI for *this* repo — a candlelit symbolic field instrument with a Next.js front, an iOS app at `ios/`, a `universe-mcp` library in `src/lib/universe-mcp/`, and Doppler-managed secrets.
+Extraction run on 2026-10-05 from Jawaun's three sibling repos (private, GitHub):
+
+- [the-human-internet](https://github.com/jawauntb/the-human-internet) — Next.js website
+- [the-human-internet-app](https://github.com/jawauntb/the-human-internet-app) — SwiftUI iOS
+- [the-human-internet-backend](https://github.com/jawauntb/the-human-internet-backend) — Rust Lambda + Supabase Edge Functions Each repo's `CLAUDE.md` is the authoritative source. Items are ordered by expected ROI for *this* repo — a candlelit symbolic field instrument with a Next.js front, an iOS app at `ios/`, a `universe-mcp` library in `src/lib/universe-mcp/`, and Doppler-managed secrets.
 
 Nothing in this doc modifies code. Pick, read the source, apply what fits.
 
