@@ -148,8 +148,11 @@ function paletteOf(colors, kind, file) {
   const ranked = [...freq.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(([h]) => parseColor(h));
   const merged = [];
   for (const c of ranked) if (!merged.some((m) => dist(m, c) < 38)) merged.push(c);
-  const lively = merged.filter((c) => luma(c) > 0.06 && luma(c) < 0.97);
-  const pool = (lively.length >= 2 ? lively : merged).slice(0, 6);
+  // A pure primary or secondary (every channel 0 or 255) is a picking id or a
+  // debug swatch in this codebase, not a colour anyone chose to look at.
+  const chosen0 = merged.filter((c) => !c.every((x) => x === 0 || x === 255));
+  const lively = chosen0.filter((c) => luma(c) > 0.06 && luma(c) < 0.97);
+  const pool = (lively.length >= 2 ? lively : chosen0).slice(0, 6);
   // Prefer colour that carries hue, so a form reads as itself and not as grey.
   pool.sort((a, b) => chroma(b) - chroma(a) || luma(a) - luma(b));
   const chosen = pool.slice(0, 3);

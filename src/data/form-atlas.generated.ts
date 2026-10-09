@@ -93,7 +93,7 @@ export const FORM_ATLAS: readonly FormSpec[] = [
   "tech": "dom",
   "kind": "glyph",
   "palette": [
-   "#000000",
+   "#27222a",
    "#a084a8",
    "#f0dcf4"
   ],
@@ -351,9 +351,9 @@ export const FORM_ATLAS: readonly FormSpec[] = [
   "tech": "webgl",
   "kind": "cloud",
   "palette": [
-   "#0000ff",
-   "#00ff00",
-   "#00ffff"
+   "#24406e",
+   "#1a59d9",
+   "#4b6fae"
   ],
   "params": {
    "glow": 0.39,
@@ -1485,7 +1485,7 @@ export const FORM_ATLAS: readonly FormSpec[] = [
   "tech": "dom",
   "kind": "cloud",
   "palette": [
-   "#000000",
+   "#c3b8cf",
    "#f4eede",
    "#f9f6fb"
   ],
@@ -1844,8 +1844,8 @@ export const FORM_ATLAS: readonly FormSpec[] = [
   "kind": "glyph",
   "palette": [
    "#080c14",
-   "#f4eede",
-   "#ffffff"
+   "#f4dcde",
+   "#f4eede"
   ],
   "params": {
    "glow": 0.25,
@@ -1921,7 +1921,7 @@ export const FORM_ATLAS: readonly FormSpec[] = [
   "tech": "webgl",
   "kind": "flame",
   "palette": [
-   "#000000",
+   "#332aff",
    "#cca8ff",
    "#f6f1e0"
   ],
@@ -2177,8 +2177,8 @@ export const FORM_ATLAS: readonly FormSpec[] = [
   "tech": "dom",
   "kind": "glyph",
   "palette": [
-   "#000000",
    "#15171a",
+   "#84a888",
    "#dcf4e0"
   ],
   "params": {
@@ -2951,9 +2951,9 @@ export const FORM_ATLAS: readonly FormSpec[] = [
   "tech": "canvas",
   "kind": "cell",
   "palette": [
-   "#000000",
+   "#d3ca8f",
    "#cedefa",
-   "#ffffff"
+   "#ffebe8"
   ],
   "params": {
    "glow": 0.58,
@@ -3129,9 +3129,9 @@ export const FORM_ATLAS: readonly FormSpec[] = [
   "tech": "webgl",
   "kind": "drop",
   "palette": [
-   "#0000ff",
    "#3d4d7a",
-   "#2e643e"
+   "#2e643e",
+   "#4c961d"
   ],
   "params": {
    "glow": 0.49,
