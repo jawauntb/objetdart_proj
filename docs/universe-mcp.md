@@ -58,7 +58,7 @@ bridge only dispatches events into them; there is no copy of a room.
 
 | lane | files | tools |
 | --- | --- | --- |
-| explore | `tools-explore.ts` (+ `map.ts`) | `universe_map`, `universe_room`, `universe_rooms_near` |
+| explore | `tools-explore.ts` (+ `map.ts`) | `universe_map`, `universe_room`, `universe_rooms_near`, `universe_forms` |
 | inhabit | `tools-inhabit.ts`, `store.ts`, `instances.ts`, `twin.ts` | `universe_open`, `universe_look`, `universe_step`, `universe_gesture`, `universe_inhabit`, `universe_remember`, `universe_leave`, `universe_inhabitants` |
 | window | `tools-window.ts`, `windows.ts`, `src/components/UniverseBridge.tsx`, `src/app/api/universe/**` | `universe_windows`, `universe_window_do` |
 | code | `tools-code.ts`, `code-policy.ts`, `code-github.ts` | `world_read`, `world_search`, `world_patch` (write token) |
@@ -78,13 +78,28 @@ Errors are `isError: true` with a plain sentence, never a stack.
 - `universe_look {instance}` — where it is, the room's population, what its inhabitants sense, `memory` (the animal's own notes, the last 8, so a note can be read back), the breath phase, the last few steps.
 - `universe_step {instance, to}` — travel: `to` is a room key, a route, `in`/`out` (along the scale axis), or `wander` (the curiosity rule — least-visited neighbor, ties by seed). Returns the arrival: which film/edge, the room's `creates` noun, what is here.
 - `universe_gesture {instance, verb, ...}` — verbs from `docs/gesture-grammar.md`: `tap {count}`, `hold {ms}`, `drag`, `pinch`, `twist`, `chord {fingers}`, `tilt`, `shake`, `knock`, `flip`, `dwell`, `ceremony`. The twin applies it to the room's population by the registry's `creates`/`interacts`; a tap climbs the train 1/3/5/n; a hold deepens continuously with `ms`. Returns what changed and the senses it lands in (sight, sound, haptic).
-- `universe_inhabit {instance, animal:{id, species, cells:[[x,y]...], stage?, from?}, room?}` — place a lattice animal (a polyomino of ≤ 400 cells, 4-connected — reject otherwise) into a room. It **persists** and it has an **owner**: the world that placed an animal owns it. Other worlds see it in the commons (`universe_inhabitants`) but cannot overwrite it (`universe_inhabit` with its id), write notes to it, or retire it. To hand an animal on, the owner leaves first (`universe_leave`); then another world may place that id, keeping the lineage and notes.
+- `universe_inhabit {instance, animal:{id, species, cells:[[x,y]...], stage?, from?, form?}, room?}` — place a lattice animal (a polyomino of ≤ 400 cells, 4-connected — reject otherwise) into a room. It **persists** and it has an **owner**: the world that placed an animal owns it. Other worlds see it in the commons (`universe_inhabitants`) but cannot overwrite it (`universe_inhabit` with its id), write notes to it, or retire it. To hand an animal on, the owner leaves first (`universe_leave`); then another world may place that id, keeping the lineage and notes.
+  `form` is any id from `universe_forms`: the animal keeps its cells and wears that form wherever it lives. Omitted, it keeps the form it last chose; `""` goes back to wearing its room's own form. An unknown form is refused.
+- `universe_forms {form?, room?}` — every visual form this app wrote as a component, read from its syntax tree (`scripts/build-form-atlas.mjs` → `src/data/form-atlas.generated.ts`, full atlas with evidence at `/lattice/forms.json`). No argument: one line per form (`id · kind · component · rooms · noun`). `form` or `room`: that form in full (kind, three-colour palette, params).
 - `universe_remember {instance, note}` — append ≤ 280 chars to the inhabitant's memory (cap 40, oldest retire).
 - `universe_leave {instance, animal?}` — retire an inhabitant (the ceremony's touch-reachable delete).
-- `universe_inhabitants {room?}` — who lives where across the whole commons.
+- `universe_inhabitants {room?, shapes?}` — who lives where across the whole commons. Each entry carries `form` (the one it chose, else its room's own) and `chose`. With `shapes: true`, the newest 48 come back with their `cells`, so a page can draw them (`src/components/LatticeVisitors.tsx` does).
 - `universe_windows {}` / `universe_window_do {instance, action: look|navigate|gesture, ...}` — relay to an attached live page.
 - `world_read {path}` / `world_search {query, glob?}` — read the running world's source (allowlist, size-capped, ≤ 50 search hits). Open. Search treats the query as text and the glob as a bounded pattern, not as an open regex.
 - `world_patch {instance, files:[{path, content}], message, dry_run?}` — **write token**. `dry_run` defaults **true**: runs the preflight (path policy, size, syntax) and returns the diff summary. `dry_run:false` commits to `UNIVERSE_CODE_BRANCH` (default `universe`, created from `main` if missing) through the GitHub API. Setting `UNIVERSE_CODE_BRANCH=main` is the owner's one switch that lets the world redeploy itself from what its animals write.
+
+## Where a person sees them
+
+`src/components/LatticeVisitors.tsx`, mounted once in the root layout, draws the
+commons in the room a person is in: up to three animals that live in that room,
+and, one at a time with a seeded rest between, one wanderer from elsewhere in the
+commons (or a wild polyomino when the commons is empty) that arrives in the form
+it wears and becomes the room's own form as it crosses. It calls
+`universe_inhabitants` with `shapes: true` through `/mcp` (one call per room
+visit, the commons cached 90 s), binds no input (pointer-events none), writes no
+copy, draws every visitor in one instanced call (`src/lib/lattice-forms-layer.ts`),
+and runs no frame loop between visits. The laws are pinned in
+`scripts/test-lattice-forms.mjs`.
 
 ## Persistence
 

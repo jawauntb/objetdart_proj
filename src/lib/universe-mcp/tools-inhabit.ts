@@ -47,13 +47,14 @@ export function makeTools(getStore: () => Store): ToolDef[] {
           id: { type: "string" }, species: { type: "string" },
           cells: { type: "array", items: { type: "array", items: { type: "integer" }, minItems: 2, maxItems: 2 } },
           stage: { type: "string" }, from: { type: "string" },
+          form: { type: "string", description: "A form to wear, any id from universe_forms (every visual form objet d'art wrote as a component). Omit to keep the last one chosen; \"\" to wear the room's own form." },
         }, ["id", "species", "cells"]),
         room: { type: "string", description: "Room key or route; defaults to where this world is." },
       }, ["instance", "animal"]), (s, a, n) => W.inhabit(s, a, n)),
     def("universe_remember", "Add a note of at most 280 characters to the inhabitant's memory. Forty are kept; the oldest retire.",
       obj({ instance, note: { type: "string" }, animal: { type: "string", description: "Defaults to the last animal placed from this world." } }, ["instance", "note"]), (s, a, n) => W.remember(s, a, n)),
     def("universe_leave", "Retire an inhabitant.", obj({ instance, animal: { type: "string", description: "Defaults to the last animal placed from this world." } }, ["instance"]), (s, a, n) => W.leave(s, a, n)),
-    def("universe_inhabitants", "Who lives where across the whole commons, optionally in one room. Public part only.", obj({ room: { type: "string" } }), (s, a) => W.inhabitants(s, a)),
+    def("universe_inhabitants", "Who lives where across the whole commons, optionally in one room. Public part only: each inhabitant's form is the one it chose, else its room's own. With shapes:true, the newest 48 with their cells.", obj({ room: { type: "string" }, shapes: { type: "boolean" } }), (s, a) => W.inhabitants(s, a)),
   ];
 }
 

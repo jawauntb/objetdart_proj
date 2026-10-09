@@ -9,7 +9,7 @@ const ctx = { now: () => 0, authed: false, ip: "", env: {}, bound: null };
 const call = (name, args = {}) => TOOLS.find((t) => t.name === name).handler(args, ctx);
 const T = (r) => r.content[0].text;
 
-assert.deepEqual(TOOLS.map((t) => t.name), ["universe_map", "universe_room", "universe_rooms_near"]);
+assert.deepEqual(TOOLS.map((t) => t.name), ["universe_map", "universe_room", "universe_rooms_near", "universe_forms"]);
 
 const map = T(await call("universe_map"));
 const lines = map.split("\n");

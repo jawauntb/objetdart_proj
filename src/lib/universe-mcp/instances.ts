@@ -6,6 +6,7 @@ import type { Inhabitant, Instance, Store } from "@/lib/universe-mcp/store";
 import { LAYER_HOME, applyVerb, fnv1a, freshRoom, neighborsOf, resolveStep, roomOf, sensesFor, roomForRoute, nearKeys } from "@/lib/universe-mcp/twin";
 import { registerOf } from "@/lib/room-registry";
 import { spectralRegisterFor } from "@/lib/scale";
+import { formById, formForRoom, FORMS } from "@/lib/lattice-forms";
 
 export type Res<T> = { ok: true; value: T } | { ok: false; error: string };
 const ok = <T>(value: T): Res<T> => ({ ok: true, value });
@@ -37,9 +38,19 @@ const NO_INSTANCE = "No such world. Call universe_open first; codes are 8 to 16 
 
 const roomState = (i: Instance, key: string) => (has(i.rooms, key) ? i.rooms[key] : (i.rooms[key] = freshRoom()));
 
-function publicOf(h: Inhabitant) {
-  return { id: h.id, species: h.species, stage: h.stage, room: h.room, instance: h.instance, size: h.cells.length, lineage: h.lineage.slice(-8) };
+/** What an inhabitant looks like: the form it chose, else the form of the room it lives in. */
+export function wearing(h: Pick<Inhabitant, "form" | "room">): string | null {
+  return formById(h.form)?.id ?? formForRoom(h.room)?.id ?? null;
 }
+
+function publicOf(h: Inhabitant) {
+  return { id: h.id, species: h.species, stage: h.stage, room: h.room, instance: h.instance, size: h.cells.length, form: wearing(h), chose: !!formById(h.form), lineage: h.lineage.slice(-8) };
+}
+
+const nearForms = (q: string) => {
+  const s = q.toLowerCase();
+  return FORMS.filter((f) => f.id.includes(s.slice(0, 4)) || f.kind === s).slice(0, 6).map((f) => f.id);
+};
 
 function inRoom(store: Store, key: string): Inhabitant[] {
   const all = store.get().commons.inhabitants;
@@ -174,6 +185,13 @@ export function inhabit(store: Store, args: { instance?: unknown; animal?: unkno
       if (!r) return fail(`No room answers to "${clean(args.room, 60)}". Near: ${nearKeys(String(args.room)).join(", ")}.`);
       key = r.key;
     }
+    // A form is optional: any form-atlas id, "" to go back to wearing the room's own.
+    let form: string | undefined;
+    if (a.form !== undefined && a.form !== null && a.form !== "") {
+      const f = formById(String(a.form).toLowerCase());
+      if (!f) return fail(`No form answers to "${clean(a.form, 60)}". Near: ${nearForms(String(a.form)).join(", ") || "see universe_forms"}.`);
+      form = f.id;
+    }
     const inh = store.get().commons.inhabitants;
     const prev = has(inh, a.id) ? inh[a.id] : null;
     // An animal belongs to the world that placed it: another world may see it in the
@@ -187,6 +205,8 @@ export function inhabit(store: Store, args: { instance?: unknown; animal?: unkno
       id: a.id, species: clean(a.species ?? prev?.species ?? "unknown", 40) || "unknown", stage: clean(a.stage ?? prev?.stage ?? "", 40),
       cells: cells.value, room: key, instance: i.code, lineage, notes: prev ? prev.notes : [], since: prev ? prev.since : now, at: now,
     };
+    const keep = a.form === "" ? undefined : form ?? (prev && formById(prev.form) ? prev.form : undefined);
+    if (keep) h.form = keep;
     inh[a.id] = h;
     i.animal = a.id;
     return ok({ inhabitant: publicOf(h), remembered: h.notes.length, resumed: !!prev });
@@ -229,13 +249,21 @@ export function leave(store: Store, args: { instance?: unknown; animal?: unknown
   });
 }
 
-export function inhabitants(store: Store, args: { room?: unknown }): Res<Record<string, unknown>> {
+/** With `shapes`, how many inhabitants come back (the newest), each with its cells. */
+export const SHAPES_CAP = 48;
+
+export function inhabitants(store: Store, args: { room?: unknown; shapes?: unknown }): Res<Record<string, unknown>> {
   const all = store.get().commons.inhabitants;
   let list = Object.keys(all).map((k) => all[k]);
   if (args.room !== undefined && args.room !== null && args.room !== "") {
     const r = roomOf(String(args.room).toLowerCase()) ?? (String(args.room).startsWith("/") ? roomForRoute(String(args.room)) : null);
     if (!r) return fail(`No room answers to "${clean(args.room, 60)}". Near: ${nearKeys(String(args.room)).join(", ")}.`);
     list = list.filter((h) => h.room === r.key);
+  }
+  if (args.shapes === true) {
+    // The public shape too, so a page can draw who is here: newest first, capped.
+    list.sort((a, b) => b.at - a.at || (a.id < b.id ? -1 : 1));
+    return ok({ count: list.length, inhabitants: list.slice(0, SHAPES_CAP).map((h) => ({ ...publicOf(h), cells: h.cells.map((c) => [c[0], c[1]]) })) });
   }
   list.sort((a, b) => (a.room < b.room ? -1 : a.room > b.room ? 1 : a.since - b.since || (a.id < b.id ? -1 : 1)));
   return ok({ count: list.length, inhabitants: list.slice(0, 200).map(publicOf) });

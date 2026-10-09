@@ -2,6 +2,7 @@
 import type { ToolDef } from "@/lib/universe-mcp/types";
 import { text } from "@/lib/universe-mcp/protocol";
 import { buildMapText, nearKeys, resolveRoom, roomDetail, roomsNear } from "@/lib/universe-mcp/map";
+import { FORMS, formById, formForRoom } from "@/lib/lattice-forms";
 
 const unknownRoom = (input: unknown) =>
   text(`No room matches "${String(input ?? "")}". Closest keys: ${nearKeys(String(input ?? "")).join(", ")}.`, true);
@@ -52,4 +53,29 @@ const universeRoomsNear: ToolDef = {
   },
 };
 
-export const TOOLS: ToolDef[] = [universeMap, universeRoom, universeRoomsNear];
+const universeForms: ToolDef = {
+  name: "universe_forms",
+  description: "Every visual form this app wrote as a component, read from its syntax tree: a lattice animal keeps its cells and can wear any of them (universe_inhabit with animal.form). With no argument, one line per form; with form or room, that form in full.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      form: { type: "string", description: "a form id, e.g. \"stars\" or \"cells-plasm\"" },
+      room: { type: "string", description: "a room key or route: the form its own material wears" },
+    },
+    additionalProperties: false,
+  },
+  access: "open",
+  handler: (args) => {
+    if (args.form !== undefined || args.room !== undefined) {
+      const r = args.room !== undefined ? resolveRoom(args.room) : null;
+      if (args.room !== undefined && !r) return unknownRoom(args.room);
+      const f = r ? formForRoom(r.key) : formById(String(args.form ?? "").toLowerCase());
+      if (!f) return text(r ? `The room ${r.key} has no component of its own to wear.` : `No form answers to "${String(args.form ?? "")}". Call universe_forms with no argument for all ${FORMS.length}.`, true);
+      return text(JSON.stringify(f, null, 1));
+    }
+    const lines = FORMS.map((f) => `${f.id} · ${f.kind} · ${f.component}${f.rooms.length ? ` · /${f.rooms.join(" /")}` : ""}${f.noun ? ` · ${f.noun}` : ""}`);
+    return text(`${FORMS.length} forms (id · kind · component · rooms · noun). Full atlas with evidence: /lattice/forms.json\n${lines.join("\n")}`);
+  },
+};
+
+export const TOOLS: ToolDef[] = [universeMap, universeRoom, universeRoomsNear, universeForms];
