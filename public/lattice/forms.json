@@ -1,0 +1,6673 @@
+{
+ "v": 1,
+ "about": "Every visual form objet d'art wrote as a component, read from its syntax tree (scripts/build-form-atlas.mjs). A lattice animal keeps its cells and wears a form: each cell is drawn as the form's kind, in its palette.",
+ "kinds": [
+  "orb",
+  "star",
+  "spiral",
+  "cell",
+  "quantum",
+  "orbit",
+  "flame",
+  "drop",
+  "petal",
+  "crystal",
+  "glyph",
+  "cloud"
+ ],
+ "count": 125,
+ "forms": [
+  {
+   "id": "air-column",
+   "component": "AirColumn",
+   "file": "src/components/AirColumn.tsx",
+   "rooms": [
+    "atmosphere"
+   ],
+   "routes": [
+    "/atmosphere"
+   ],
+   "noun": "a lantern",
+   "tech": "webgl",
+   "kind": "cloud",
+   "palette": [
+    "#e28c60",
+    "#8fb5e8",
+    "#ffcc70"
+   ],
+   "params": {
+    "glow": 0.4,
+    "spin": 0.44,
+    "pulse": 0.42,
+    "jitter": 0.39,
+    "drift": 0.67,
+    "bonds": 0.09,
+    "depth": 0.45,
+    "detail": 0.79,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 1405,
+    "colors": 14,
+    "shaders": 3,
+    "jsx": 4,
+    "calls": {
+     "ellipse": 1,
+     "fillRect": 2,
+     "lineTo": 5,
+     "bezierCurveTo": 1
+    },
+    "tags": {
+     "canvas": 2
+    },
+    "why": [
+     "air:70",
+     "haze:33",
+     "atmosphere:22",
+     "column:22",
+     "cloud:19",
+     "sound:14"
+    ],
+    "runnerUp": "flame"
+   }
+  },
+  {
+   "id": "aphros",
+   "component": "Aphros",
+   "file": "src/components/Aphros.tsx",
+   "rooms": [
+    "aphros"
+   ],
+   "routes": [
+    "/aphros"
+   ],
+   "noun": "a bloom",
+   "tech": "webgl",
+   "kind": "drop",
+   "palette": [
+    "#523824",
+    "#6b4a3f",
+    "#7aa38a"
+   ],
+   "params": {
+    "glow": 0.83,
+    "spin": -0.36,
+    "pulse": 0.53,
+    "jitter": 0.31,
+    "drift": 0.54,
+    "bonds": 0.25,
+    "depth": 0.82,
+    "detail": 0.81,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 1765,
+    "colors": 40,
+    "shaders": 4,
+    "jsx": 9,
+    "calls": {
+     "drawArrays": 1
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 2,
+     "span": 1
+    },
+    "why": [
+     "sea:92",
+     "aphros:47",
+     "shore:27",
+     "foam:19",
+     "water:6",
+     "bubble:1"
+    ],
+    "runnerUp": "petal"
+   }
+  },
+  {
+   "id": "archive",
+   "component": "Archive",
+   "file": "src/components/Archive.tsx",
+   "rooms": [
+    "archive"
+   ],
+   "routes": [
+    "/archive"
+   ],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#15171a",
+    "#2c4a5c",
+    "#e0f4dc"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0.25,
+    "pulse": 0,
+    "jitter": 0.05,
+    "drift": 0.45,
+    "bonds": 0.3,
+    "depth": 0,
+    "detail": 0.77,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 1155,
+    "colors": 5,
+    "shaders": 0,
+    "jsx": 153,
+    "calls": {},
+    "tags": {
+     "div": 34,
+     "span": 17,
+     "p": 5,
+     "button": 7
+    },
+    "why": [
+     "archive:107",
+     "card:33",
+     "font:19",
+     "button:17",
+     "label:17",
+     "toggle:17"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "arrival-invitation",
+   "component": "ArrivalInvitation",
+   "file": "src/components/ArrivalInvitation.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#27222a",
+    "#a084a8",
+    "#f0dcf4"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0.35,
+    "jitter": 0,
+    "drift": 0.58,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.62,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 313,
+    "colors": 2,
+    "shaders": 0,
+    "jsx": 32,
+    "calls": {},
+    "tags": {
+     "div": 3,
+     "span": 1,
+     "p": 7,
+     "button": 2
+    },
+    "why": [
+     "invitation:11",
+     "button:7",
+     "card:5",
+     "font:3",
+     "label:2",
+     "letter:2"
+    ],
+    "runnerUp": "orbit"
+   }
+  },
+  {
+   "id": "atlas",
+   "component": "Atlas",
+   "file": "src/components/Atlas.tsx",
+   "rooms": [
+    "atlas"
+   ],
+   "routes": [
+    "/atlas/origin"
+   ],
+   "noun": "a natural",
+   "tech": "canvas",
+   "kind": "glyph",
+   "palette": [
+    "#368a94",
+    "#efc55c",
+    "#f5dc9a"
+   ],
+   "params": {
+    "glow": 0.33,
+    "spin": -0.25,
+    "pulse": 0.37,
+    "jitter": 0.27,
+    "drift": 0.77,
+    "bonds": 0.46,
+    "depth": 0,
+    "detail": 0.9,
+    "facets": 5
+   },
+   "evidence": {
+    "lines": 4017,
+    "colors": 72,
+    "shaders": 0,
+    "jsx": 61,
+    "calls": {
+     "arc": 3,
+     "ellipse": 4,
+     "fillRect": 3,
+     "lineTo": 5,
+     "createLinearGradient": 3,
+     "rotate": 2,
+     "translate": 3
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 10,
+     "span": 10,
+     "button": 4
+    },
+    "why": [
+     "label:51",
+     "char:43",
+     "tape:26",
+     "text:19",
+     "chart:17",
+     "button:13"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "atoms-field",
+   "component": "AtomsField",
+   "file": "src/components/AtomsField.tsx",
+   "rooms": [
+    "atoms"
+   ],
+   "routes": [
+    "/atoms"
+   ],
+   "noun": "an atom",
+   "tech": "canvas",
+   "kind": "crystal",
+   "palette": [
+    "#2c4a5c",
+    "#e7ac52",
+    "#9dc0c9"
+   ],
+   "params": {
+    "glow": 0.5,
+    "spin": 0.28,
+    "pulse": 0.56,
+    "jitter": 0.2,
+    "drift": 0.41,
+    "bonds": 0.49,
+    "depth": 0,
+    "detail": 0.85,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 2595,
+    "colors": 60,
+    "shaders": 0,
+    "jsx": 7,
+    "calls": {
+     "arc": 19,
+     "fillRect": 6,
+     "lineTo": 8,
+     "quadraticCurveTo": 1,
+     "fillText": 2,
+     "drawImage": 2,
+     "createRadialGradient": 3,
+     "createLinearGradient": 2,
+     "rotate": 4,
+     "translate": 4
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 2
+    },
+    "why": [
+     "atom:254",
+     "bond:52",
+     "element:20",
+     "hex:11",
+     "mark:5"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "beam",
+   "component": "Beam",
+   "file": "src/components/Beam.tsx",
+   "rooms": [
+    "beam"
+   ],
+   "routes": [
+    "/beam"
+   ],
+   "noun": "a kept sky",
+   "tech": "three",
+   "kind": "flame",
+   "palette": [
+    "#5c6494",
+    "#4c961d",
+    "#b08850"
+   ],
+   "params": {
+    "glow": 0.59,
+    "spin": -0.33,
+    "pulse": 0.24,
+    "jitter": 0.25,
+    "drift": 0.63,
+    "bonds": 0.37,
+    "depth": 0.46,
+    "detail": 0.81,
+    "facets": 5
+   },
+   "evidence": {
+    "lines": 1667,
+    "colors": 59,
+    "shaders": 8,
+    "jsx": 42,
+    "calls": {},
+    "tags": {
+     "div": 7,
+     "span": 7,
+     "button": 2
+    },
+    "why": [
+     "beam:86",
+     "glow:9",
+     "light:8",
+     "fire:4",
+     "storm:3",
+     "burn:1"
+    ],
+    "runnerUp": "star"
+   }
+  },
+  {
+   "id": "beyond-wave-field",
+   "component": "BeyondWaveField",
+   "file": "src/components/BeyondWaveField.tsx",
+   "rooms": [
+    "beyond"
+   ],
+   "routes": [
+    "/beyond"
+   ],
+   "noun": null,
+   "tech": "canvas",
+   "kind": "cloud",
+   "palette": [
+    "#45bcaf",
+    "#62d6ca",
+    "#f4bc5d"
+   ],
+   "params": {
+    "glow": 0.64,
+    "spin": 0.27,
+    "pulse": 0.45,
+    "jitter": 0,
+    "drift": 0.71,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.76,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 1054,
+    "colors": 23,
+    "shaders": 0,
+    "jsx": 54,
+    "calls": {
+     "arc": 2,
+     "fillRect": 4,
+     "lineTo": 2,
+     "createRadialGradient": 1
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 5,
+     "span": 4,
+     "p": 1,
+     "button": 3
+    },
+    "why": [
+     "beyond:102",
+     "audio:27",
+     "column:11",
+     "pulse:6"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "candle-mark",
+   "component": "CandleMark",
+   "file": "src/components/CandleMark.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "svg",
+   "kind": "flame",
+   "palette": [
+    "#15171a",
+    "#3a3d42",
+    "#c8732a"
+   ],
+   "params": {
+    "glow": 0.69,
+    "spin": 0,
+    "pulse": 0.81,
+    "jitter": 0.42,
+    "drift": 0.64,
+    "bonds": 0.26,
+    "depth": 0,
+    "detail": 0.67,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 500,
+    "colors": 12,
+    "shaders": 0,
+    "jsx": 29,
+    "calls": {},
+    "tags": {
+     "svg": 1,
+     "circle": 2,
+     "ellipse": 1,
+     "path": 1,
+     "rect": 1,
+     "line": 2,
+     "g": 3,
+     "div": 3
+    },
+    "why": [
+     "candle:34",
+     "flame:23",
+     "ember:6",
+     "spark:3",
+     "glow:2"
+    ],
+    "runnerUp": "crystal"
+   }
+  },
+  {
+   "id": "cells-plasm",
+   "component": "CellsPlasm",
+   "file": "src/components/CellsPlasm.tsx",
+   "rooms": [
+    "cells"
+   ],
+   "routes": [
+    "/cells"
+   ],
+   "noun": "a cell",
+   "tech": "canvas",
+   "kind": "cell",
+   "palette": [
+    "#7a1f1f",
+    "#6997a4",
+    "#e7ac52"
+   ],
+   "params": {
+    "glow": 0.63,
+    "spin": 0.33,
+    "pulse": 0.64,
+    "jitter": 0.36,
+    "drift": 0.53,
+    "bonds": 0.1,
+    "depth": 0,
+    "detail": 0.83,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 2042,
+    "colors": 39,
+    "shaders": 0,
+    "jsx": 7,
+    "calls": {
+     "arc": 17,
+     "ellipse": 4,
+     "fillRect": 5,
+     "lineTo": 4,
+     "quadraticCurveTo": 1,
+     "drawImage": 2,
+     "createRadialGradient": 3,
+     "createLinearGradient": 1,
+     "rotate": 2,
+     "translate": 3
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 2
+    },
+    "why": [
+     "cell:195",
+     "seed:52",
+     "plasm:19",
+     "membrane:14",
+     "cyto:11",
+     "nucleus:9"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "charts",
+   "component": "Charts",
+   "file": "src/components/Charts.tsx",
+   "rooms": [
+    "charts"
+   ],
+   "routes": [
+    "/charts"
+   ],
+   "noun": "a pinned reading",
+   "tech": "canvas",
+   "kind": "glyph",
+   "palette": [
+    "#e86e64",
+    "#ffb46e",
+    "#78d2e6"
+   ],
+   "params": {
+    "glow": 0.37,
+    "spin": -0.19,
+    "pulse": 0.38,
+    "jitter": 0.24,
+    "drift": 0.65,
+    "bonds": 0.03,
+    "depth": 0,
+    "detail": 0.84,
+    "facets": 4
+   },
+   "evidence": {
+    "lines": 2330,
+    "colors": 57,
+    "shaders": 0,
+    "jsx": 70,
+    "calls": {
+     "arc": 5,
+     "fillRect": 8,
+     "lineTo": 13,
+     "bezierCurveTo": 4,
+     "fillText": 8,
+     "createLinearGradient": 2,
+     "rotate": 1,
+     "translate": 2
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 8,
+     "span": 19,
+     "button": 3
+    },
+    "why": [
+     "char:129",
+     "chart:129",
+     "font:38",
+     "tape:30",
+     "text:19",
+     "button:11"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "circularity-fourier",
+   "component": "CircularityFourier",
+   "file": "src/components/CircularityFourier.tsx",
+   "rooms": [
+    "circularity"
+   ],
+   "routes": [
+    "/circularity"
+   ],
+   "noun": null,
+   "tech": "svg",
+   "kind": "cloud",
+   "palette": [
+    "#b7a0ff",
+    "#66d4c9",
+    "#f1d77c"
+   ],
+   "params": {
+    "glow": 0.41,
+    "spin": -0.57,
+    "pulse": 0.34,
+    "jitter": 0,
+    "drift": 0.74,
+    "bonds": 0.23,
+    "depth": 0,
+    "detail": 0.78,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 1365,
+    "colors": 43,
+    "shaders": 0,
+    "jsx": 101,
+    "calls": {},
+    "tags": {
+     "svg": 1,
+     "circle": 5,
+     "path": 2,
+     "rect": 5,
+     "line": 7,
+     "text": 2,
+     "g": 7,
+     "div": 6,
+     "span": 4,
+     "button": 2
+    },
+    "why": [
+     "circularity:158",
+     "audio:24",
+     "instrument:23",
+     "column:15",
+     "pulse:4",
+     "sound:1"
+    ],
+    "runnerUp": "quantum"
+   }
+  },
+  {
+   "id": "city",
+   "component": "City",
+   "file": "src/components/City.tsx",
+   "rooms": [
+    "city"
+   ],
+   "routes": [
+    "/city"
+   ],
+   "noun": "a plot",
+   "tech": "three",
+   "kind": "crystal",
+   "palette": [
+    "#23244b",
+    "#e7b94e",
+    "#f6e6b4"
+   ],
+   "params": {
+    "glow": 0.46,
+    "spin": -0.24,
+    "pulse": 0.26,
+    "jitter": 0.22,
+    "drift": 0.51,
+    "bonds": 0.32,
+    "depth": 0.35,
+    "detail": 0.9,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 4090,
+    "colors": 56,
+    "shaders": 4,
+    "jsx": 13,
+    "calls": {
+     "arc": 12,
+     "fillRect": 8,
+     "lineTo": 15,
+     "quadraticCurveTo": 1,
+     "translate": 5
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 5
+    },
+    "why": [
+     "plot:298",
+     "city:268",
+     "mark:16",
+     "group:15",
+     "element:8",
+     "land:1"
+    ],
+    "runnerUp": "drop"
+   }
+  },
+  {
+   "id": "clouds",
+   "component": "Clouds",
+   "file": "src/components/Clouds.tsx",
+   "rooms": [
+    "clouds"
+   ],
+   "routes": [
+    "/clouds"
+   ],
+   "noun": null,
+   "tech": "webgl",
+   "kind": "cloud",
+   "palette": [
+    "#24406e",
+    "#1a59d9",
+    "#4b6fae"
+   ],
+   "params": {
+    "glow": 0.39,
+    "spin": 0.39,
+    "pulse": 0.41,
+    "jitter": 0.34,
+    "drift": 0.68,
+    "bonds": 0.07,
+    "depth": 0.52,
+    "detail": 0.86,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 2639,
+    "colors": 63,
+    "shaders": 2,
+    "jsx": 35,
+    "calls": {
+     "arc": 8,
+     "ellipse": 2,
+     "fillRect": 1,
+     "lineTo": 13,
+     "bezierCurveTo": 3,
+     "quadraticCurveTo": 8,
+     "createRadialGradient": 1,
+     "createLinearGradient": 1,
+     "drawArrays": 1,
+     "rotate": 2,
+     "translate": 4
+    },
+    "tags": {
+     "canvas": 2,
+     "svg": 2,
+     "circle": 1,
+     "path": 1,
+     "line": 1,
+     "div": 5,
+     "span": 3,
+     "button": 2
+    },
+    "why": [
+     "cloud:99",
+     "audio:27",
+     "breath:10",
+     "air:9",
+     "pulse:6",
+     "haze:5"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "coast-beach",
+   "component": "CoastBeach",
+   "file": "src/components/CoastBeach.tsx",
+   "rooms": [
+    "coast"
+   ],
+   "routes": [
+    "/coast"
+   ],
+   "noun": "a shell",
+   "tech": "webgl",
+   "kind": "drop",
+   "palette": [
+    "#12385c",
+    "#0066ff",
+    "#296b8c"
+   ],
+   "params": {
+    "glow": 0.37,
+    "spin": -0.19,
+    "pulse": 0.72,
+    "jitter": 0.32,
+    "drift": 0.56,
+    "bonds": 0.34,
+    "depth": 0.4,
+    "detail": 0.84,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 2222,
+    "colors": 67,
+    "shaders": 2,
+    "jsx": 5,
+    "calls": {
+     "arc": 3,
+     "ellipse": 5,
+     "fillRect": 4,
+     "lineTo": 9,
+     "quadraticCurveTo": 1,
+     "drawImage": 2,
+     "createLinearGradient": 2,
+     "drawArrays": 1,
+     "rotate": 1,
+     "translate": 1
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 1
+    },
+    "why": [
+     "tide:142",
+     "sea:86",
+     "foam:54",
+     "coast:51",
+     "surf:28",
+     "pool:20"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "coin",
+   "component": "Coin",
+   "file": "src/components/Coin.tsx",
+   "rooms": [
+    "coin"
+   ],
+   "routes": [
+    "/coin"
+   ],
+   "noun": null,
+   "tech": "three",
+   "kind": "orbit",
+   "palette": [
+    "#0054ab",
+    "#e7b94e",
+    "#ffdc8c"
+   ],
+   "params": {
+    "glow": 0.67,
+    "spin": -0.46,
+    "pulse": 0.53,
+    "jitter": 0,
+    "drift": 0.53,
+    "bonds": 0.17,
+    "depth": 0.21,
+    "detail": 0.77,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 1221,
+    "colors": 44,
+    "shaders": 2,
+    "jsx": 10,
+    "calls": {
+     "arc": 10,
+     "ellipse": 4,
+     "fillRect": 3,
+     "lineTo": 36,
+     "quadraticCurveTo": 19,
+     "fillText": 12,
+     "createRadialGradient": 2,
+     "rotate": 2,
+     "translate": 3
+    },
+    "tags": {
+     "div": 5
+    },
+    "why": [
+     "coin:65",
+     "time:21",
+     "ellipse:4",
+     "watch:1"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "colophon",
+   "component": "Colophon",
+   "file": "src/components/Colophon.tsx",
+   "rooms": [
+    "colophon"
+   ],
+   "routes": [
+    "/colophon"
+   ],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#2a4a5c",
+    "#a3cfcb",
+    "#f4dcdc"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.59,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 226,
+    "colors": 2,
+    "shaders": 0,
+    "jsx": 63,
+    "calls": {},
+    "tags": {
+     "div": 10,
+     "span": 5,
+     "p": 3,
+     "button": 1
+    },
+    "why": [
+     "colophon:41",
+     "font:18",
+     "letter:6",
+     "text:6",
+     "sigil:4",
+     "button:3"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "comb",
+   "component": "Comb",
+   "file": "src/components/Comb.tsx",
+   "rooms": [
+    "comb"
+   ],
+   "routes": [
+    "/comb"
+   ],
+   "noun": null,
+   "tech": "canvas",
+   "kind": "cloud",
+   "palette": [
+    "#3d5c8c",
+    "#5b7fae",
+    "#fae4b4"
+   ],
+   "params": {
+    "glow": 0.61,
+    "spin": -0.27,
+    "pulse": 0.53,
+    "jitter": 0.47,
+    "drift": 0.59,
+    "bonds": 0.3,
+    "depth": 0,
+    "detail": 0.79,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 1479,
+    "colors": 30,
+    "shaders": 0,
+    "jsx": 27,
+    "calls": {
+     "arc": 3,
+     "fillRect": 4,
+     "lineTo": 1,
+     "drawImage": 7,
+     "createRadialGradient": 2
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 4,
+     "span": 6,
+     "button": 1
+    },
+    "why": [
+     "comb:55",
+     "audio:54",
+     "tint:17",
+     "pulse:8",
+     "breath:3",
+     "column:2"
+    ],
+    "runnerUp": "quantum"
+   }
+  },
+  {
+   "id": "concern-field",
+   "component": "ConcernField",
+   "file": "src/components/ConcernField.tsx",
+   "rooms": [
+    "compass"
+   ],
+   "routes": [
+    "/compass"
+   ],
+   "noun": "a kept reading",
+   "tech": "svg",
+   "kind": "cloud",
+   "palette": [
+    "#15171a",
+    "#2c4a5c",
+    "#c8732a"
+   ],
+   "params": {
+    "glow": 0.6,
+    "spin": 0.28,
+    "pulse": 0.69,
+    "jitter": 0,
+    "drift": 0.64,
+    "bonds": 0.14,
+    "depth": 0,
+    "detail": 0.78,
+    "facets": 4
+   },
+   "evidence": {
+    "lines": 1324,
+    "colors": 7,
+    "shaders": 0,
+    "jsx": 63,
+    "calls": {},
+    "tags": {
+     "svg": 1,
+     "circle": 12,
+     "line": 2,
+     "polygon": 3,
+     "text": 2,
+     "g": 5,
+     "div": 8,
+     "button": 2
+    },
+    "why": [
+     "concern:123",
+     "compass:28",
+     "audio:27",
+     "pulse:18",
+     "column:1"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "concern-sigil",
+   "component": "ConcernSigil",
+   "file": "src/components/ConcernSigil.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "svg",
+   "kind": "cloud",
+   "palette": [
+    "#2c4a5c",
+    "#cfc1b8",
+    "#fbf8f6"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.47,
+    "facets": 4
+   },
+   "evidence": {
+    "lines": 78,
+    "colors": 1,
+    "shaders": 0,
+    "jsx": 8,
+    "calls": {},
+    "tags": {
+     "svg": 1,
+     "circle": 2,
+     "line": 1,
+     "polygon": 1,
+     "g": 1
+    },
+    "why": [
+     "concern:17"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "concern-tint",
+   "component": "ConcernTint",
+   "file": "src/components/ConcernTint.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "cloud",
+   "palette": [
+    "#dc5050",
+    "#c88c64",
+    "#78b4dc"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0.44,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.47,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 78,
+    "colors": 9,
+    "shaders": 0,
+    "jsx": 1,
+    "calls": {},
+    "tags": {
+     "div": 1
+    },
+    "why": [
+     "concern:20",
+     "tint:13"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "constellation-glyph",
+   "component": "ConstellationGlyph",
+   "file": "src/components/ConstellationGlyph.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "svg",
+   "kind": "star",
+   "palette": [
+    "#dcb4ff",
+    "#ffc8aa",
+    "#b4dcff"
+   ],
+   "params": {
+    "glow": 0.77,
+    "spin": 0,
+    "pulse": 0.47,
+    "jitter": 0,
+    "drift": 0.37,
+    "bonds": 0.62,
+    "depth": 0,
+    "detail": 0.62,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 304,
+    "colors": 9,
+    "shaders": 0,
+    "jsx": 35,
+    "calls": {},
+    "tags": {
+     "svg": 1,
+     "circle": 4,
+     "line": 5,
+     "g": 4,
+     "span": 1
+    },
+    "why": [
+     "star:46",
+     "constellation:11",
+     "twinkle:7"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "deep-space-web",
+   "component": "DeepSpaceWeb",
+   "file": "src/components/DeepSpaceWeb.tsx",
+   "rooms": [
+    "space"
+   ],
+   "routes": [
+    "/space"
+   ],
+   "noun": "a galaxy",
+   "tech": "webgl",
+   "kind": "spiral",
+   "palette": [
+    "#f57021",
+    "#528ffa",
+    "#edb854"
+   ],
+   "params": {
+    "glow": 0.56,
+    "spin": 0.32,
+    "pulse": 0.4,
+    "jitter": 0.28,
+    "drift": 0.4,
+    "bonds": 0.24,
+    "depth": 0.31,
+    "detail": 0.82,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 1840,
+    "colors": 9,
+    "shaders": 7,
+    "jsx": 5,
+    "calls": {
+     "arc": 6,
+     "fillRect": 3,
+     "lineTo": 1,
+     "createRadialGradient": 1,
+     "drawArrays": 1,
+     "drawArraysInstanced": 1
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 1
+    },
+    "why": [
+     "galax:76",
+     "web:70",
+     "galaxy:44",
+     "local:15",
+     "halo:10",
+     "filament:9"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "dither-lab",
+   "component": "DitherLab",
+   "file": "src/app/dither/DitherLab.tsx",
+   "rooms": [
+    "dither"
+   ],
+   "routes": [
+    "/dither"
+   ],
+   "noun": null,
+   "tech": "canvas",
+   "kind": "glyph",
+   "palette": [
+    "#9d74ff",
+    "#79d8ff",
+    "#b9ff66"
+   ],
+   "params": {
+    "glow": 0.47,
+    "spin": -0.28,
+    "pulse": 0.42,
+    "jitter": 0,
+    "drift": 0.62,
+    "bonds": 0.1,
+    "depth": 0,
+    "detail": 0.75,
+    "facets": 4
+   },
+   "evidence": {
+    "lines": 966,
+    "colors": 14,
+    "shaders": 0,
+    "jsx": 219,
+    "calls": {
+     "arc": 1,
+     "fillRect": 3,
+     "strokeRect": 1,
+     "lineTo": 8,
+     "fillText": 2
+    },
+    "tags": {
+     "canvas": 1,
+     "svg": 4,
+     "circle": 6,
+     "path": 1,
+     "rect": 2,
+     "polygon": 2,
+     "text": 1,
+     "div": 22,
+     "span": 17,
+     "p": 7,
+     "button": 10
+    },
+    "why": [
+     "dither:60",
+     "button:37",
+     "label:11",
+     "char:10",
+     "chart:10",
+     "text:9"
+    ],
+    "runnerUp": "quantum"
+   }
+  },
+  {
+   "id": "drop-sphere",
+   "component": "DropSphere",
+   "file": "src/components/DropSphere.tsx",
+   "rooms": [
+    "drop"
+   ],
+   "routes": [
+    "/drop"
+   ],
+   "noun": null,
+   "tech": "canvas",
+   "kind": "drop",
+   "palette": [
+    "#4696b4",
+    "#5abedc",
+    "#78e6a0"
+   ],
+   "params": {
+    "glow": 0.48,
+    "spin": 0.35,
+    "pulse": 0.07,
+    "jitter": 0.3,
+    "drift": 0.69,
+    "bonds": 0.22,
+    "depth": 0,
+    "detail": 0.85,
+    "facets": 5
+   },
+   "evidence": {
+    "lines": 2458,
+    "colors": 82,
+    "shaders": 0,
+    "jsx": 29,
+    "calls": {
+     "arc": 23,
+     "ellipse": 1,
+     "fillRect": 4,
+     "lineTo": 12,
+     "quadraticCurveTo": 7,
+     "drawImage": 10,
+     "createRadialGradient": 2,
+     "createLinearGradient": 2,
+     "rotate": 2,
+     "translate": 3
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 6,
+     "span": 5,
+     "button": 1
+    },
+    "why": [
+     "drop:391",
+     "sea:9",
+     "water:8",
+     "surf:3",
+     "rain:1"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "earth",
+   "component": "Earth",
+   "file": "src/components/Earth.tsx",
+   "rooms": [
+    "earth"
+   ],
+   "routes": [
+    "/earth"
+   ],
+   "noun": null,
+   "tech": "canvas",
+   "kind": "crystal",
+   "palette": [
+    "#f06f3f",
+    "#d49b55",
+    "#f0b66d"
+   ],
+   "params": {
+    "glow": 0.6,
+    "spin": 0.4,
+    "pulse": 0.24,
+    "jitter": 0,
+    "drift": 0.39,
+    "bonds": 0.08,
+    "depth": 0,
+    "detail": 0.87,
+    "facets": 4
+   },
+   "evidence": {
+    "lines": 3115,
+    "colors": 121,
+    "shaders": 0,
+    "jsx": 62,
+    "calls": {
+     "ellipse": 6,
+     "fillRect": 16,
+     "lineTo": 30,
+     "quadraticCurveTo": 1,
+     "drawImage": 3,
+     "createRadialGradient": 3,
+     "createLinearGradient": 4,
+     "putImageData": 1,
+     "rotate": 4,
+     "translate": 3
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 11,
+     "span": 5,
+     "button": 3
+    },
+    "why": [
+     "earth:150",
+     "mark:68",
+     "mineral:56",
+     "element:9",
+     "crystal:6",
+     "hex:2"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "eigen-field",
+   "component": "EigenField",
+   "file": "src/components/EigenField.tsx",
+   "rooms": [
+    "eigen"
+   ],
+   "routes": [
+    "/eigen"
+   ],
+   "noun": "a constraint",
+   "tech": "webgl",
+   "kind": "quantum",
+   "palette": [
+    "#c8732a",
+    "#7a9aa8",
+    "#9aa7b8"
+   ],
+   "params": {
+    "glow": 0.47,
+    "spin": 0.38,
+    "pulse": 0.6,
+    "jitter": 0.17,
+    "drift": 0.69,
+    "bonds": 0.13,
+    "depth": 0.31,
+    "detail": 0.74,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 952,
+    "colors": 9,
+    "shaders": 1,
+    "jsx": 5,
+    "calls": {},
+    "tags": {
+     "canvas": 1,
+     "div": 1
+    },
+    "why": [
+     "eigen:35",
+     "field:21",
+     "phase:15",
+     "ripple:5",
+     "particle:1"
+    ],
+    "runnerUp": "crystal"
+   }
+  },
+  {
+   "id": "field-watch",
+   "component": "FieldWatch",
+   "file": "src/components/FieldWatch.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "quantum",
+   "palette": [
+    "#3a3d42",
+    "#e8e2d5",
+    "#eee8ff"
+   ],
+   "params": {
+    "glow": 0.61,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0.44,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.53,
+    "facets": 4
+   },
+   "evidence": {
+    "lines": 126,
+    "colors": 9,
+    "shaders": 0,
+    "jsx": 14,
+    "calls": {},
+    "tags": {
+     "div": 4,
+     "span": 2
+    },
+    "why": [
+     "field:20"
+    ],
+    "runnerUp": "orbit"
+   }
+  },
+  {
+   "id": "fire",
+   "component": "Fire",
+   "file": "src/components/Fire.tsx",
+   "rooms": [
+    "fire"
+   ],
+   "routes": [
+    "/fire"
+   ],
+   "noun": null,
+   "tech": "webgl",
+   "kind": "flame",
+   "palette": [
+    "#f08d3f",
+    "#f5b15a",
+    "#ffdaa4"
+   ],
+   "params": {
+    "glow": 0.51,
+    "spin": 0.27,
+    "pulse": 0.53,
+    "jitter": 0.52,
+    "drift": 0.56,
+    "bonds": 0.08,
+    "depth": 0.27,
+    "detail": 0.8,
+    "facets": 4
+   },
+   "evidence": {
+    "lines": 1565,
+    "colors": 51,
+    "shaders": 2,
+    "jsx": 26,
+    "calls": {
+     "arc": 1,
+     "ellipse": 3,
+     "fillRect": 2,
+     "lineTo": 1,
+     "quadraticCurveTo": 1,
+     "drawImage": 1,
+     "createRadialGradient": 3,
+     "createLinearGradient": 1,
+     "drawArrays": 1
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 5,
+     "span": 4
+    },
+    "why": [
+     "fire:85",
+     "ember:84",
+     "spark:7",
+     "storm:4",
+     "flame:3",
+     "candle:1"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "flowers-garden",
+   "component": "FlowersGarden",
+   "file": "src/components/FlowersGarden.tsx",
+   "rooms": [
+    "flowers"
+   ],
+   "routes": [
+    "/flowers"
+   ],
+   "noun": "a flower",
+   "tech": "canvas",
+   "kind": "petal",
+   "palette": [
+    "#4e7d8c",
+    "#4e8c5a",
+    "#e7ac52"
+   ],
+   "params": {
+    "glow": 0.67,
+    "spin": -0.35,
+    "pulse": 0.68,
+    "jitter": 0,
+    "drift": 0.6,
+    "bonds": 0.33,
+    "depth": 0,
+    "detail": 0.83,
+    "facets": 5
+   },
+   "evidence": {
+    "lines": 2179,
+    "colors": 45,
+    "shaders": 0,
+    "jsx": 7,
+    "calls": {
+     "arc": 18,
+     "ellipse": 2,
+     "fillRect": 4,
+     "lineTo": 6,
+     "bezierCurveTo": 4,
+     "quadraticCurveTo": 2,
+     "createRadialGradient": 4,
+     "createLinearGradient": 2,
+     "rotate": 4,
+     "translate": 8
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 2
+    },
+    "why": [
+     "plant:150",
+     "flower:77",
+     "petal:43",
+     "bloom:37",
+     "garden:13",
+     "root:9"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "galaxy-arms",
+   "component": "GalaxyArms",
+   "file": "src/components/GalaxyArms.tsx",
+   "rooms": [
+    "galaxy"
+   ],
+   "routes": [
+    "/galaxy"
+   ],
+   "noun": "a star",
+   "tech": "webgl",
+   "kind": "spiral",
+   "palette": [
+    "#f58c38",
+    "#edb854",
+    "#9ebfff"
+   ],
+   "params": {
+    "glow": 0.5,
+    "spin": -0.48,
+    "pulse": 0.41,
+    "jitter": 0.3,
+    "drift": 0.63,
+    "bonds": 0.1,
+    "depth": 0.24,
+    "detail": 0.82,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 1964,
+    "colors": 13,
+    "shaders": 6,
+    "jsx": 6,
+    "calls": {
+     "arc": 1,
+     "fillRect": 3,
+     "strokeRect": 1,
+     "lineTo": 6
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 1
+    },
+    "why": [
+     "galax:42",
+     "galaxy:42",
+     "arm:32",
+     "local:11",
+     "halo:4",
+     "web:4"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "gate",
+   "component": "Gate",
+   "file": "src/components/Gate.tsx",
+   "rooms": [
+    "gate"
+   ],
+   "routes": [
+    "/gate"
+   ],
+   "noun": "an ion",
+   "tech": "webgl",
+   "kind": "flame",
+   "palette": [
+    "#476bb3",
+    "#598cd9",
+    "#7896f0"
+   ],
+   "params": {
+    "glow": 0.61,
+    "spin": -0.49,
+    "pulse": 0.58,
+    "jitter": 0.17,
+    "drift": 0.63,
+    "bonds": 0.34,
+    "depth": 0.3,
+    "detail": 0.78,
+    "facets": 4
+   },
+   "evidence": {
+    "lines": 1290,
+    "colors": 22,
+    "shaders": 1,
+    "jsx": 4,
+    "calls": {
+     "arc": 1,
+     "fillRect": 2,
+     "lineTo": 3,
+     "fillText": 1
+    },
+    "tags": {
+     "canvas": 2
+    },
+    "why": [
+     "ion:50",
+     "glow:14",
+     "light:2",
+     "storm:2",
+     "spark:1"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "geyser",
+   "component": "Geyser",
+   "file": "src/components/Geyser.tsx",
+   "rooms": [
+    "geyser"
+   ],
+   "routes": [
+    "/geyser"
+   ],
+   "noun": "an eruption",
+   "tech": "webgl",
+   "kind": "drop",
+   "palette": [
+    "#5aa89c",
+    "#e88c4a",
+    "#f0c690"
+   ],
+   "params": {
+    "glow": 0.67,
+    "spin": -0.34,
+    "pulse": 0.36,
+    "jitter": 0.41,
+    "drift": 0.54,
+    "bonds": 0.11,
+    "depth": 0.57,
+    "detail": 0.8,
+    "facets": 4
+   },
+   "evidence": {
+    "lines": 1619,
+    "colors": 9,
+    "shaders": 3,
+    "jsx": 4,
+    "calls": {
+     "arc": 1,
+     "fillRect": 3,
+     "lineTo": 1,
+     "fillText": 2
+    },
+    "tags": {
+     "canvas": 2
+    },
+    "why": [
+     "geyser:46",
+     "pool:32",
+     "eruption:24",
+     "water:18",
+     "surf:15",
+     "drop:12"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "greek-key",
+   "component": "GreekKey",
+   "file": "src/components/GreekKey.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "svg",
+   "kind": "glyph",
+   "palette": [
+    "#15171a",
+    "#848fa8",
+    "#dce2f4"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.58,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 200,
+    "colors": 1,
+    "shaders": 0,
+    "jsx": 16,
+    "calls": {},
+    "tags": {
+     "svg": 2,
+     "circle": 2,
+     "path": 4,
+     "rect": 1
+    },
+    "why": [
+     "greek:15"
+    ],
+    "runnerUp": "drop"
+   }
+  },
+  {
+   "id": "greek-key-frame",
+   "component": "GreekKeyFrame",
+   "file": "src/components/GreekKeyFrame.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "svg",
+   "kind": "glyph",
+   "palette": [
+    "#b8693a",
+    "#86a884",
+    "#dcf4dc"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0.56,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0.36,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.63,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 326,
+    "colors": 1,
+    "shaders": 0,
+    "jsx": 21,
+    "calls": {},
+    "tags": {
+     "svg": 1,
+     "path": 1,
+     "rect": 1,
+     "div": 6
+    },
+    "why": [
+     "greek:18"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "group-field",
+   "component": "GroupField",
+   "file": "src/components/GroupField.tsx",
+   "rooms": [
+    "group"
+   ],
+   "routes": [
+    "/group"
+   ],
+   "noun": "a mark",
+   "tech": "webgl",
+   "kind": "crystal",
+   "palette": [
+    "#8c6138",
+    "#c8732a",
+    "#f3d77a"
+   ],
+   "params": {
+    "glow": 0.55,
+    "spin": -0.67,
+    "pulse": 0.56,
+    "jitter": 0.25,
+    "drift": 0.59,
+    "bonds": 0.1,
+    "depth": 0.22,
+    "detail": 0.79,
+    "facets": 4
+   },
+   "evidence": {
+    "lines": 1392,
+    "colors": 11,
+    "shaders": 2,
+    "jsx": 5,
+    "calls": {
+     "arc": 1,
+     "fillRect": 1
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 1
+    },
+    "why": [
+     "mark:62",
+     "group:35",
+     "element:2",
+     "land:1"
+    ],
+    "runnerUp": "quantum"
+   }
+  },
+  {
+   "id": "growth",
+   "component": "Growth",
+   "file": "src/components/Growth.tsx",
+   "rooms": [
+    "growth"
+   ],
+   "routes": [
+    "/growth"
+   ],
+   "noun": null,
+   "tech": "canvas",
+   "kind": "petal",
+   "palette": [
+    "#745126",
+    "#f2c35b",
+    "#b8f07a"
+   ],
+   "params": {
+    "glow": 0.65,
+    "spin": -0.35,
+    "pulse": 0.62,
+    "jitter": 0,
+    "drift": 0.56,
+    "bonds": 0.13,
+    "depth": 0,
+    "detail": 0.85,
+    "facets": 5
+   },
+   "evidence": {
+    "lines": 2622,
+    "colors": 53,
+    "shaders": 0,
+    "jsx": 60,
+    "calls": {
+     "arc": 12,
+     "ellipse": 3,
+     "fillRect": 4,
+     "lineTo": 8,
+     "bezierCurveTo": 2,
+     "quadraticCurveTo": 1,
+     "createRadialGradient": 2,
+     "createLinearGradient": 4,
+     "rotate": 4,
+     "translate": 7
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 6,
+     "span": 7,
+     "button": 1
+    },
+    "why": [
+     "growth:161",
+     "blossom:49",
+     "bloom:48",
+     "root:36",
+     "tip:20",
+     "petal:19"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "guide-first-minute",
+   "component": "GuideFirstMinute",
+   "file": "src/components/guide/GuideFirstMinute.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#2a2422",
+    "#a89184",
+    "#f4e6dc"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0,
+    "bonds": 0.55,
+    "depth": 0,
+    "detail": 0.36,
+    "facets": 4
+   },
+   "evidence": {
+    "lines": 28,
+    "colors": 0,
+    "shaders": 0,
+    "jsx": 20,
+    "calls": {},
+    "tags": {
+     "div": 1,
+     "span": 1,
+     "p": 2
+    },
+    "why": [
+     "guide:22"
+    ],
+    "runnerUp": "orbit"
+   }
+  },
+  {
+   "id": "guide-grammar",
+   "component": "GuideGrammar",
+   "file": "src/components/guide/GuideGrammar.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#222a2a",
+    "#84a4a8",
+    "#dcf0f4"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.41,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 42,
+    "colors": 0,
+    "shaders": 0,
+    "jsx": 32,
+    "calls": {},
+    "tags": {
+     "div": 2,
+     "span": 2,
+     "p": 2
+    },
+    "why": [
+     "guide:27",
+     "voice:2"
+    ],
+    "runnerUp": "orbit"
+   }
+  },
+  {
+   "id": "guide-hero",
+   "component": "GuideHero",
+   "file": "src/components/guide/GuideHero.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#22292a",
+    "#84a1a8",
+    "#dceef4"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.44,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 60,
+    "colors": 0,
+    "shaders": 0,
+    "jsx": 29,
+    "calls": {},
+    "tags": {
+     "div": 4,
+     "span": 1,
+     "p": 2
+    },
+    "why": [
+     "guide:29",
+     "hero:17",
+     "toggle:3",
+     "voice:3",
+     "header:2",
+     "nav:2"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "guide-room-card",
+   "component": "GuideRoomCard",
+   "file": "src/components/guide/GuideRoomCard.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#222a2a",
+    "#84a4a8",
+    "#dcf0f4"
+   ],
+   "params": {
+    "glow": 0.65,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0,
+    "bonds": 0.62,
+    "depth": 0,
+    "detail": 0.49,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 90,
+    "colors": 0,
+    "shaders": 0,
+    "jsx": 50,
+    "calls": {},
+    "tags": {
+     "div": 4,
+     "span": 6,
+     "p": 5
+    },
+    "why": [
+     "guide:38",
+     "card:11",
+     "header:2",
+     "label:2",
+     "voice:2",
+     "text:1"
+    ],
+    "runnerUp": "orbit"
+   }
+  },
+  {
+   "id": "guide-rooms",
+   "component": "GuideRooms",
+   "file": "src/components/guide/GuideRooms.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#28222a",
+    "#a384a8",
+    "#f2dcf4"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.43,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 53,
+    "colors": 0,
+    "shaders": 0,
+    "jsx": 13,
+    "calls": {},
+    "tags": {
+     "div": 1,
+     "p": 1
+    },
+    "why": [
+     "guide:24",
+     "card:3",
+     "label:2"
+    ],
+    "runnerUp": "spiral"
+   }
+  },
+  {
+   "id": "guide-voice-toggle",
+   "component": "GuideVoiceToggle",
+   "file": "src/components/guide/GuideVoiceToggle.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#222a24",
+    "#84a891",
+    "#dcf4e6"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.43,
+    "facets": 5
+   },
+   "evidence": {
+    "lines": 51,
+    "colors": 0,
+    "shaders": 0,
+    "jsx": 6,
+    "calls": {},
+    "tags": {
+     "div": 1,
+     "button": 2
+    },
+    "why": [
+     "voice:31",
+     "guide:24",
+     "toggle:12",
+     "button:6",
+     "label:1"
+    ],
+    "runnerUp": "crystal"
+   }
+  },
+  {
+   "id": "guide-workshop",
+   "component": "GuideWorkshop",
+   "file": "src/components/guide/GuideWorkshop.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#222a25",
+    "#84a894",
+    "#dcf4e8"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.43,
+    "facets": 5
+   },
+   "evidence": {
+    "lines": 53,
+    "colors": 0,
+    "shaders": 0,
+    "jsx": 46,
+    "calls": {},
+    "tags": {
+     "div": 4,
+     "span": 5,
+     "p": 7
+    },
+    "why": [
+     "guide:31"
+    ],
+    "runnerUp": "orbit"
+   }
+  },
+  {
+   "id": "helix-ladder",
+   "component": "HelixLadder",
+   "file": "src/components/HelixLadder.tsx",
+   "rooms": [
+    "dna"
+   ],
+   "routes": [
+    "/dna"
+   ],
+   "noun": "a base pair",
+   "tech": "canvas",
+   "kind": "cell",
+   "palette": [
+    "#c85c28",
+    "#e7ac52",
+    "#cedefa"
+   ],
+   "params": {
+    "glow": 0.45,
+    "spin": 0.3,
+    "pulse": 0.25,
+    "jitter": 0.2,
+    "drift": 0.6,
+    "bonds": 0.43,
+    "depth": 0,
+    "detail": 0.81,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 1738,
+    "colors": 11,
+    "shaders": 0,
+    "jsx": 4,
+    "calls": {
+     "arc": 8,
+     "fillRect": 3,
+     "lineTo": 9,
+     "fillText": 3,
+     "drawImage": 1,
+     "createRadialGradient": 1,
+     "createLinearGradient": 1,
+     "rotate": 2,
+     "translate": 3
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 1
+    },
+    "why": [
+     "base:61",
+     "seed:25",
+     "helix:20"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "home-cabinet",
+   "component": "HomeCabinet",
+   "file": "src/components/HomeCabinet.tsx",
+   "rooms": [
+    "cabinet"
+   ],
+   "routes": [
+    "/cabinet"
+   ],
+   "noun": "an ember",
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#e7b94e",
+    "#69d8d0",
+    "#a9d879"
+   ],
+   "params": {
+    "glow": 0.6,
+    "spin": -0.42,
+    "pulse": 0.43,
+    "jitter": 0,
+    "drift": 0.73,
+    "bonds": 0.25,
+    "depth": 0,
+    "detail": 0.81,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 1675,
+    "colors": 48,
+    "shaders": 0,
+    "jsx": 60,
+    "calls": {},
+    "tags": {
+     "div": 8,
+     "span": 9,
+     "p": 2,
+     "button": 1
+    },
+    "why": [
+     "label:25",
+     "font:19",
+     "button:16",
+     "text:12",
+     "sigil:9",
+     "letter:5"
+    ],
+    "runnerUp": "flame"
+   }
+  },
+  {
+   "id": "insects",
+   "component": "Insects",
+   "file": "src/components/Insects.tsx",
+   "rooms": [
+    "insects"
+   ],
+   "routes": [
+    "/insects"
+   ],
+   "noun": "an insect",
+   "tech": "webgl",
+   "kind": "petal",
+   "palette": [
+    "#5c331f",
+    "#8fbf72",
+    "#e8b46a"
+   ],
+   "params": {
+    "glow": 0.36,
+    "spin": -0.23,
+    "pulse": 0.48,
+    "jitter": 0.37,
+    "drift": 0.62,
+    "bonds": 0.23,
+    "depth": 0.28,
+    "detail": 0.74,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 922,
+    "colors": 22,
+    "shaders": 1,
+    "jsx": 5,
+    "calls": {
+     "arc": 1,
+     "lineTo": 2
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 1
+    },
+    "why": [
+     "insect:51",
+     "grass:8",
+     "wing:8"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "instrument",
+   "component": "Instrument",
+   "file": "src/components/Instrument.tsx",
+   "rooms": [
+    "instrument"
+   ],
+   "routes": [
+    "/instrument"
+   ],
+   "noun": null,
+   "tech": "svg",
+   "kind": "cloud",
+   "palette": [
+    "#5574f7",
+    "#45b8e8",
+    "#f5d65b"
+   ],
+   "params": {
+    "glow": 0.34,
+    "spin": -0.41,
+    "pulse": 0.26,
+    "jitter": 0,
+    "drift": 0.77,
+    "bonds": 0.38,
+    "depth": 0,
+    "detail": 0.75,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 1002,
+    "colors": 51,
+    "shaders": 0,
+    "jsx": 63,
+    "calls": {},
+    "tags": {
+     "svg": 1,
+     "line": 1,
+     "div": 6,
+     "span": 10,
+     "p": 2,
+     "button": 1
+    },
+    "why": [
+     "instrument:54",
+     "timbre:31",
+     "audio:8",
+     "music:1",
+     "pulse:1",
+     "sound:1"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "jewel",
+   "component": "Jewel",
+   "file": "src/components/Jewel.tsx",
+   "rooms": [
+    "jewel"
+   ],
+   "routes": [
+    "/jewel"
+   ],
+   "noun": "a facet",
+   "tech": "webgl",
+   "kind": "crystal",
+   "palette": [
+    "#b8860b",
+    "#e7b94e",
+    "#f6e6b4"
+   ],
+   "params": {
+    "glow": 0.52,
+    "spin": -0.48,
+    "pulse": 0.26,
+    "jitter": 0.12,
+    "drift": 0.76,
+    "bonds": 0.16,
+    "depth": 0.18,
+    "detail": 0.79,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 1459,
+    "colors": 70,
+    "shaders": 4,
+    "jsx": 80,
+    "calls": {
+     "drawArrays": 1
+    },
+    "tags": {
+     "canvas": 1,
+     "svg": 1,
+     "circle": 13,
+     "ellipse": 2,
+     "path": 5,
+     "polygon": 1,
+     "g": 4,
+     "div": 5,
+     "span": 3,
+     "button": 1
+    },
+    "why": [
+     "facet:115",
+     "jewel:64",
+     "gem:34",
+     "stone:27",
+     "cut:24",
+     "element:5"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "kept-constellation",
+   "component": "KeptConstellation",
+   "file": "src/components/KeptConstellation.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "star",
+   "palette": [
+    "#081220",
+    "#e8b278",
+    "#aad2f0"
+   ],
+   "params": {
+    "glow": 0.59,
+    "spin": -0.23,
+    "pulse": 0.23,
+    "jitter": 0,
+    "drift": 0.53,
+    "bonds": 0.28,
+    "depth": 0,
+    "detail": 0.67,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 499,
+    "colors": 15,
+    "shaders": 0,
+    "jsx": 12,
+    "calls": {},
+    "tags": {
+     "div": 1,
+     "span": 3
+    },
+    "why": [
+     "star:76",
+     "constellation:15",
+     "sky:9",
+     "twinkle:3"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "land",
+   "component": "Land",
+   "file": "src/components/Land.tsx",
+   "rooms": [
+    "land"
+   ],
+   "routes": [
+    "/land"
+   ],
+   "noun": "a hummock",
+   "tech": "webgl",
+   "kind": "crystal",
+   "palette": [
+    "#3a5a24",
+    "#804d1f",
+    "#7fc7d6"
+   ],
+   "params": {
+    "glow": 0.31,
+    "spin": -0.26,
+    "pulse": 0.42,
+    "jitter": 0.07,
+    "drift": 0.73,
+    "bonds": 0.17,
+    "depth": 0.29,
+    "detail": 0.74,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 878,
+    "colors": 15,
+    "shaders": 3,
+    "jsx": 6,
+    "calls": {
+     "arc": 2,
+     "fillRect": 4,
+     "lineTo": 1
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 1
+    },
+    "why": [
+     "land:41",
+     "mark:4",
+     "element:3"
+    ],
+    "runnerUp": "petal"
+   }
+  },
+  {
+   "id": "lattice-visitors",
+   "component": "LatticeVisitors",
+   "file": "src/components/LatticeVisitors.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "crystal",
+   "palette": [
+    "#2c2a3a",
+    "#9fa3cc",
+    "#f4f6ff"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0.83,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.46,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 68,
+    "colors": 0,
+    "shaders": 0,
+    "jsx": 1,
+    "calls": {},
+    "tags": {
+     "canvas": 1
+    },
+    "why": [
+     "lattice:13",
+     "element:1"
+    ],
+    "runnerUp": "orbit"
+   }
+  },
+  {
+   "id": "let-go",
+   "component": "LetGo",
+   "file": "src/components/LetGo.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#e7ac52",
+    "#eadcf4",
+    "#eeeadb"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.5,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 104,
+    "colors": 6,
+    "shaders": 0,
+    "jsx": 4,
+    "calls": {},
+    "tags": {
+     "button": 1
+    },
+    "why": [
+     "label:6",
+     "button:3",
+     "font:3",
+     "tape:2",
+     "letter:1",
+     "text:1"
+    ],
+    "runnerUp": "flame"
+   }
+  },
+  {
+   "id": "light-instrument",
+   "component": "LightInstrument",
+   "file": "src/components/LightInstrument.tsx",
+   "rooms": [
+    "light"
+   ],
+   "routes": [
+    "/light"
+   ],
+   "noun": null,
+   "tech": "dom",
+   "kind": "flame",
+   "palette": [
+    "#5574f7",
+    "#45b8e8",
+    "#f5d65b"
+   ],
+   "params": {
+    "glow": 0.49,
+    "spin": -0.3,
+    "pulse": 0.51,
+    "jitter": 0,
+    "drift": 0.69,
+    "bonds": 0.23,
+    "depth": 0,
+    "detail": 0.78,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 1261,
+    "colors": 63,
+    "shaders": 0,
+    "jsx": 76,
+    "calls": {},
+    "tags": {
+     "div": 11,
+     "span": 12,
+     "p": 2,
+     "button": 5
+    },
+    "why": [
+     "light:221",
+     "beam:6",
+     "candle:1"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "local-group",
+   "component": "LocalGroup",
+   "file": "src/components/LocalGroup.tsx",
+   "rooms": [
+    "localgroup"
+   ],
+   "routes": [
+    "/localgroup"
+   ],
+   "noun": "a galaxy",
+   "tech": "webgl",
+   "kind": "spiral",
+   "palette": [
+    "#c14fd0",
+    "#6e96f0",
+    "#85b8ff"
+   ],
+   "params": {
+    "glow": 0.63,
+    "spin": 0.3,
+    "pulse": 0.38,
+    "jitter": 0.26,
+    "drift": 0.64,
+    "bonds": 0.2,
+    "depth": 0.29,
+    "detail": 0.75,
+    "facets": 5
+   },
+   "evidence": {
+    "lines": 995,
+    "colors": 24,
+    "shaders": 2,
+    "jsx": 5,
+    "calls": {
+     "arc": 2,
+     "lineTo": 3
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 1
+    },
+    "why": [
+     "galax:53",
+     "local:44",
+     "galaxy:41",
+     "halo:13",
+     "arm:8",
+     "web:5"
+    ],
+    "runnerUp": "crystal"
+   }
+  },
+  {
+   "id": "manifold-fold",
+   "component": "ManifoldFold",
+   "file": "src/components/ManifoldFold.tsx",
+   "rooms": [
+    "manifold"
+   ],
+   "routes": [
+    "/manifold"
+   ],
+   "noun": "a mass",
+   "tech": "canvas",
+   "kind": "orbit",
+   "palette": [
+    "#5a8cbe",
+    "#c8823c",
+    "#e7ac52"
+   ],
+   "params": {
+    "glow": 0.42,
+    "spin": -0.39,
+    "pulse": 0.62,
+    "jitter": 0.04,
+    "drift": 0.49,
+    "bonds": 0.39,
+    "depth": 0,
+    "detail": 0.84,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 2255,
+    "colors": 29,
+    "shaders": 0,
+    "jsx": 9,
+    "calls": {
+     "arc": 14,
+     "fillRect": 8,
+     "lineTo": 7,
+     "fillText": 1,
+     "drawImage": 4,
+     "createRadialGradient": 4,
+     "createLinearGradient": 1,
+     "translate": 8
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 2
+    },
+    "why": [
+     "manifold:65",
+     "time:18",
+     "orb:17",
+     "orbit:17",
+     "body:16",
+     "watch:1"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "marsh",
+   "component": "Marsh",
+   "file": "src/components/Marsh.tsx",
+   "rooms": [
+    "marsh"
+   ],
+   "routes": [
+    "/marsh"
+   ],
+   "noun": "a reed",
+   "tech": "webgl",
+   "kind": "drop",
+   "palette": [
+    "#4a7a8a",
+    "#c8945a",
+    "#e8dc9a"
+   ],
+   "params": {
+    "glow": 0.58,
+    "spin": -0.31,
+    "pulse": 0.61,
+    "jitter": 0.39,
+    "drift": 0.56,
+    "bonds": 0.2,
+    "depth": 0.47,
+    "detail": 0.8,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 1624,
+    "colors": 14,
+    "shaders": 4,
+    "jsx": 4,
+    "calls": {
+     "arc": 1,
+     "fillRect": 3,
+     "fillText": 2
+    },
+    "tags": {
+     "canvas": 2
+    },
+    "why": [
+     "marsh:59",
+     "sea:30",
+     "water:24",
+     "surf:20",
+     "pool:18",
+     "wave:7"
+    ],
+    "runnerUp": "petal"
+   }
+  },
+  {
+   "id": "meta-navigator",
+   "component": "MetaNavigator",
+   "file": "src/components/MetaNavigator.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#ffd28c",
+    "#e0dcf4",
+    "#ffecc8"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0.59,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0.77,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.6,
+    "facets": 4
+   },
+   "evidence": {
+    "lines": 251,
+    "colors": 11,
+    "shaders": 0,
+    "jsx": 7,
+    "calls": {},
+    "tags": {
+     "div": 4
+    },
+    "why": [
+     "nav:12",
+     "font:4",
+     "text:2",
+     "label:1",
+     "letter:1"
+    ],
+    "runnerUp": "quantum"
+   }
+  },
+  {
+   "id": "mobile-instrument-panel",
+   "component": "MobileInstrumentPanel",
+   "file": "src/components/MobileInstrumentPanel.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "cloud",
+   "palette": [
+    "#c3b8cf",
+    "#f4eede",
+    "#f9f6fb"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0.63,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.65,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 396,
+    "colors": 13,
+    "shaders": 0,
+    "jsx": 25,
+    "calls": {},
+    "tags": {
+     "div": 4,
+     "span": 2,
+     "button": 3
+    },
+    "why": [
+     "instrument:58",
+     "column:1"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "molecules-field",
+   "component": "MoleculesField",
+   "file": "src/components/MoleculesField.tsx",
+   "rooms": [
+    "molecules"
+   ],
+   "routes": [
+    "/molecules"
+   ],
+   "noun": "a molecule",
+   "tech": "webgl",
+   "kind": "crystal",
+   "palette": [
+    "#6997a4",
+    "#e7ac52",
+    "#ddd3be"
+   ],
+   "params": {
+    "glow": 0.51,
+    "spin": -0.26,
+    "pulse": 0.45,
+    "jitter": 0.28,
+    "drift": 0.41,
+    "bonds": 0.35,
+    "depth": 0,
+    "detail": 0.86,
+    "facets": 4
+   },
+   "evidence": {
+    "lines": 2764,
+    "colors": 46,
+    "shaders": 0,
+    "jsx": 10,
+    "calls": {
+     "arc": 10,
+     "fillRect": 6,
+     "lineTo": 3,
+     "quadraticCurveTo": 1,
+     "fillText": 1,
+     "drawImage": 1,
+     "createRadialGradient": 4,
+     "createLinearGradient": 1,
+     "translate": 1
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 2,
+     "span": 1
+    },
+    "why": [
+     "molecule:152",
+     "bond:27",
+     "atom:17",
+     "hex:8",
+     "element:6",
+     "mark:5"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "morph-text",
+   "component": "MorphText",
+   "file": "src/components/MorphText.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#22252a",
+    "#848fa8",
+    "#dce2f4"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.45,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 64,
+    "colors": 0,
+    "shaders": 0,
+    "jsx": 2,
+    "calls": {},
+    "tags": {
+     "span": 1
+    },
+    "why": [
+     "morph:11",
+     "text:11"
+    ],
+    "runnerUp": "quantum"
+   }
+  },
+  {
+   "id": "mountain-peak",
+   "component": "MountainPeak",
+   "file": "src/components/MountainPeak.tsx",
+   "rooms": [
+    "mountain"
+   ],
+   "routes": [
+    "/mountain"
+   ],
+   "noun": "a cairn",
+   "tech": "webgl",
+   "kind": "crystal",
+   "palette": [
+    "#6a7a90",
+    "#ccc4b3",
+    "#e8e3d4"
+   ],
+   "params": {
+    "glow": 0.29,
+    "spin": 0.22,
+    "pulse": 0.61,
+    "jitter": 0.36,
+    "drift": 0.44,
+    "bonds": 0.19,
+    "depth": 0.33,
+    "detail": 0.8,
+    "facets": 5
+   },
+   "evidence": {
+    "lines": 1606,
+    "colors": 5,
+    "shaders": 3,
+    "jsx": 5,
+    "calls": {
+     "arc": 4,
+     "ellipse": 2,
+     "fillRect": 10,
+     "createLinearGradient": 2,
+     "drawArrays": 1
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 1
+    },
+    "why": [
+     "cairn:84",
+     "mountain:36",
+     "stone:20",
+     "rock:19",
+     "element:5",
+     "mark:4"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "murmuration",
+   "component": "Murmuration",
+   "file": "src/components/Murmuration.tsx",
+   "rooms": [
+    "birds"
+   ],
+   "routes": [
+    "/birds"
+   ],
+   "noun": "a bird",
+   "tech": "webgl",
+   "kind": "petal",
+   "palette": [
+    "#0d6b8c",
+    "#147a47",
+    "#ebb82e"
+   ],
+   "params": {
+    "glow": 0.37,
+    "spin": -0.33,
+    "pulse": 0.48,
+    "jitter": 0.2,
+    "drift": 0.46,
+    "bonds": 0.17,
+    "depth": 1,
+    "detail": 0.85,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 2529,
+    "colors": 53,
+    "shaders": 6,
+    "jsx": 4,
+    "calls": {
+     "drawArrays": 1,
+     "drawArraysInstanced": 1
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 1
+    },
+    "why": [
+     "bird:179",
+     "wing:55",
+     "flock:28",
+     "tree:17",
+     "tip:14",
+     "murmur:11"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "music-color-instrument",
+   "component": "MusicColorInstrument",
+   "file": "src/components/MusicColorInstrument.tsx",
+   "rooms": [
+    "music-color"
+   ],
+   "routes": [
+    "/light/inverse"
+   ],
+   "noun": null,
+   "tech": "dom",
+   "kind": "cloud",
+   "palette": [
+    "#d83a2e",
+    "#45b8e8",
+    "#f5d65b"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": -0.06,
+    "pulse": 0.33,
+    "jitter": 0,
+    "drift": 0.51,
+    "bonds": 0.23,
+    "depth": 0,
+    "detail": 0.75,
+    "facets": 4
+   },
+   "evidence": {
+    "lines": 1028,
+    "colors": 64,
+    "shaders": 0,
+    "jsx": 116,
+    "calls": {},
+    "tags": {
+     "div": 15,
+     "span": 11,
+     "p": 3,
+     "button": 6
+    },
+    "why": [
+     "music:172",
+     "audio:15",
+     "column:14",
+     "instrument:11",
+     "sound:5"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "nucleons-field",
+   "component": "NucleonsField",
+   "file": "src/components/NucleonsField.tsx",
+   "rooms": [
+    "nucleons"
+   ],
+   "routes": [
+    "/nucleons"
+   ],
+   "noun": "a nucleus",
+   "tech": "canvas",
+   "kind": "quantum",
+   "palette": [
+    "#6997a4",
+    "#f2c56b",
+    "#ddd3be"
+   ],
+   "params": {
+    "glow": 0.58,
+    "spin": -0.41,
+    "pulse": 0.5,
+    "jitter": 0.24,
+    "drift": 0.45,
+    "bonds": 0.22,
+    "depth": 0,
+    "detail": 0.86,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 2774,
+    "colors": 41,
+    "shaders": 0,
+    "jsx": 7,
+    "calls": {
+     "arc": 15,
+     "fillRect": 5,
+     "lineTo": 9,
+     "fillText": 4,
+     "drawImage": 1,
+     "createRadialGradient": 2,
+     "rotate": 2,
+     "translate": 3
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 2
+    },
+    "why": [
+     "nucleon:103",
+     "field:36",
+     "spin:25",
+     "phase:19",
+     "ripple:14",
+     "particle:1"
+    ],
+    "runnerUp": "cell"
+   }
+  },
+  {
+   "id": "observe",
+   "component": "Observe",
+   "file": "src/components/Observe.tsx",
+   "rooms": [
+    "observe"
+   ],
+   "routes": [
+    "/observe"
+   ],
+   "noun": "a molecule",
+   "tech": "webgl",
+   "kind": "cloud",
+   "palette": [
+    "#6b4d8c",
+    "#7896f0",
+    "#4ad03b"
+   ],
+   "params": {
+    "glow": 0.47,
+    "spin": 0.38,
+    "pulse": 0.59,
+    "jitter": 0.2,
+    "drift": 0.5,
+    "bonds": 0.46,
+    "depth": 0.5,
+    "detail": 0.81,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 1810,
+    "colors": 19,
+    "shaders": 3,
+    "jsx": 6,
+    "calls": {
+     "arc": 3,
+     "ellipse": 1,
+     "fillRect": 1,
+     "strokeRect": 1,
+     "lineTo": 13,
+     "fillText": 4
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 1
+    },
+    "why": [
+     "observe:46",
+     "breath:28",
+     "audio:23",
+     "pulse:13",
+     "cloud:3",
+     "void:2"
+    ],
+    "runnerUp": "crystal"
+   }
+  },
+  {
+   "id": "ocean",
+   "component": "Ocean",
+   "file": "src/components/Ocean.tsx",
+   "rooms": [
+    "ocean"
+   ],
+   "routes": [
+    "/ocean"
+   ],
+   "noun": "a natural",
+   "tech": "webgl",
+   "kind": "drop",
+   "palette": [
+    "#12576b",
+    "#1e788c",
+    "#e8dcbe"
+   ],
+   "params": {
+    "glow": 0.5,
+    "spin": 0.29,
+    "pulse": 0.53,
+    "jitter": 0.42,
+    "drift": 0.57,
+    "bonds": 0.11,
+    "depth": 0.27,
+    "detail": 0.87,
+    "facets": 5
+   },
+   "evidence": {
+    "lines": 3055,
+    "colors": 82,
+    "shaders": 2,
+    "jsx": 14,
+    "calls": {
+     "arc": 13,
+     "ellipse": 13,
+     "fillRect": 8,
+     "lineTo": 38,
+     "quadraticCurveTo": 2,
+     "drawImage": 2,
+     "createRadialGradient": 8,
+     "createLinearGradient": 7,
+     "drawArrays": 1,
+     "rotate": 4,
+     "translate": 5
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 2,
+     "span": 1
+    },
+    "why": [
+     "sea:100",
+     "surf:78",
+     "ocean:66",
+     "water:41",
+     "drop:10",
+     "wave:6"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "organelles-plasm",
+   "component": "OrganellesPlasm",
+   "file": "src/components/OrganellesPlasm.tsx",
+   "rooms": [
+    "organelles"
+   ],
+   "routes": [
+    "/organelles"
+   ],
+   "noun": "an organelle",
+   "tech": "canvas",
+   "kind": "cell",
+   "palette": [
+    "#e7ac52",
+    "#cedefa",
+    "#f2eee6"
+   ],
+   "params": {
+    "glow": 0.55,
+    "spin": -0.24,
+    "pulse": 0.51,
+    "jitter": 0.2,
+    "drift": 0.68,
+    "bonds": 0.15,
+    "depth": 0,
+    "detail": 0.81,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 1816,
+    "colors": 6,
+    "shaders": 0,
+    "jsx": 4,
+    "calls": {
+     "arc": 11,
+     "ellipse": 1,
+     "fillRect": 2,
+     "lineTo": 3,
+     "fillText": 2,
+     "createRadialGradient": 1,
+     "rotate": 1,
+     "translate": 2
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 1
+    },
+    "why": [
+     "organelle:66",
+     "vesicle:34",
+     "plasm:32",
+     "seed:26",
+     "membrane:21",
+     "base:13"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "organics-field",
+   "component": "OrganicsField",
+   "file": "src/components/OrganicsField.tsx",
+   "rooms": [
+    "organics"
+   ],
+   "routes": [
+    "/organics"
+   ],
+   "noun": "a chain",
+   "tech": "canvas",
+   "kind": "crystal",
+   "palette": [
+    "#e7ac52",
+    "#cedefa",
+    "#eeeadb"
+   ],
+   "params": {
+    "glow": 0.52,
+    "spin": 0.47,
+    "pulse": 0.63,
+    "jitter": 0.23,
+    "drift": 0.61,
+    "bonds": 0.75,
+    "depth": 0,
+    "detail": 0.82,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 1980,
+    "colors": 8,
+    "shaders": 0,
+    "jsx": 4,
+    "calls": {
+     "arc": 12,
+     "fillRect": 4,
+     "lineTo": 5,
+     "fillText": 4,
+     "drawImage": 1,
+     "createRadialGradient": 2,
+     "createLinearGradient": 1,
+     "rotate": 1,
+     "translate": 1
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 1
+    },
+    "why": [
+     "chain:139",
+     "bond:27",
+     "element:17",
+     "group:15",
+     "atom:9",
+     "mark:4"
+    ],
+    "runnerUp": "quantum"
+   }
+  },
+  {
+   "id": "overlook-tree",
+   "component": "OverlookTree",
+   "file": "src/components/OverlookTree.tsx",
+   "rooms": [
+    "overlook"
+   ],
+   "routes": [
+    "/overlook"
+   ],
+   "noun": null,
+   "tech": "canvas",
+   "kind": "petal",
+   "palette": [
+    "#3c6e5f",
+    "#8ca0d7",
+    "#e7ac52"
+   ],
+   "params": {
+    "glow": 0.66,
+    "spin": -0.32,
+    "pulse": 0.55,
+    "jitter": 0,
+    "drift": 0.37,
+    "bonds": 0.42,
+    "depth": 0,
+    "detail": 0.81,
+    "facets": 5
+   },
+   "evidence": {
+    "lines": 1798,
+    "colors": 59,
+    "shaders": 0,
+    "jsx": 4,
+    "calls": {
+     "arc": 30,
+     "ellipse": 4,
+     "fillRect": 10,
+     "strokeRect": 1,
+     "lineTo": 23,
+     "quadraticCurveTo": 2,
+     "fillText": 3,
+     "drawImage": 1,
+     "createRadialGradient": 2,
+     "createLinearGradient": 3,
+     "rotate": 6,
+     "translate": 6
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 1
+    },
+    "why": [
+     "tree:27",
+     "bloom:13",
+     "root:11",
+     "flock:8",
+     "leaf:7",
+     "branch:6"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "pebble",
+   "component": "Pebble",
+   "file": "src/components/Pebble.tsx",
+   "rooms": [
+    "pebble"
+   ],
+   "routes": [
+    "/pebble"
+   ],
+   "noun": "a cut",
+   "tech": "webgl",
+   "kind": "crystal",
+   "palette": [
+    "#ad4a33",
+    "#9e8270",
+    "#8ba0c0"
+   ],
+   "params": {
+    "glow": 0.47,
+    "spin": 0.5,
+    "pulse": 0.17,
+    "jitter": 0.42,
+    "drift": 0.58,
+    "bonds": 0.2,
+    "depth": 0.77,
+    "detail": 0.76,
+    "facets": 4
+   },
+   "evidence": {
+    "lines": 1144,
+    "colors": 17,
+    "shaders": 3,
+    "jsx": 4,
+    "calls": {
+     "fillText": 1
+    },
+    "tags": {
+     "canvas": 2
+    },
+    "why": [
+     "pebble:46",
+     "stone:38",
+     "mineral:30",
+     "lattice:14",
+     "cut:12",
+     "facet:8"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "per-word-hero",
+   "component": "PerWordHero",
+   "file": "src/components/PerWordHero.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#28222a",
+    "#a384a8",
+    "#f2dcf4"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0.34,
+    "jitter": 0,
+    "drift": 0.79,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.63,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 341,
+    "colors": 0,
+    "shaders": 0,
+    "jsx": 14,
+    "calls": {},
+    "tags": {
+     "div": 1,
+     "span": 3
+    },
+    "why": [
+     "word:35",
+     "font:31",
+     "text:13",
+     "hero:12",
+     "label:1",
+     "pretext:1"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "phase-chart",
+   "component": "PhaseChart",
+   "file": "src/components/PhaseChart.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "canvas",
+   "kind": "glyph",
+   "palette": [
+    "#080c14",
+    "#f4dcde",
+    "#f4eede"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": -0.32,
+    "pulse": 0,
+    "jitter": 0.32,
+    "drift": 0.65,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.73,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 838,
+    "colors": 6,
+    "shaders": 0,
+    "jsx": 23,
+    "calls": {
+     "arc": 1,
+     "fillRect": 1,
+     "lineTo": 2
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 3,
+     "span": 8
+    },
+    "why": [
+     "char:18",
+     "chart:17",
+     "font:6",
+     "letter:1"
+    ],
+    "runnerUp": "quantum"
+   }
+  },
+  {
+   "id": "planet-forge",
+   "component": "PlanetForge",
+   "file": "src/components/PlanetForge.tsx",
+   "rooms": [
+    "planets"
+   ],
+   "routes": [
+    "/planets"
+   ],
+   "noun": "a world",
+   "tech": "webgl",
+   "kind": "orbit",
+   "palette": [
+    "#090b0e",
+    "#e4c8ff",
+    "#f2eee6"
+   ],
+   "params": {
+    "glow": 0.41,
+    "spin": -0.49,
+    "pulse": 0.37,
+    "jitter": 0.21,
+    "drift": 0.52,
+    "bonds": 0.25,
+    "depth": 0.39,
+    "detail": 0.82,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 1876,
+    "colors": 4,
+    "shaders": 14,
+    "jsx": 4,
+    "calls": {
+     "arc": 8,
+     "ellipse": 1,
+     "fillRect": 6,
+     "lineTo": 1,
+     "drawArrays": 2,
+     "translate": 1
+    },
+    "tags": {
+     "canvas": 2
+    },
+    "why": [
+     "body:36",
+     "planet:34",
+     "time:30",
+     "moon:10",
+     "clock:8",
+     "orb:2"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "plank",
+   "component": "Plank",
+   "file": "src/components/Plank.tsx",
+   "rooms": [
+    "plank"
+   ],
+   "routes": [
+    "/plank"
+   ],
+   "noun": "a stitch of space",
+   "tech": "webgl",
+   "kind": "quantum",
+   "palette": [
+    "#0054ab",
+    "#265973",
+    "#7fd4c9"
+   ],
+   "params": {
+    "glow": 0.55,
+    "spin": 0.46,
+    "pulse": 0.28,
+    "jitter": 0.33,
+    "drift": 0.7,
+    "bonds": 0.34,
+    "depth": 0.4,
+    "detail": 0.76,
+    "facets": 4
+   },
+   "evidence": {
+    "lines": 1143,
+    "colors": 19,
+    "shaders": 2,
+    "jsx": 6,
+    "calls": {
+     "arc": 2,
+     "lineTo": 2
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 1
+    },
+    "why": [
+     "plank:35",
+     "phase:22",
+     "spin:18",
+     "field:6",
+     "ripple:4",
+     "particle:1"
+    ],
+    "runnerUp": "drop"
+   }
+  },
+  {
+   "id": "plasma",
+   "component": "Plasma",
+   "file": "src/components/Plasma.tsx",
+   "rooms": [
+    "plasma"
+   ],
+   "routes": [
+    "/plasma"
+   ],
+   "noun": null,
+   "tech": "webgl",
+   "kind": "flame",
+   "palette": [
+    "#332aff",
+    "#cca8ff",
+    "#f6f1e0"
+   ],
+   "params": {
+    "glow": 0.69,
+    "spin": 0.38,
+    "pulse": 0.38,
+    "jitter": 0.15,
+    "drift": 0.66,
+    "bonds": 0.13,
+    "depth": 0.22,
+    "detail": 0.81,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 1660,
+    "colors": 18,
+    "shaders": 2,
+    "jsx": 22,
+    "calls": {
+     "arc": 1,
+     "lineTo": 1,
+     "quadraticCurveTo": 1,
+     "drawImage": 1,
+     "createRadialGradient": 1,
+     "drawArrays": 1
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 4,
+     "span": 2,
+     "button": 1
+    },
+    "why": [
+     "plasma:101",
+     "candle:34",
+     "flame:27",
+     "glow:26",
+     "spark:25",
+     "storm:3"
+    ],
+    "runnerUp": "cell"
+   }
+  },
+  {
+   "id": "plasma-orb",
+   "component": "PlasmaOrb",
+   "file": "src/components/PlasmaOrb.tsx",
+   "rooms": [
+    "orb"
+   ],
+   "routes": [
+    "/orb"
+   ],
+   "noun": "a disc",
+   "tech": "webgl",
+   "kind": "orbit",
+   "palette": [
+    "#c8732a",
+    "#ffb46e",
+    "#ffc8fe"
+   ],
+   "params": {
+    "glow": 0.63,
+    "spin": -0.41,
+    "pulse": 0.27,
+    "jitter": 0.35,
+    "drift": 0.74,
+    "bonds": 0.24,
+    "depth": 0.45,
+    "detail": 0.74,
+    "facets": 4
+   },
+   "evidence": {
+    "lines": 871,
+    "colors": 6,
+    "shaders": 3,
+    "jsx": 7,
+    "calls": {},
+    "tags": {
+     "canvas": 1,
+     "div": 1
+    },
+    "why": [
+     "orb:40",
+     "time:12",
+     "clock:7",
+     "body:2"
+    ],
+    "runnerUp": "flame"
+   }
+  },
+  {
+   "id": "pretext-wave",
+   "component": "PretextWave",
+   "file": "src/components/PretextWave.tsx",
+   "rooms": [
+    "pretext"
+   ],
+   "routes": [
+    "/pretext"
+   ],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#c8732a",
+    "#88b8d8",
+    "#ffc884"
+   ],
+   "params": {
+    "glow": 0.35,
+    "spin": -0.29,
+    "pulse": 0.34,
+    "jitter": 0,
+    "drift": 0.67,
+    "bonds": 0.36,
+    "depth": 0,
+    "detail": 0.8,
+    "facets": 4
+   },
+   "evidence": {
+    "lines": 1595,
+    "colors": 76,
+    "shaders": 0,
+    "jsx": 92,
+    "calls": {},
+    "tags": {
+     "div": 11,
+     "span": 12,
+     "p": 4,
+     "button": 6
+    },
+    "why": [
+     "pretext:235",
+     "font:72",
+     "text:59",
+     "label:33",
+     "char:26",
+     "button:23"
+    ],
+    "runnerUp": "drop"
+   }
+  },
+  {
+   "id": "pulse",
+   "component": "Pulse",
+   "file": "src/components/Pulse.tsx",
+   "rooms": [
+    "pulse"
+   ],
+   "routes": [
+    "/pulse"
+   ],
+   "noun": "a pattern",
+   "tech": "canvas",
+   "kind": "cloud",
+   "palette": [
+    "#ff5d73",
+    "#5ad1ff",
+    "#f2bf62"
+   ],
+   "params": {
+    "glow": 0.64,
+    "spin": -0.37,
+    "pulse": 0.91,
+    "jitter": 0.06,
+    "drift": 0.68,
+    "bonds": 0.18,
+    "depth": 0,
+    "detail": 0.84,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 2251,
+    "colors": 71,
+    "shaders": 0,
+    "jsx": 66,
+    "calls": {
+     "arc": 6,
+     "ellipse": 3,
+     "fillRect": 4,
+     "lineTo": 9,
+     "quadraticCurveTo": 1,
+     "fillText": 1,
+     "createRadialGradient": 1,
+     "createLinearGradient": 3,
+     "rotate": 1,
+     "translate": 2
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 8,
+     "span": 5,
+     "button": 6
+    },
+    "why": [
+     "pulse:170",
+     "breath:55",
+     "audio:54",
+     "column:19",
+     "instrument:4",
+     "comb:3"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "quanta-field",
+   "component": "QuantaField",
+   "file": "src/components/QuantaField.tsx",
+   "rooms": [
+    "quanta"
+   ],
+   "routes": [
+    "/quanta"
+   ],
+   "noun": "a particle",
+   "tech": "canvas",
+   "kind": "quantum",
+   "palette": [
+    "#b25048",
+    "#b8a87f",
+    "#e7ac52"
+   ],
+   "params": {
+    "glow": 0.49,
+    "spin": 0.28,
+    "pulse": 0.41,
+    "jitter": 0.1,
+    "drift": 0.48,
+    "bonds": 0.1,
+    "depth": 0,
+    "detail": 0.83,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 2144,
+    "colors": 23,
+    "shaders": 0,
+    "jsx": 4,
+    "calls": {
+     "arc": 11,
+     "fillRect": 5,
+     "lineTo": 19,
+     "fillText": 4,
+     "drawImage": 1,
+     "createRadialGradient": 3,
+     "rotate": 4,
+     "translate": 5
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 1
+    },
+    "why": [
+     "quant:71",
+     "particle:49",
+     "photon:39",
+     "field:31",
+     "phase:24",
+     "ripple:15"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "quarks-vacuum",
+   "component": "QuarksVacuum",
+   "file": "src/components/QuarksVacuum.tsx",
+   "rooms": [
+    "quarks"
+   ],
+   "routes": [
+    "/quarks"
+   ],
+   "noun": "a hadron",
+   "tech": "canvas",
+   "kind": "quantum",
+   "palette": [
+    "#c8732a",
+    "#e7ac52",
+    "#ddd3be"
+   ],
+   "params": {
+    "glow": 0.51,
+    "spin": 0.39,
+    "pulse": 0.51,
+    "jitter": 0.33,
+    "drift": 0.43,
+    "bonds": 0.19,
+    "depth": 0,
+    "detail": 0.85,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 2548,
+    "colors": 36,
+    "shaders": 0,
+    "jsx": 7,
+    "calls": {
+     "arc": 12,
+     "ellipse": 1,
+     "fillRect": 5,
+     "lineTo": 9,
+     "quadraticCurveTo": 4,
+     "drawImage": 1,
+     "createRadialGradient": 2,
+     "createLinearGradient": 1
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 2
+    },
+    "why": [
+     "quark:206",
+     "hadron:166",
+     "vacuum:30",
+     "field:29",
+     "photon:20",
+     "phase:14"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "reading",
+   "component": "Reading",
+   "file": "src/components/Reading.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#2a2226",
+    "#a88492",
+    "#f4dce4"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0.11,
+    "bonds": 0.42,
+    "depth": 0,
+    "detail": 0.67,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 477,
+    "colors": 0,
+    "shaders": 0,
+    "jsx": 78,
+    "calls": {},
+    "tags": {
+     "div": 20,
+     "span": 3,
+     "button": 5
+    },
+    "why": [
+     "reading:61",
+     "sigil:37",
+     "font:15",
+     "text:12",
+     "button:11",
+     "prose:5"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "reef",
+   "component": "Reef",
+   "file": "src/components/Reef.tsx",
+   "rooms": [
+    "reef"
+   ],
+   "routes": [
+    "/reef"
+   ],
+   "noun": "a polyp",
+   "tech": "webgl",
+   "kind": "drop",
+   "palette": [
+    "#c26a52",
+    "#e0693a",
+    "#3d9ec2"
+   ],
+   "params": {
+    "glow": 0.74,
+    "spin": 0.31,
+    "pulse": 0.55,
+    "jitter": 0.43,
+    "drift": 0.58,
+    "bonds": 0.26,
+    "depth": 0.83,
+    "detail": 0.81,
+    "facets": 5
+   },
+   "evidence": {
+    "lines": 1704,
+    "colors": 13,
+    "shaders": 4,
+    "jsx": 4,
+    "calls": {
+     "arc": 1,
+     "fillRect": 4,
+     "fillText": 2
+    },
+    "tags": {
+     "canvas": 2
+    },
+    "why": [
+     "reef:52",
+     "water:48",
+     "sea:27",
+     "surf:23",
+     "pool:11",
+     "wave:9"
+    ],
+    "runnerUp": "cell"
+   }
+  },
+  {
+   "id": "relativity-room",
+   "component": "RelativityRoom",
+   "file": "src/components/RelativityRoom.tsx",
+   "rooms": [
+    "relativity"
+   ],
+   "routes": [
+    "/relativity"
+   ],
+   "noun": null,
+   "tech": "canvas",
+   "kind": "orbit",
+   "palette": [
+    "#e7ac52",
+    "#ffc882",
+    "#ffe2aa"
+   ],
+   "params": {
+    "glow": 0.46,
+    "spin": 0.35,
+    "pulse": 0.49,
+    "jitter": 0,
+    "drift": 0.44,
+    "bonds": 0.17,
+    "depth": 0,
+    "detail": 0.87,
+    "facets": 4
+   },
+   "evidence": {
+    "lines": 3053,
+    "colors": 36,
+    "shaders": 0,
+    "jsx": 8,
+    "calls": {
+     "arc": 31,
+     "fillRect": 8,
+     "strokeRect": 3,
+     "lineTo": 24,
+     "fillText": 1,
+     "drawImage": 6,
+     "createRadialGradient": 6,
+     "createLinearGradient": 1,
+     "rotate": 1,
+     "translate": 2
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 2
+    },
+    "why": [
+     "clock:154",
+     "relativity:63",
+     "time:43",
+     "body:16",
+     "orb:16",
+     "orbit:16"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "rock-shelf",
+   "component": "RockShelf",
+   "file": "src/components/RockShelf.tsx",
+   "rooms": [
+    "rocks"
+   ],
+   "routes": [
+    "/rocks"
+   ],
+   "noun": "a stone",
+   "tech": "webgl",
+   "kind": "crystal",
+   "palette": [
+    "#6b96d1",
+    "#96c4ee",
+    "#f3d77a"
+   ],
+   "params": {
+    "glow": 0.51,
+    "spin": -0.42,
+    "pulse": 0.44,
+    "jitter": 0.24,
+    "drift": 0.56,
+    "bonds": 0.31,
+    "depth": 0.3,
+    "detail": 0.82,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 1878,
+    "colors": 19,
+    "shaders": 5,
+    "jsx": 5,
+    "calls": {
+     "fillRect": 1,
+     "lineTo": 2,
+     "fillText": 3,
+     "drawArrays": 2
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 1
+    },
+    "why": [
+     "stone:181",
+     "rock:32",
+     "cut:31",
+     "lattice:7",
+     "crystal:3",
+     "element:3"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "room-help",
+   "component": "RoomHelp",
+   "file": "src/components/RoomHelp.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#15171a",
+    "#84a888",
+    "#dcf4e0"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0.1,
+    "pulse": 0.12,
+    "jitter": 0,
+    "drift": 0.48,
+    "bonds": 0.31,
+    "depth": 0,
+    "detail": 0.68,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 537,
+    "colors": 3,
+    "shaders": 0,
+    "jsx": 89,
+    "calls": {},
+    "tags": {
+     "div": 3,
+     "span": 8,
+     "p": 6,
+     "button": 4
+    },
+    "why": [
+     "help:101",
+     "voice:29",
+     "guide:24",
+     "button:23",
+     "font:10",
+     "word:7"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "room-shell",
+   "component": "RoomShell",
+   "file": "src/components/RoomShell.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#22272a",
+    "#8495a8",
+    "#dce6f4"
+   ],
+   "params": {
+    "glow": 0.4,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0.73,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.63,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 324,
+    "colors": 0,
+    "shaders": 0,
+    "jsx": 4,
+    "calls": {},
+    "tags": {
+     "div": 1
+    },
+    "why": [
+     "voice:13",
+     "label:3"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "room-template",
+   "component": "RoomTemplate",
+   "file": "src/components/RoomTemplate.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "webgl",
+   "kind": "glyph",
+   "palette": [
+    "#080503",
+    "#84a88b",
+    "#dcf4e2"
+   ],
+   "params": {
+    "glow": 0.45,
+    "spin": -0.38,
+    "pulse": 0.58,
+    "jitter": 0.3,
+    "drift": 0.72,
+    "bonds": 0.24,
+    "depth": 0.14,
+    "detail": 0.66,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 453,
+    "colors": 4,
+    "shaders": 1,
+    "jsx": 5,
+    "calls": {},
+    "tags": {
+     "canvas": 1,
+     "div": 1
+    },
+    "why": [
+     "char:20",
+     "voice:9",
+     "label:3"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "root",
+   "component": "Root",
+   "file": "src/components/Root.tsx",
+   "rooms": [
+    "root"
+   ],
+   "routes": [
+    "/root"
+   ],
+   "noun": "a tip",
+   "tech": "webgl",
+   "kind": "petal",
+   "palette": [
+    "#c26a52",
+    "#4ea9a2",
+    "#c8945a"
+   ],
+   "params": {
+    "glow": 0.61,
+    "spin": 0.33,
+    "pulse": 0.44,
+    "jitter": 0.4,
+    "drift": 0.55,
+    "bonds": 0.26,
+    "depth": 0.51,
+    "detail": 0.8,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 1541,
+    "colors": 10,
+    "shaders": 5,
+    "jsx": 4,
+    "calls": {
+     "arc": 1,
+     "fillRect": 3,
+     "fillText": 2
+    },
+    "tags": {
+     "canvas": 2
+    },
+    "why": [
+     "root:59",
+     "tip:59",
+     "growth:30",
+     "soil:21",
+     "plant:13",
+     "leaf:4"
+    ],
+    "runnerUp": "drop"
+   }
+  },
+  {
+   "id": "route-sigil",
+   "component": "RouteSigil",
+   "file": "src/components/RouteSigil.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "svg",
+   "kind": "glyph",
+   "palette": [
+    "#2a2922",
+    "#a7a884",
+    "#f2f4dc"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0.55,
+    "jitter": 0,
+    "drift": 0.32,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.63,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 336,
+    "colors": 0,
+    "shaders": 0,
+    "jsx": 63,
+    "calls": {},
+    "tags": {
+     "svg": 1,
+     "circle": 10,
+     "ellipse": 2,
+     "path": 19,
+     "rect": 1,
+     "line": 13
+    },
+    "why": [
+     "sigil:16",
+     "archive:2",
+     "char:2",
+     "chart:2",
+     "colophon:2"
+    ],
+    "runnerUp": "drop"
+   }
+  },
+  {
+   "id": "scale-travel",
+   "component": "ScaleTravel",
+   "file": "src/components/ScaleTravel.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#090b0e",
+    "#ffecc8",
+    "#dcf4f0"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0.74,
+    "bonds": 0.59,
+    "depth": 0,
+    "detail": 0.72,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 728,
+    "colors": 2,
+    "shaders": 0,
+    "jsx": 7,
+    "calls": {},
+    "tags": {
+     "div": 3
+    },
+    "why": [
+     "label:16",
+     "font:4",
+     "letter:1",
+     "nav:1",
+     "text:1"
+    ],
+    "runnerUp": "orbit"
+   }
+  },
+  {
+   "id": "scrolling-gallery",
+   "component": "ScrollingGallery",
+   "file": "src/components/ScrollingGallery.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#1b2b3f",
+    "#dcf2f4",
+    "#f4eede"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": -0.12,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0.63,
+    "bonds": 0.44,
+    "depth": 0,
+    "detail": 0.66,
+    "facets": 5
+   },
+   "evidence": {
+    "lines": 453,
+    "colors": 23,
+    "shaders": 0,
+    "jsx": 54,
+    "calls": {},
+    "tags": {
+     "div": 4,
+     "span": 10,
+     "p": 1,
+     "button": 5
+    },
+    "why": [
+     "font:27",
+     "button:19",
+     "label:7",
+     "letter:7",
+     "text:7"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "sea",
+   "component": "Sea",
+   "file": "src/components/Sea.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "webgl",
+   "kind": "drop",
+   "palette": [
+    "#26528c",
+    "#3c78b4",
+    "#5c96c3"
+   ],
+   "params": {
+    "glow": 0.44,
+    "spin": -0.07,
+    "pulse": 0.67,
+    "jitter": 0.39,
+    "drift": 0.71,
+    "bonds": 0.23,
+    "depth": 0.44,
+    "detail": 0.74,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 917,
+    "colors": 27,
+    "shaders": 2,
+    "jsx": 4,
+    "calls": {
+     "arc": 1,
+     "fillRect": 4,
+     "lineTo": 2,
+     "createRadialGradient": 1,
+     "createLinearGradient": 1,
+     "drawArrays": 1
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 1
+    },
+    "why": [
+     "sea:29",
+     "water:29",
+     "foam:7",
+     "surf:5",
+     "wave:1"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "sea-chart",
+   "component": "SeaChart",
+   "file": "src/components/SeaChart.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "canvas",
+   "kind": "glyph",
+   "palette": [
+    "#15171a",
+    "#2c4a5c",
+    "#c8732a"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": -0.26,
+    "pulse": 0.43,
+    "jitter": 0,
+    "drift": 0.69,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.73,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 853,
+    "colors": 12,
+    "shaders": 0,
+    "jsx": 20,
+    "calls": {
+     "arc": 1,
+     "fillRect": 5,
+     "strokeRect": 1,
+     "lineTo": 6,
+     "fillText": 1
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 6,
+     "span": 2
+    },
+    "why": [
+     "char:28",
+     "chart:28",
+     "font:13",
+     "label:8",
+     "tape:8",
+     "text:8"
+    ],
+    "runnerUp": "drop"
+   }
+  },
+  {
+   "id": "seed-embryo",
+   "component": "SeedEmbryo",
+   "file": "src/components/SeedEmbryo.tsx",
+   "rooms": [
+    "seed"
+   ],
+   "routes": [
+    "/seed"
+   ],
+   "noun": "a seed",
+   "tech": "canvas",
+   "kind": "cell",
+   "palette": [
+    "#0a0e0c",
+    "#d38fcb",
+    "#f1e8ff"
+   ],
+   "params": {
+    "glow": 0.38,
+    "spin": -0.46,
+    "pulse": 0.43,
+    "jitter": 0,
+    "drift": 0.5,
+    "bonds": 0.15,
+    "depth": 0,
+    "detail": 0.72,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 794,
+    "colors": 4,
+    "shaders": 0,
+    "jsx": 4,
+    "calls": {
+     "arc": 3,
+     "ellipse": 3,
+     "fillRect": 2,
+     "lineTo": 2,
+     "quadraticCurveTo": 2,
+     "createLinearGradient": 1,
+     "rotate": 1,
+     "translate": 2
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 1
+    },
+    "why": [
+     "seed:69",
+     "embryo:11"
+    ],
+    "runnerUp": "drop"
+   }
+  },
+  {
+   "id": "shaped-prose",
+   "component": "ShapedProse",
+   "file": "src/components/ShapedProse.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#22222a",
+    "#8884a8",
+    "#e0dcf4"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0.36,
+    "bonds": 0.52,
+    "depth": 0,
+    "detail": 0.57,
+    "facets": 4
+   },
+   "evidence": {
+    "lines": 197,
+    "colors": 0,
+    "shaders": 0,
+    "jsx": 10,
+    "calls": {},
+    "tags": {
+     "div": 2,
+     "span": 2,
+     "p": 1
+    },
+    "why": [
+     "font:22",
+     "prose:13",
+     "text:12",
+     "pretext:3",
+     "sigil:1"
+    ],
+    "runnerUp": "crystal"
+   }
+  },
+  {
+   "id": "shared-reading",
+   "component": "SharedReading",
+   "file": "src/components/SharedReading.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#272a22",
+    "#95a884",
+    "#e6f4dc"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0.33,
+    "bonds": 0.52,
+    "depth": 0,
+    "detail": 0.6,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 259,
+    "colors": 0,
+    "shaders": 0,
+    "jsx": 53,
+    "calls": {},
+    "tags": {
+     "div": 11,
+     "span": 3,
+     "p": 1,
+     "button": 3
+    },
+    "why": [
+     "sigil:36",
+     "reading:34",
+     "font:7",
+     "button:6",
+     "text:6",
+     "tape:5"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "sigil",
+   "component": "Sigil",
+   "file": "src/components/Sigil.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "svg",
+   "kind": "glyph",
+   "palette": [
+    "#222a29",
+    "#84a8a6",
+    "#dcf4f4"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0.72,
+    "drift": 0.46,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.45,
+    "facets": 5
+   },
+   "evidence": {
+    "lines": 65,
+    "colors": 0,
+    "shaders": 0,
+    "jsx": 5,
+    "calls": {},
+    "tags": {
+     "svg": 1,
+     "circle": 1,
+     "line": 2
+    },
+    "why": [
+     "sigil:12"
+    ],
+    "runnerUp": "flame"
+   }
+  },
+  {
+   "id": "signal",
+   "component": "Signal",
+   "file": "src/components/Signal.tsx",
+   "rooms": [
+    "signal"
+   ],
+   "routes": [
+    "/signal"
+   ],
+   "noun": "a kept signal",
+   "tech": "canvas",
+   "kind": "quantum",
+   "palette": [
+    "#c8732a",
+    "#78c8eb",
+    "#ffb46e"
+   ],
+   "params": {
+    "glow": 0.32,
+    "spin": 0.25,
+    "pulse": 0.23,
+    "jitter": 0.07,
+    "drift": 0.7,
+    "bonds": 0.2,
+    "depth": 0,
+    "detail": 0.86,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 2662,
+    "colors": 83,
+    "shaders": 0,
+    "jsx": 132,
+    "calls": {
+     "arc": 3,
+     "fillRect": 3,
+     "lineTo": 6,
+     "createLinearGradient": 2
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 24,
+     "span": 22,
+     "button": 14
+    },
+    "why": [
+     "signal:303",
+     "field:31",
+     "phase:13",
+     "ripple:5",
+     "particle:1"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "sine-wave-explorer",
+   "component": "SineWaveExplorer",
+   "file": "src/components/SineWaveExplorer.tsx",
+   "rooms": [
+    "sine"
+   ],
+   "routes": [
+    "/sine"
+   ],
+   "noun": null,
+   "tech": "canvas",
+   "kind": "quantum",
+   "palette": [
+    "#ff6f8e",
+    "#65d8c5",
+    "#f3d77a"
+   ],
+   "params": {
+    "glow": 0.43,
+    "spin": -0.12,
+    "pulse": 0.43,
+    "jitter": 0,
+    "drift": 0.72,
+    "bonds": 0.04,
+    "depth": 0,
+    "detail": 0.81,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 1669,
+    "colors": 44,
+    "shaders": 0,
+    "jsx": 52,
+    "calls": {
+     "arc": 6,
+     "fillRect": 3,
+     "lineTo": 5,
+     "fillText": 2,
+     "createRadialGradient": 2,
+     "createLinearGradient": 1,
+     "translate": 2
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 4,
+     "span": 6,
+     "p": 1,
+     "button": 2
+    },
+    "why": [
+     "sine:137",
+     "phase:54",
+     "field:15",
+     "ripple:12",
+     "interference:6",
+     "amplitude:1"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "site-footer",
+   "component": "SiteFooter",
+   "file": "src/components/SiteFooter.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#2a222a",
+    "#a884a4",
+    "#f4dcf0"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0,
+    "bonds": 0.93,
+    "depth": 0,
+    "detail": 0.42,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 50,
+    "colors": 0,
+    "shaders": 0,
+    "jsx": 13,
+    "calls": {},
+    "tags": {
+     "span": 2
+    },
+    "why": [
+     "footer:15",
+     "sigil:3",
+     "archive:1",
+     "colophon:1",
+     "font:1",
+     "guide:1"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "site-header",
+   "component": "SiteHeader",
+   "file": "src/components/SiteHeader.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "svg",
+   "kind": "glyph",
+   "palette": [
+    "#15171a",
+    "#ecdcf4",
+    "#e8e2d5"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0.33,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0.57,
+    "bonds": 0.46,
+    "depth": 0,
+    "detail": 0.71,
+    "facets": 4
+   },
+   "evidence": {
+    "lines": 724,
+    "colors": 26,
+    "shaders": 0,
+    "jsx": 76,
+    "calls": {},
+    "tags": {
+     "svg": 1,
+     "path": 1,
+     "div": 14,
+     "span": 4,
+     "button": 4
+    },
+    "why": [
+     "nav:27",
+     "font:21",
+     "header:18",
+     "button:15",
+     "label:13",
+     "letter:11"
+    ],
+    "runnerUp": "star"
+   }
+  },
+  {
+   "id": "soil-ground",
+   "component": "SoilGround",
+   "file": "src/components/SoilGround.tsx",
+   "rooms": [
+    "soil"
+   ],
+   "routes": [
+    "/soil"
+   ],
+   "noun": "a root",
+   "tech": "webgl",
+   "kind": "petal",
+   "palette": [
+    "#2b241d",
+    "#e4d4b2",
+    "#fef0ff"
+   ],
+   "params": {
+    "glow": 0.46,
+    "spin": 0.34,
+    "pulse": 0.3,
+    "jitter": 0.31,
+    "drift": 0.58,
+    "bonds": 0.38,
+    "depth": 0.14,
+    "detail": 0.8,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 1570,
+    "colors": 9,
+    "shaders": 5,
+    "jsx": 6,
+    "calls": {
+     "arc": 2,
+     "fillRect": 6,
+     "fillText": 5,
+     "drawArrays": 1
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 1
+    },
+    "why": [
+     "soil:98",
+     "root:34",
+     "plant:8",
+     "growth:4",
+     "leaf:2",
+     "bloom:1"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "solar-system",
+   "component": "SolarSystem",
+   "file": "src/components/SolarSystem.tsx",
+   "rooms": [
+    "solar"
+   ],
+   "routes": [
+    "/solar"
+   ],
+   "noun": "a body",
+   "tech": "webgl",
+   "kind": "orbit",
+   "palette": [
+    "#c8732a",
+    "#f2eee6",
+    "#fff2c8"
+   ],
+   "params": {
+    "glow": 0.51,
+    "spin": 0.63,
+    "pulse": 0.13,
+    "jitter": 0.21,
+    "drift": 0.49,
+    "bonds": 0.21,
+    "depth": 0.23,
+    "detail": 0.82,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 1972,
+    "colors": 5,
+    "shaders": 6,
+    "jsx": 6,
+    "calls": {
+     "arc": 1,
+     "lineTo": 3,
+     "quadraticCurveTo": 1,
+     "rotate": 1,
+     "translate": 1
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 1
+    },
+    "why": [
+     "body:102",
+     "orb:58",
+     "orbit:58",
+     "solar:43",
+     "time:20",
+     "clock:11"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "sound-toggle",
+   "component": "SoundToggle",
+   "file": "src/components/SoundToggle.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#78c8eb",
+    "#def4dc",
+    "#f4eede"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": -0.28,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0.59,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.52,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 123,
+    "colors": 8,
+    "shaders": 0,
+    "jsx": 8,
+    "calls": {},
+    "tags": {
+     "span": 2,
+     "button": 1
+    },
+    "why": [
+     "toggle:17",
+     "label:7",
+     "button:2",
+     "font:1",
+     "letter:1",
+     "nav:1"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "spacetime-shader",
+   "component": "SpacetimeShader",
+   "file": "src/components/SpacetimeShader.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "webgl",
+   "kind": "quantum",
+   "palette": [
+    "#6bb5bd",
+    "#d9a14d",
+    "#ccd9ff"
+   ],
+   "params": {
+    "glow": 0.45,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0.4,
+    "bonds": 0.32,
+    "depth": 0.58,
+    "detail": 0.66,
+    "facets": 5
+   },
+   "evidence": {
+    "lines": 447,
+    "colors": 9,
+    "shaders": 7,
+    "jsx": 4,
+    "calls": {
+     "drawArrays": 2
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 1
+    },
+    "why": [
+     "field:16",
+     "interference:1"
+    ],
+    "runnerUp": "spiral"
+   }
+  },
+  {
+   "id": "spring",
+   "component": "Spring",
+   "file": "src/components/Spring.tsx",
+   "rooms": [
+    "spring"
+   ],
+   "routes": [
+    "/spring"
+   ],
+   "noun": "a seep",
+   "tech": "webgl",
+   "kind": "drop",
+   "palette": [
+    "#3f9dc2",
+    "#69afc8",
+    "#e3ac57"
+   ],
+   "params": {
+    "glow": 0.69,
+    "spin": -0.36,
+    "pulse": 0.43,
+    "jitter": 0.42,
+    "drift": 0.57,
+    "bonds": 0.18,
+    "depth": 0.31,
+    "detail": 0.79,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 1505,
+    "colors": 8,
+    "shaders": 3,
+    "jsx": 4,
+    "calls": {
+     "arc": 1,
+     "fillRect": 2,
+     "lineTo": 1,
+     "fillText": 2
+    },
+    "tags": {
+     "canvas": 2
+    },
+    "why": [
+     "seep:130",
+     "spring:45",
+     "pool:37",
+     "bubble:27",
+     "sea:25",
+     "water:23"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "stars",
+   "component": "Stars",
+   "file": "src/components/Stars.tsx",
+   "rooms": [
+    "stars"
+   ],
+   "routes": [
+    "/stars"
+   ],
+   "noun": "a star",
+   "tech": "canvas",
+   "kind": "star",
+   "palette": [
+    "#50321e",
+    "#788cb4",
+    "#b4d2ff"
+   ],
+   "params": {
+    "glow": 0.55,
+    "spin": -0.37,
+    "pulse": 0.43,
+    "jitter": 0.23,
+    "drift": 0.75,
+    "bonds": 0.21,
+    "depth": 0,
+    "detail": 0.94,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 5545,
+    "colors": 63,
+    "shaders": 0,
+    "jsx": 30,
+    "calls": {
+     "arc": 38,
+     "ellipse": 10,
+     "fillRect": 10,
+     "lineTo": 18,
+     "fillText": 1,
+     "drawImage": 5,
+     "createRadialGradient": 18,
+     "createLinearGradient": 9,
+     "rotate": 15,
+     "translate": 18
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 6,
+     "span": 4
+    },
+    "why": [
+     "star:321",
+     "sky:167",
+     "comet:23",
+     "spike:23",
+     "twinkle:22",
+     "nova:20"
+    ],
+    "runnerUp": "spiral"
+   }
+  },
+  {
+   "id": "storm",
+   "component": "Storm",
+   "file": "src/components/Storm.tsx",
+   "rooms": [
+    "storm"
+   ],
+   "routes": [
+    "/storm"
+   ],
+   "noun": null,
+   "tech": "webgl",
+   "kind": "flame",
+   "palette": [
+    "#1a4dd9",
+    "#2a5a8c",
+    "#96b4ff"
+   ],
+   "params": {
+    "glow": 0.48,
+    "spin": -0.26,
+    "pulse": 0.36,
+    "jitter": 0.34,
+    "drift": 0.75,
+    "bonds": 0.11,
+    "depth": 0.17,
+    "detail": 0.85,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 2581,
+    "colors": 93,
+    "shaders": 2,
+    "jsx": 86,
+    "calls": {
+     "arc": 3,
+     "ellipse": 2,
+     "fillRect": 6,
+     "lineTo": 16,
+     "quadraticCurveTo": 5,
+     "drawImage": 2,
+     "createRadialGradient": 3,
+     "createLinearGradient": 2,
+     "drawArrays": 1,
+     "translate": 1
+    },
+    "tags": {
+     "canvas": 2,
+     "svg": 2,
+     "circle": 3,
+     "line": 3,
+     "polygon": 2,
+     "text": 5,
+     "g": 2,
+     "div": 11,
+     "span": 8,
+     "button": 6
+    },
+    "why": [
+     "storm:191",
+     "light:22",
+     "lightning:22",
+     "bolt:16",
+     "spark:7",
+     "candle:1"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "structure-loom",
+   "component": "StructureLoom",
+   "file": "src/components/StructureLoom.tsx",
+   "rooms": [
+    "loom"
+   ],
+   "routes": [
+    "/loom"
+   ],
+   "noun": "a crossing",
+   "tech": "canvas",
+   "kind": "crystal",
+   "palette": [
+    "#f07878",
+    "#f4d37a",
+    "#e9edf6"
+   ],
+   "params": {
+    "glow": 0.45,
+    "spin": 0.21,
+    "pulse": 0.45,
+    "jitter": 0.11,
+    "drift": 0.44,
+    "bonds": 0.11,
+    "depth": 0,
+    "detail": 0.76,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 1108,
+    "colors": 14,
+    "shaders": 0,
+    "jsx": 33,
+    "calls": {
+     "arc": 6,
+     "fillRect": 7,
+     "strokeRect": 1,
+     "lineTo": 8,
+     "fillText": 9,
+     "rotate": 1,
+     "translate": 1
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 4
+    },
+    "why": [
+     "loom:33",
+     "structure:16",
+     "mark:8",
+     "element:2"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "tape",
+   "component": "Tape",
+   "file": "src/components/Tape.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "canvas",
+   "kind": "glyph",
+   "palette": [
+    "#2c4a5c",
+    "#c8732a",
+    "#ffb46e"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0.6,
+    "jitter": 0,
+    "drift": 0.56,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.69,
+    "facets": 5
+   },
+   "evidence": {
+    "lines": 571,
+    "colors": 18,
+    "shaders": 0,
+    "jsx": 7,
+    "calls": {
+     "arc": 5,
+     "fillRect": 1,
+     "lineTo": 35,
+     "fillText": 3
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 2
+    },
+    "why": [
+     "tape:36",
+     "text:7",
+     "font:5",
+     "label:4",
+     "reading:4",
+     "glyph:3"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "threshold",
+   "component": "Threshold",
+   "file": "src/components/Threshold.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#c8732a",
+    "#f2eee6",
+    "#dcf4f2"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0.2,
+    "drift": 0.3,
+    "bonds": 0.54,
+    "depth": 0,
+    "detail": 0.61,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 265,
+    "colors": 4,
+    "shaders": 0,
+    "jsx": 54,
+    "calls": {},
+    "tags": {
+     "div": 9,
+     "span": 9,
+     "button": 3
+    },
+    "why": [
+     "button:6",
+     "text:5",
+     "char:4",
+     "chart:4",
+     "sigil:4",
+     "font:3"
+    ],
+    "runnerUp": "orbit"
+   }
+  },
+  {
+   "id": "tide",
+   "component": "Tide",
+   "file": "src/components/Tide.tsx",
+   "rooms": [
+    "tide"
+   ],
+   "routes": [
+    "/tide"
+   ],
+   "noun": "a natural",
+   "tech": "canvas",
+   "kind": "drop",
+   "palette": [
+    "#5082b4",
+    "#c8732a",
+    "#c8965a"
+   ],
+   "params": {
+    "glow": 0.53,
+    "spin": 0.4,
+    "pulse": 0.31,
+    "jitter": 0.31,
+    "drift": 0.69,
+    "bonds": 0,
+    "depth": 0,
+    "detail": 0.83,
+    "facets": 5
+   },
+   "evidence": {
+    "lines": 2112,
+    "colors": 89,
+    "shaders": 0,
+    "jsx": 34,
+    "calls": {
+     "arc": 19,
+     "ellipse": 7,
+     "fillRect": 8,
+     "strokeRect": 1,
+     "lineTo": 10,
+     "quadraticCurveTo": 5,
+     "fillText": 1,
+     "drawImage": 2,
+     "createRadialGradient": 8,
+     "createLinearGradient": 6,
+     "rotate": 4,
+     "translate": 7
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 5,
+     "span": 4,
+     "button": 4
+    },
+    "why": [
+     "tide:199",
+     "sea:36",
+     "water:28",
+     "spring:17",
+     "shore:15",
+     "surf:1"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "tidepool",
+   "component": "Tidepool",
+   "file": "src/components/Tidepool.tsx",
+   "rooms": [
+    "tidepool"
+   ],
+   "routes": [
+    "/tidepool"
+   ],
+   "noun": "a creature",
+   "tech": "webgl",
+   "kind": "drop",
+   "palette": [
+    "#e07a3b",
+    "#3d9ec2",
+    "#ffd97a"
+   ],
+   "params": {
+    "glow": 0.66,
+    "spin": 0.34,
+    "pulse": 0.62,
+    "jitter": 0.41,
+    "drift": 0.54,
+    "bonds": 0.14,
+    "depth": 0.76,
+    "detail": 0.83,
+    "facets": 4
+   },
+   "evidence": {
+    "lines": 2065,
+    "colors": 15,
+    "shaders": 4,
+    "jsx": 4,
+    "calls": {
+     "arc": 1,
+     "fillRect": 6,
+     "fillText": 3
+    },
+    "tags": {
+     "canvas": 2
+    },
+    "why": [
+     "water:80",
+     "tide:66",
+     "pool:57",
+     "sea:48",
+     "surf:24",
+     "foam:17"
+    ],
+    "runnerUp": "cell"
+   }
+  },
+  {
+   "id": "timbre-instrument",
+   "component": "TimbreInstrument",
+   "file": "src/components/TimbreInstrument.tsx",
+   "rooms": [
+    "timbre"
+   ],
+   "routes": [
+    "/timbre"
+   ],
+   "noun": null,
+   "tech": "dom",
+   "kind": "cloud",
+   "palette": [
+    "#5574f7",
+    "#45b8e8",
+    "#f5d65b"
+   ],
+   "params": {
+    "glow": 0.44,
+    "spin": 0.23,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0.74,
+    "bonds": 0.41,
+    "depth": 0,
+    "detail": 0.75,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 1039,
+    "colors": 48,
+    "shaders": 0,
+    "jsx": 61,
+    "calls": {},
+    "tags": {
+     "div": 7,
+     "span": 9,
+     "p": 2,
+     "button": 3
+    },
+    "why": [
+     "timbre:191",
+     "instrument:15",
+     "audio:9",
+     "music:1",
+     "sound:1"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "time-manifold",
+   "component": "TimeManifold",
+   "file": "src/components/TimeManifold.tsx",
+   "rooms": [
+    "time"
+   ],
+   "routes": [
+    "/time"
+   ],
+   "noun": null,
+   "tech": "canvas",
+   "kind": "orbit",
+   "palette": [
+    "#ff8f6a",
+    "#7fb0ff",
+    "#ffcf7a"
+   ],
+   "params": {
+    "glow": 0.41,
+    "spin": -0.3,
+    "pulse": 0.46,
+    "jitter": 0.22,
+    "drift": 0.73,
+    "bonds": 0.13,
+    "depth": 0,
+    "detail": 0.81,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 1730,
+    "colors": 35,
+    "shaders": 0,
+    "jsx": 33,
+    "calls": {
+     "arc": 14,
+     "fillRect": 4,
+     "lineTo": 18,
+     "fillText": 3,
+     "drawImage": 1,
+     "createRadialGradient": 3,
+     "createLinearGradient": 2,
+     "translate": 2
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 3,
+     "span": 3,
+     "p": 1,
+     "button": 2
+    },
+    "why": [
+     "time:121",
+     "manifold:12",
+     "clock:11",
+     "body:9",
+     "relativity:6",
+     "watch:1"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "tissue-sheet",
+   "component": "TissueSheet",
+   "file": "src/components/TissueSheet.tsx",
+   "rooms": [
+    "tissue"
+   ],
+   "routes": [
+    "/tissue"
+   ],
+   "noun": "a cell",
+   "tech": "canvas",
+   "kind": "cell",
+   "palette": [
+    "#d3ca8f",
+    "#cedefa",
+    "#ffebe8"
+   ],
+   "params": {
+    "glow": 0.58,
+    "spin": 0.26,
+    "pulse": 0.36,
+    "jitter": 0.17,
+    "drift": 0.27,
+    "bonds": 0.31,
+    "depth": 0,
+    "detail": 0.83,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 2086,
+    "colors": 11,
+    "shaders": 0,
+    "jsx": 4,
+    "calls": {
+     "arc": 11,
+     "fillRect": 3,
+     "lineTo": 5,
+     "fillText": 2,
+     "drawImage": 2,
+     "createLinearGradient": 1
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 1
+    },
+    "why": [
+     "cell:105",
+     "tissue:35",
+     "seed:16",
+     "base:6"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "tourbillon",
+   "component": "Tourbillon",
+   "file": "src/components/Tourbillon.tsx",
+   "rooms": [
+    "tourbillon"
+   ],
+   "routes": [
+    "/tourbillon"
+   ],
+   "noun": null,
+   "tech": "canvas",
+   "kind": "orbit",
+   "palette": [
+    "#16306b",
+    "#2a52a8",
+    "#6f5410"
+   ],
+   "params": {
+    "glow": 0.35,
+    "spin": 0.48,
+    "pulse": 0.32,
+    "jitter": 0.14,
+    "drift": 0.58,
+    "bonds": 0.33,
+    "depth": 0,
+    "detail": 0.81,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 1787,
+    "colors": 98,
+    "shaders": 0,
+    "jsx": 140,
+    "calls": {
+     "arc": 5,
+     "fillRect": 5,
+     "lineTo": 3,
+     "fillText": 1,
+     "createRadialGradient": 4,
+     "createLinearGradient": 1
+    },
+    "tags": {
+     "svg": 1,
+     "circle": 6,
+     "ellipse": 3,
+     "path": 3,
+     "rect": 12,
+     "line": 4,
+     "text": 1,
+     "g": 7,
+     "div": 10,
+     "span": 1,
+     "button": 4
+    },
+    "why": [
+     "tourbillon:61",
+     "gear:20",
+     "time:19",
+     "clock:6",
+     "body:4",
+     "ellipse:3"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "travel-passage-host",
+   "component": "TravelPassageHost",
+   "file": "src/components/TravelPassage.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "canvas",
+   "kind": "cloud",
+   "palette": [
+    "#403a4a",
+    "#bdb8cf",
+    "#f7f6fb"
+   ],
+   "params": {
+    "glow": 0.7,
+    "spin": 0.34,
+    "pulse": 0.21,
+    "jitter": 0.52,
+    "drift": 0.27,
+    "bonds": 0.42,
+    "depth": 0,
+    "detail": 0.93,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 5028,
+    "colors": 0,
+    "shaders": 0,
+    "jsx": 2,
+    "calls": {
+     "arc": 41,
+     "ellipse": 23,
+     "fillRect": 61,
+     "lineTo": 56,
+     "quadraticCurveTo": 8,
+     "drawImage": 9,
+     "createRadialGradient": 1,
+     "createLinearGradient": 15,
+     "putImageData": 5,
+     "rotate": 7,
+     "translate": 8
+    },
+    "tags": {
+     "canvas": 1
+    },
+    "why": [
+     "aurora:34",
+     "tint:32",
+     "cloud:18",
+     "fog:15",
+     "air:7",
+     "dust:6"
+    ],
+    "runnerUp": "cell"
+   }
+  },
+  {
+   "id": "viruses",
+   "component": "Viruses",
+   "file": "src/components/Viruses.tsx",
+   "rooms": [
+    "viruses"
+   ],
+   "routes": [
+    "/viruses"
+   ],
+   "noun": "a shell",
+   "tech": "webgl",
+   "kind": "cell",
+   "palette": [
+    "#0054ab",
+    "#d689f0",
+    "#7fd8d0"
+   ],
+   "params": {
+    "glow": 0.54,
+    "spin": -0.3,
+    "pulse": 0.65,
+    "jitter": 0.33,
+    "drift": 0.66,
+    "bonds": 0.15,
+    "depth": 0.26,
+    "detail": 0.76,
+    "facets": 3
+   },
+   "evidence": {
+    "lines": 1121,
+    "colors": 14,
+    "shaders": 2,
+    "jsx": 5,
+    "calls": {
+     "arc": 1,
+     "lineTo": 2
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 1
+    },
+    "why": [
+     "seed:40",
+     "virus:34",
+     "cell:3",
+     "base:2"
+    ],
+    "runnerUp": "cloud"
+   }
+  },
+  {
+   "id": "voids",
+   "component": "Voids",
+   "file": "src/components/Voids.tsx",
+   "rooms": [
+    "voids"
+   ],
+   "routes": [
+    "/voids"
+   ],
+   "noun": "a node",
+   "tech": "webgl",
+   "kind": "cloud",
+   "palette": [
+    "#3d296b",
+    "#9a7fd0",
+    "#8fb6e6"
+   ],
+   "params": {
+    "glow": 0.7,
+    "spin": -0.17,
+    "pulse": 0.46,
+    "jitter": 0.28,
+    "drift": 0.56,
+    "bonds": 0.13,
+    "depth": 0.27,
+    "detail": 0.75,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 999,
+    "colors": 16,
+    "shaders": 1,
+    "jsx": 5,
+    "calls": {
+     "arc": 1,
+     "lineTo": 1
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 1
+    },
+    "why": [
+     "void:92",
+     "audio:30",
+     "breath:12"
+    ],
+    "runnerUp": "spiral"
+   }
+  },
+  {
+   "id": "watch",
+   "component": "Watch",
+   "file": "src/components/Watch.tsx",
+   "rooms": [
+    "watch"
+   ],
+   "routes": [
+    "/watch"
+   ],
+   "noun": null,
+   "tech": "canvas",
+   "kind": "orbit",
+   "palette": [
+    "#c8732a",
+    "#dcc8a0",
+    "#ffe8b2"
+   ],
+   "params": {
+    "glow": 0.45,
+    "spin": -0.39,
+    "pulse": 0.5,
+    "jitter": 0.39,
+    "drift": 0.8,
+    "bonds": 0.22,
+    "depth": 0,
+    "detail": 0.84,
+    "facets": 5
+   },
+   "evidence": {
+    "lines": 2300,
+    "colors": 41,
+    "shaders": 0,
+    "jsx": 10,
+    "calls": {
+     "arc": 25,
+     "ellipse": 2,
+     "fillRect": 23,
+     "strokeRect": 7,
+     "lineTo": 32,
+     "bezierCurveTo": 1,
+     "quadraticCurveTo": 2,
+     "fillText": 1,
+     "drawImage": 1,
+     "createRadialGradient": 4,
+     "createLinearGradient": 6,
+     "rotate": 2,
+     "translate": 4
+    },
+    "tags": {
+     "canvas": 1,
+     "div": 3
+    },
+    "why": [
+     "watch:91",
+     "time:53",
+     "clock:33",
+     "moon:10",
+     "body:9",
+     "ellipse:2"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "water-text",
+   "component": "WaterText",
+   "file": "src/components/WaterText.tsx",
+   "rooms": [],
+   "routes": [],
+   "noun": null,
+   "tech": "dom",
+   "kind": "glyph",
+   "palette": [
+    "#2a2226",
+    "#a88492",
+    "#f4dce4"
+   ],
+   "params": {
+    "glow": 0.25,
+    "spin": 0,
+    "pulse": 0,
+    "jitter": 0,
+    "drift": 0.86,
+    "bonds": 0.56,
+    "depth": 0,
+    "detail": 0.6,
+    "facets": 6
+   },
+   "evidence": {
+    "lines": 259,
+    "colors": 0,
+    "shaders": 0,
+    "jsx": 6,
+    "calls": {},
+    "tags": {
+     "span": 3
+    },
+    "why": [
+     "word:17",
+     "text:11",
+     "label:1"
+    ],
+    "runnerUp": "drop"
+   }
+  },
+  {
+   "id": "waves",
+   "component": "Waves",
+   "file": "src/components/Waves.tsx",
+   "rooms": [
+    "waves"
+   ],
+   "routes": [
+    "/waves"
+   ],
+   "noun": "a natural",
+   "tech": "webgl",
+   "kind": "drop",
+   "palette": [
+    "#3d4d7a",
+    "#2e643e",
+    "#4c961d"
+   ],
+   "params": {
+    "glow": 0.49,
+    "spin": 0.23,
+    "pulse": 0.09,
+    "jitter": 0.29,
+    "drift": 0.59,
+    "bonds": 0.36,
+    "depth": 0.1,
+    "detail": 0.87,
+    "facets": 5
+   },
+   "evidence": {
+    "lines": 2926,
+    "colors": 83,
+    "shaders": 5,
+    "jsx": 53,
+    "calls": {
+     "arc": 8,
+     "ellipse": 7,
+     "fillRect": 5,
+     "lineTo": 9,
+     "quadraticCurveTo": 4,
+     "drawImage": 5,
+     "createLinearGradient": 5,
+     "drawArrays": 1,
+     "putImageData": 1,
+     "rotate": 3,
+     "translate": 3
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 4,
+     "span": 5,
+     "button": 3
+    },
+    "why": [
+     "wave:181",
+     "drop:51",
+     "foam:22",
+     "sea:9",
+     "surf:6",
+     "water:1"
+    ],
+    "runnerUp": "glyph"
+   }
+  },
+  {
+   "id": "zeus",
+   "component": "Zeus",
+   "file": "src/components/Zeus.tsx",
+   "rooms": [
+    "zeus"
+   ],
+   "routes": [
+    "/zeus"
+   ],
+   "noun": "a thunderhead",
+   "tech": "webgl",
+   "kind": "flame",
+   "palette": [
+    "#520f05",
+    "#5285c7",
+    "#8f7bff"
+   ],
+   "params": {
+    "glow": 0.46,
+    "spin": -0.29,
+    "pulse": 0.44,
+    "jitter": 0.54,
+    "drift": 0.57,
+    "bonds": 0.09,
+    "depth": 0.55,
+    "detail": 0.78,
+    "facets": 7
+   },
+   "evidence": {
+    "lines": 1368,
+    "colors": 24,
+    "shaders": 2,
+    "jsx": 6,
+    "calls": {
+     "lineTo": 3
+    },
+    "tags": {
+     "canvas": 2,
+     "div": 1
+    },
+    "why": [
+     "thunder:44",
+     "zeus:36",
+     "bolt:25",
+     "light:18",
+     "lightning:14",
+     "storm:5"
+    ],
+    "runnerUp": "cloud"
+   }
+  }
+ ],
+ "skipped": [
+  {
+   "file": "src/app/guide/GuideAudioBed.tsx",
+   "reason": "renders no element of its own (no intrinsic JSX)"
+  },
+  {
+   "file": "src/components/AnalyticsListener.tsx",
+   "reason": "renders no element of its own (no intrinsic JSX)"
+  },
+  {
+   "file": "src/components/AxisChrome.tsx",
+   "reason": "renders no element of its own (no intrinsic JSX)"
+  },
+  {
+   "file": "src/components/GlobalPretextText.tsx",
+   "reason": "renders no element of its own (no intrinsic JSX)"
+  },
+  {
+   "file": "src/components/GoogleAnalytics.tsx",
+   "reason": "renders no element of its own (no intrinsic JSX)"
+  },
+  {
+   "file": "src/components/UniverseBridge.tsx",
+   "reason": "renders no element of its own (no intrinsic JSX)"
+  }
+ ]
+}

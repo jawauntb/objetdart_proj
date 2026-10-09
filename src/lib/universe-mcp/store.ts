@@ -44,6 +44,8 @@ export type Inhabitant = {
   species: string;
   stage: string;
   cells: [number, number][];
+  /** the form it chose to wear (a form-atlas id); absent means its room's own form */
+  form?: string;
   room: string;
   instance: string;
   lineage: string[];

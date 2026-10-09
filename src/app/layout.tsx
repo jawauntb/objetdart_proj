@@ -11,6 +11,7 @@ import GlobalPretextText from "@/components/GlobalPretextText";
 import TravelPassageHost from "@/components/TravelPassage";
 import GoogleAnalytics from "@/components/GoogleAnalytics";
 import UniverseBridge from "@/components/UniverseBridge";
+import LatticeVisitors from "@/components/LatticeVisitors";
 import { SITE_ORIGIN } from "@/lib/site-icon-config";
 import { siteMetadata } from "@/lib/site-metadata";
 
@@ -96,6 +97,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <TravelPassageHost />
         <GoogleAnalytics />
         <UniverseBridge />
+        {/* The lattice animals recur here: whoever lives in this room, and now
+            and then one wandering through in the room's own form. Chrome, not
+            a room — pointer-events none, no copy, nothing drawn between visits. */}
+        <LatticeVisitors />
       </body>
     </html>
   );

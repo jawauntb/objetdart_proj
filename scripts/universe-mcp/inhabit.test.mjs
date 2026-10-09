@@ -348,4 +348,35 @@ const script = (store, code) => {
   assert.equal(m[7], "thought 9", "a remembered note must be readable, newest last");
   assert.ok(!JSON.stringify(ok(W.inhabitants(store, {}))).includes("thought"), "the public listing still carries no notes");
 }
+// ——— forms: an animal keeps its cells and wears any form the atlas holds ———
+{
+  const { store } = mk();
+  ok(W.open(store, { instance: "formworld1" }, 1));
+  ok(W.step(store, { instance: "formworld1", to: "stars" }, 2));
+  const body = [[0, 0], [1, 0], [1, 1]];
+  const a = ok(W.inhabit(store, { instance: "formworld1", animal: { id: "form-1", species: "frog", cells: body } }, 3));
+  assert.equal(a.inhabitant.form, "stars", "with no form chosen, an animal wears its room's own form");
+  assert.equal(a.inhabitant.chose, false);
+  const b = ok(W.inhabit(store, { instance: "formworld1", animal: { id: "form-1", species: "frog", cells: body, form: "cells-plasm" } }, 4));
+  assert.equal(b.inhabitant.form, "cells-plasm", "a chosen form must be worn, even in another room");
+  assert.equal(b.inhabitant.chose, true);
+  const c = ok(W.inhabit(store, { instance: "formworld1", animal: { id: "form-1", species: "frog", cells: body } }, 5));
+  assert.equal(c.inhabitant.form, "cells-plasm", "re-placing without a form must keep the one chosen, not reset it");
+  const d = ok(W.inhabit(store, { instance: "formworld1", animal: { id: "form-1", species: "frog", cells: body, form: "" } }, 6));
+  assert.equal(d.inhabitant.form, "stars", "an empty form goes back to the room's own");
+  const bad = W.inhabit(store, { instance: "formworld1", animal: { id: "form-1", species: "frog", cells: body, form: "not-a-form" } }, 7);
+  assert.equal(bad.ok, false, "an unknown form must be refused, not stored");
+  assert.match(bad.error, /No form answers/);
+  const plain = ok(W.inhabitants(store, { room: "stars" }));
+  assert.equal(plain.inhabitants[0].cells, undefined, "the plain listing carries no shapes");
+  const shaped = ok(W.inhabitants(store, { room: "stars", shapes: true }));
+  assert.deepEqual(shaped.inhabitants[0].cells, body, "shapes:true returns the animal's own cells, so a page can draw it");
+  for (let n = 0; n < 60; n++) ok(W.inhabit(store, { instance: "formworld1", animal: { id: `crowd-${n}`, species: "s", cells: [[0, 0]] }, room: n % 2 ? "cells" : "quanta" }, 10 + n));
+  const many = ok(W.inhabitants(store, { shapes: true }));
+  assert.equal(many.inhabitants.length, W.SHAPES_CAP, "shapes are capped so a page never downloads the whole commons");
+  assert.equal(many.inhabitants[0].id, "crowd-59", "the cap keeps the newest, so a just-placed animal is the one that shows");
+  // a persisted form that left the atlas must not crash or be advertised
+  store.get().commons.inhabitants["form-1"].form = "a-form-the-world-deleted";
+  assert.equal(ok(W.inhabitants(store, { room: "stars" })).inhabitants[0].form, "stars");
+}
 console.log("inhabit: ok");

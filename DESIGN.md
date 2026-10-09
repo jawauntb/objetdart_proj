@@ -457,6 +457,27 @@ unchanged: there is no copy of a room and no second implementation. The bridge
 a page without the parameter does nothing. Code changes are leashed and off
 until the owner arms them.
 
+### The lattice animals recur here (forms)
+
+What the MCP gave the animals headlessly, `LatticeVisitors` (mounted once in the
+root layout) shows a person: the animals that live in the room you are in drift
+about it, and now and then one wanders through from elsewhere in the commons. An
+animal keeps its body — a polyomino is its identity — and wears a **form**: each
+cell drawn as one of the visual forms this repo wrote as a component. The forms
+are not hand-assigned. `scripts/build-form-atlas.mjs` walks every component's
+TypeScript syntax tree (colour literals and shader `vec3`s, canvas and GL calls,
+JSX tags, identifier words, the room's `creates` noun) and reduces each to a
+kind (one of twelve SDF primitives: star, spiral, cell, quantum, orbit, flame,
+drop, petal, crystal, glyph, cloud, orb), a three-colour palette and a few
+motion params, into `src/data/form-atlas.generated.ts`. A wanderer arrives in
+the form it wears and becomes the room's own as it crosses — a constellation in
+`/stars`, a curl of arm dust in `/galaxy`, a colony of membranes in `/cells`, a
+ripple in `/quanta`. All of it is one instanced draw
+(`src/lib/lattice-forms-layer.ts`), pure and seeded (`src/lib/lattice-forms.ts`,
+pinned by `scripts/test-lattice-forms.mjs`), with no frame loop between visits,
+no input bound and no copy written. An animal chooses a form with
+`universe_inhabit {animal:{form}}`; `universe_forms` lists them all.
+
 ## Known gaps & open questions
 
 These are the places where a reviewer should push hardest:
