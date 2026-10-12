@@ -13,6 +13,7 @@ on:
       - .github/workflows/native-ci.yml
       - .github/workflows/ios-eas-production.yml
       - .easignore
+      - testonce.json
   push:
     branches: [main]
     paths:
@@ -26,6 +27,7 @@ on:
       - .github/workflows/native-ci.yml
       - .github/workflows/ios-eas-production.yml
       - .easignore
+      - testonce.json
 
 jobs:
   workspace:
@@ -37,7 +39,11 @@ jobs:
         with:
           node-version: 22.13.x
       - run: npm ci
-      - run: npm run native:check
+      # testonce (strace) skips a check whose every read file, program and env var is
+      # byte-identical to a recorded pass; anything it cannot observe runs. A failure
+      # still fails the job. Results are cached per branch in .testonce/ by the action.
+      - uses: jawauntb/testonce@main
+      - run: testonce run --name native-check -- npm run native:check
       - run: npm --workspace @objet/native-universe exec expo -- export --platform ios --output-dir /tmp/objet-native-export
   prebuild:
     name: Native iOS prebuild

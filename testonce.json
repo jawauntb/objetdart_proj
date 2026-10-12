@@ -1,0 +1,3 @@
+{
+  "ignore": ["**/node_modules/.cache/**", "**/.npm/_logs/**", "apps/native/.expo/**"]
+}

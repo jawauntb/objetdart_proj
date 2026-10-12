@@ -26,3 +26,6 @@ data/object-compiler/
 __pycache__/
 scratchpad/
 .universe-data/
+
+# testonce result cache (restored and saved by the jawauntb/testonce action in CI)
+.testonce/
